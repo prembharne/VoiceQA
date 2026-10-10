@@ -24,6 +24,8 @@ npm run demo
 5. Click **Load fixture plan**, review its expected outcomes, and choose **Confirm and run tests**.
 6. Inspect evidence and export an HTML, JSON, or JUnit report.
 
+After updating an unpacked build, click **Reload** on VoiceQA at `chrome://extensions`, then close and reopen the side panel. Keep a normal HTTP(S) website active when clicking **Test this tab**; Chrome settings, new-tab pages, and extension pages cannot be tested. The `tabs` permission lets the panel read the active website's URL even when it was opened without a fresh extension-icon click. Reading or interacting with page content still requires the separate site-access grant.
+
 `npm run package` builds a portable Windows distribution in `dist/package` and `dist/voiceqa-windows.zip`. Extract it to a stable folder before registering its companion; moving it later requires registration again.
 
 The fixture suite uses real browser input, screenshots, DOM assertions, native messaging, SQLite, and accessibility scans. It is explicitly deterministic and does not claim to demonstrate an AI-generated plan.

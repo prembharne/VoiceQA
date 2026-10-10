@@ -202,11 +202,21 @@ function App() {
   async function bind() {
     await perform(async () => {
       const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-      if (!tab || !/^https?:/.test(tab.url))
-        throw new Error('Open the website you want to test first');
+      if (!tab) throw new Error('Open a website in this Chrome window, then click Test this tab.');
+      if (!tab.url)
+        throw new Error(
+          'Chrome could not read this tab. Reload VoiceQA at chrome://extensions, reopen the panel, and try again.',
+        );
+      if (!/^https?:/.test(tab.url))
+        throw new Error(
+          'This tab cannot be tested. Switch to a normal website (https:// or http://), then click Test this tab. Chrome settings, new tabs, and extension pages are not supported.',
+        );
       const origin = new URL(tab.url).origin;
       const granted = await chrome.permissions.request({ origins: [origin + '/*'] });
-      if (!granted) throw new Error('Site access was not granted');
+      if (!granted)
+        throw new Error(
+          'Site access was declined. Click Test this tab again and allow access to this website.',
+        );
       await rpc('bind', { tabId: tab.id });
       setPlan(null);
       setRun(null);

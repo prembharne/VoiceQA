@@ -145,6 +145,34 @@ test('empty history gives a clear next step before the first run', async () => {
   await control.getByRole('button', { name: 'Start your first test' }).click();
   await expect(control.getByRole('heading', { name: 'Test with confidence.' })).toBeVisible();
 });
+test('website URL is readable before site access and Test this tab selects the active website', async () => {
+  // Unlike 127.0.0.1, localhost has no pre-granted host permission in this fixture.
+  await target.goto('http://localhost:4173/');
+  await target.bringToFront();
+  const selection = await control.evaluate(async () => ({
+    tab: (await chrome.tabs.query({ active: true, currentWindow: true }))[0],
+    access: await chrome.permissions.contains({ origins: ['http://localhost/*'] }),
+  }));
+  expect(selection.access).toBe(false);
+  expect(selection.tab.url).toBe('http://localhost:4173/');
+
+  await target.goto('http://127.0.0.1:4173/');
+  await target.bringToFront();
+  // A side panel click leaves the website active. Evaluate the actual DOM click
+  // because this test renders the panel in a tab, which Playwright would activate.
+  await control.getByRole('button', { name: 'Test this tab' }).evaluate((button) => button.click());
+  await expect.poll(async () => (await invoke('state')).target?.url).toBe('http://127.0.0.1:4173/');
+  await expect(control.locator('.target-card')).toContainText('CONNECTED WEBSITE');
+  await expect(control.getByRole('alert')).toHaveCount(0);
+
+  await control.bringToFront();
+  await control.getByRole('button', { name: 'Test this tab' }).click();
+  await expect(control.getByRole('alert')).toContainText('Switch to a normal website');
+  await target.bringToFront();
+  await control.getByRole('button', { name: 'Test this tab' }).evaluate((button) => button.click());
+  await expect(control.getByRole('alert')).toHaveCount(0);
+});
+
 test('healthy desktop/mobile fixture performs real browser actions and passes', async () => {
   const run = await suite('http://127.0.0.1:4173/');
   expect(run.status, JSON.stringify(run, null, 2)).toBe('passed');
