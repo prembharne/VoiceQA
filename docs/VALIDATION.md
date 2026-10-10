@@ -2,6 +2,17 @@
 
 This document records current evidence, not projected reliability.
 
+## Step-by-step runs — 2026-10-10
+
+The user's failed demo run was inspected from the production SQLite records without changing them. Its generated cases checked totals/coupon messages before the clicks/fills, with reset navigation last. This was an invalid action order, rather than evidence that the demo's healthy cart/coupon implementation was broken. Local validation now requires navigation as the first step of each case; the planner receives explicit action-before-check examples and instructions to let the runner repeat cases across viewports.
+
+- Runs snapshot a configurable 3–5-second inspection gap (4 seconds by default). A single cancellable pacing function covers website actions, layout changes and accessibility checks. Results stream queued/current steps with a countdown, context and progress. Existing settings without a saved pace inherit 4 seconds; regression automation can explicitly use 0.
+- Go race tests and vet pass. New tests verify reversed-plan rejection, pace defaults/bounds and cancellation without dispatching the queued action. All 18 JavaScript tests and **16 Chromium/native-host browser tests** pass. The new browser test measures real 3-second spacing, observes the first mug at quantity 1, verifies the countdown, and cancels before the second mug is added within 2.5 seconds.
+- **Live model and execution verified:** the saved OpenRouter model `dots-studio/dots-3-note-preview:free` regenerated the user's complete two-workflow request. The accepted plan reset each case first, checked $12 after one mug and $24 after two, then tested INVALID coupon rejection and an unchanged $12 cart. An isolated production-extension/native-host session executed that exact plan at 1440×900 and 390×844 with four-second gaps: **28 recorded steps, 8/8 assertions passed, overall passed**, and a minimum measured gap of **4,003 ms**.
+- Evidence: `test-results/live-plan-oY1XfH/accepted-plan.json` and `test-results/paced-live-run-ue2CuE/run.json`, with `paced-run.png` and `results.png`. The automated cancellation screenshot is `test-results/native-integration/step-countdown.png`. These are ignored local test artifacts. Credentials were copied only for the isolated drafting check and removed at teardown; the execution check used no API keys or further model calls. Production browser registration/data were preserved.
+
+This is a verified result for the stated demo workflow, model and viewport widths. It does not establish general QA reliability across websites or real microphone/TTS behavior.
+
 ## OpenRouter support — 2026-10-10
 
 The companion now routes OpenRouter planning and target resolution through its Responses endpoint with strict schemas and parameter-compatible provider routing. Mock HTTP tests verify endpoint selection, request shape, response parsing, token usage, and that OpenRouter credentials cannot reach OpenAI. Windows tests verify legacy-key recovery, encrypted provider-specific key storage, blank-key preservation, and separation from speech keys. Go race tests and vet pass.

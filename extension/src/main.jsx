@@ -16,6 +16,7 @@ import {
 } from './components/ui.jsx';
 import { m } from 'motion/react';
 import { ShieldCheck, Sparkles, ScanLine, FileCheck2, History, Activity } from 'lucide-react';
+import { RunProgress } from './components/run-progress.jsx';
 
 const terminal = (status) => !['running', 'paused', 'queued'].includes(status);
 const pretty = (s) => String(s || '').replaceAll('_', ' ');
@@ -47,6 +48,7 @@ function App() {
     ttsReuseMainKey: true,
     ttsApiKey: '',
     speechApiKey: '',
+    stepDelayMs: 4000,
   });
   const recorder = useRef(new VoiceRecorder());
   const commandRef = useRef();
@@ -529,6 +531,27 @@ function App() {
                     placeholder="Check that an invalid coupon is rejected and the cart total updates correctly…"
                     rows={4}
                   />
+                  <div className="run-pace">
+                    <label htmlFor="step-gap">Gap between steps</label>
+                    <select
+                      id="step-gap"
+                      value={settings.stepDelayMs ?? 4000}
+                      disabled={busy || Boolean(state.runId) || !state.connected}
+                      onChange={(e) => {
+                        const stepDelayMs = Number(e.target.value);
+                        void perform(() => rpc('settings.save', { stepDelayMs }));
+                      }}
+                    >
+                      <option value={3000}>3 seconds</option>
+                      <option value={4000}>4 seconds · recommended</option>
+                      <option value={5000}>5 seconds</option>
+                      <option value={0}>No gap · fast automation</option>
+                    </select>
+                    <p>
+                      One action at a time, with time to inspect each result. Stop interrupts the
+                      gap immediately.
+                    </p>
+                  </div>
                   <div className="options">
                     <label>
                       <input
@@ -685,6 +708,7 @@ function App() {
                             : 'In progress'}
                         </span>
                       </div>
+                      <RunProgress run={run} paused={state.paused} />
                       <div className="stats">
                         <div>
                           <strong>{passed}</strong>
@@ -707,7 +731,11 @@ function App() {
                       )}
                       {run.error && <div className="notice error">{run.error}</div>}
                       {run.steps.map((step) => (
-                        <details className="step" key={step.id} open={step.status === 'failed'}>
+                        <details
+                          className="step"
+                          key={step.id}
+                          open={['failed', 'dispatched'].includes(step.status)}
+                        >
                           <summary>
                             <span className={`step-icon ${step.status}`}>
                               {step.status === 'passed' ? (
@@ -1094,16 +1122,24 @@ function App() {
       </main>
       <footer>
         <span>
-          <span className={`dot ${voiceMode ? 'online' : ''}`} />
-          {speaking
-            ? 'Speaking…'
-            : voiceMode
-              ? voiceState
-              : busy
-                ? 'Working…'
-                : state.connected
-                  ? 'Ready when you are'
-                  : 'Waiting for engine'}
+          <span
+            className={`dot ${voiceMode || (state.connected && state.runId) ? 'online' : ''}`}
+          />
+          {state.connected && state.runId
+            ? state.paused
+              ? 'Paused'
+              : run?.nextStep
+                ? 'Waiting between steps…'
+                : 'Running tests…'
+            : speaking
+              ? 'Speaking…'
+              : voiceMode
+                ? voiceState
+                : busy
+                  ? 'Working…'
+                  : state.connected
+                    ? 'Ready when you are'
+                    : 'Waiting for engine'}
         </span>
         <Button
           className="stop-button"

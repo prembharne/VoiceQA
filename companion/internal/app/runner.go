@@ -42,7 +42,11 @@ func (a *App) start(m native.Message) (any, error) {
 	if e := core.ValidatePlan(plan); e != nil {
 		return nil, e
 	}
-	r := core.Run{ID: core.ID(), Plan: plan, Status: "running", StartedAt: core.Now(), Steps: []core.Step{}, Usage: map[string]int{}}
+	totalSteps := len(plan.Viewports)
+	for _, test := range plan.Cases {
+		totalSteps += (len(test.Steps) + 1) * len(plan.Viewports)
+	}
+	r := core.Run{ID: core.ID(), Plan: plan, Status: "running", StartedAt: core.Now(), Steps: []core.Step{}, Usage: map[string]int{}, StepDelayMS: a.settings.StepDelayMS, TotalSteps: totalSteps}
 	for key, value := range plan.Usage {
 		r.Usage[key] = value
 	}
@@ -73,11 +77,49 @@ func (a *App) update(r *core.Run) {
 	seq, _ := a.Store.Event(r.ID, map[string]any{"status": r.Status, "stepCount": len(r.Steps), "at": core.Now()})
 	_ = a.emit("run.event", map[string]any{"seq": seq, "run": wireRun(*r)}, r.ID, "")
 }
+
+// Every visible action, including viewport changes and accessibility checks,
+// shares this cancellable gap. The pace is snapshotted when the run starts.
+func (a *App) beginStep(ctx context.Context, r *core.Run, action core.Action, testCase, viewport string) (int, error) {
+	step := core.Step{ID: core.ID(), Case: testCase, Viewport: viewport, Action: action, Status: "queued"}
+	if len(r.Steps) > 0 && r.StepDelayMS > 0 {
+		r.NextStep = &step
+		r.NextStepAt = time.Now().Add(time.Duration(r.StepDelayMS) * time.Millisecond).UTC().Format(time.RFC3339Nano)
+		a.update(r)
+		if r.Status == "error" {
+			return -1, errors.New(r.Error)
+		}
+		timer := time.NewTimer(time.Duration(r.StepDelayMS) * time.Millisecond)
+		defer timer.Stop()
+		select {
+		case <-ctx.Done():
+			r.NextStep = nil
+			r.NextStepAt = ""
+			return -1, ctx.Err()
+		case <-timer.C:
+		}
+	}
+	r.NextStep = nil
+	r.NextStepAt = ""
+	if e := ctx.Err(); e != nil {
+		return -1, e
+	}
+	step.Status = "dispatched"
+	step.StartedAt = core.Now()
+	r.Steps = append(r.Steps, step)
+	a.update(r)
+	if r.Status == "error" {
+		return -1, errors.New(r.Error)
+	}
+	return len(r.Steps) - 1, nil
+}
 func (a *App) execute(ctx context.Context, r *core.Run) {
 	start := time.Now()
 	review := false
 	failed := false
 	defer func() {
+		r.NextStep = nil
+		r.NextStepAt = ""
 		cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		_, cleanupErr := a.browser(cleanupCtx, r.ID, "", map[string]any{"operation": "cleanup", "origin": r.Plan.Origin})
 		cancel()
@@ -106,10 +148,24 @@ func (a *App) execute(ctx context.Context, r *core.Run) {
 			a.setInterrupted(r, ctx.Err())
 			return
 		}
-		if _, e := a.browser(ctx, r.ID, "", map[string]any{"operation": "viewport", "viewport": viewport, "origin": r.Plan.Origin}); e != nil {
+		viewportLabel := fmt.Sprintf("%dx%d", viewport.Width, viewport.Height)
+		viewportAction := core.Action{Operation: "viewport", Label: "Set browser width to " + viewportLabel}
+		vi, e := a.beginStep(ctx, r, viewportAction, "Browser layout", viewportLabel)
+		if e != nil {
 			a.setInterrupted(r, e)
 			return
 		}
+		result, e := a.browser(ctx, r.ID, "", map[string]any{"operation": "viewport", "viewport": viewport, "origin": r.Plan.Origin})
+		r.Steps[vi].CompletedAt = core.Now()
+		r.Steps[vi].Result = result
+		r.Steps[vi].Status = "passed"
+		if e != nil {
+			r.Steps[vi].Status = "error"
+			r.Steps[vi].Error = e.Error()
+			a.setInterrupted(r, e)
+			return
+		}
+		a.update(r)
 		for _, test := range r.Plan.Cases {
 			caseFailed := false
 			for _, action := range test.Steps {
@@ -117,14 +173,12 @@ func (a *App) execute(ctx context.Context, r *core.Run) {
 					a.setInterrupted(r, ctx.Err())
 					return
 				}
-				step := core.Step{ID: core.ID(), Case: test.Name, Viewport: fmt.Sprintf("%dx%d", viewport.Width, viewport.Height), Action: action, Status: "dispatched", StartedAt: core.Now()}
-				r.Steps = append(r.Steps, step)
-				idx := len(r.Steps) - 1
-				a.update(r)
-				if r.Status == "error" {
+				idx, e := a.beginStep(ctx, r, action, test.Name, viewportLabel)
+				if e != nil {
+					a.setInterrupted(r, e)
 					return
 				}
-				result, e := a.browser(ctx, r.ID, step.ID, map[string]any{"operation": "execute", "action": action, "origin": r.Plan.Origin})
+				result, e := a.browser(ctx, r.ID, r.Steps[idx].ID, map[string]any{"operation": "execute", "action": action, "origin": r.Plan.Origin})
 				// Only unresolved targets may be grounded again. Dispatched actions with ambiguous results are never retried.
 				var be *BrowserError
 				if e != nil && errors.As(e, &be) && be.Code == "target_missing" && r.Plan.Model != "fixture-demo" && action.Operation != "navigate" && action.Operation != "assert" {
@@ -197,8 +251,16 @@ func (a *App) execute(ctx context.Context, r *core.Run) {
 				}
 			}
 			if !caseFailed {
+				idx, e := a.beginStep(ctx, r, core.Action{Operation: "accessibility", Label: "Check serious/critical accessibility findings"}, test.Name, viewportLabel)
+				if e != nil {
+					a.setInterrupted(r, e)
+					return
+				}
 				result, e := a.browser(ctx, r.ID, "", map[string]any{"operation": "accessibility", "origin": r.Plan.Origin})
-				step := core.Step{ID: core.ID(), Case: test.Name, Viewport: fmt.Sprintf("%dx%d", viewport.Width, viewport.Height), Action: core.Action{Operation: "accessibility", Label: "Check serious/critical accessibility findings"}, Status: "passed", Result: result, StartedAt: core.Now(), CompletedAt: core.Now()}
+				step := &r.Steps[idx]
+				step.CompletedAt = core.Now()
+				step.Status = "passed"
+				step.Result = result
 				if e != nil {
 					step.Status = "needs_review"
 					step.Error = e.Error()
@@ -207,7 +269,6 @@ func (a *App) execute(ctx context.Context, r *core.Run) {
 					step.Status = "failed"
 					failed = true
 				}
-				r.Steps = append(r.Steps, step)
 				a.update(r)
 			}
 		}

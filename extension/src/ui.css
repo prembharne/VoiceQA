@@ -722,6 +722,67 @@ input[type='checkbox'] {
   justify-content: space-between;
   gap: 12px;
 }
+.run-pace {
+  margin-top: 18px;
+}
+.run-pace label {
+  font-size: 12px;
+  font-weight: 650;
+}
+.run-pace p {
+  font-size: 11px;
+  margin: 8px 0 0;
+}
+.run-progress {
+  border: 1px solid #335777;
+  border-radius: 14px;
+  padding: 18px;
+  margin-top: 18px;
+  background: linear-gradient(145deg, #14283a, #0e1927);
+}
+.run-progress-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+.run-progress-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: #9ed7ff;
+  font-size: 12px;
+  font-weight: 650;
+}
+.run-progress h3 {
+  font-size: 16px;
+  margin: 0 0 6px;
+}
+.run-progress p {
+  font-size: 12px;
+  margin: 0 0 12px;
+}
+.run-progress progress {
+  display: block;
+  width: 100%;
+  height: 6px;
+  accent-color: #75c6fa;
+  border: 0;
+  border-radius: 8px;
+  overflow: hidden;
+}
+.run-progress progress::-webkit-progress-bar {
+  background: #243649;
+}
+.run-progress progress::-webkit-progress-value {
+  background: #75c6fa;
+}
+.run-progress .run-progress-previous {
+  margin: 12px 0 0;
+  color: #b0c5d8;
+}
 .status {
   display: inline-flex;
   align-items: center;

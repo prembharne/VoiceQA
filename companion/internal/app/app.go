@@ -241,6 +241,9 @@ func (a *App) dispatch(m native.Message) (any, error) {
 		if p.Model == "" || p.TranscriptionModel == "" || len(p.MaskSelectors) > 2000 {
 			return nil, errors.New("invalid settings")
 		}
+		if p.StepDelayMS != 0 && (p.StepDelayMS < 3000 || p.StepDelayMS > 5000) {
+			return nil, errors.New("step gap must be 3–5 seconds, or 0 for fast automation")
+		}
 		p.APIKey = strings.TrimSpace(p.APIKey)
 		p.SpeechAPIKey = strings.TrimSpace(p.SpeechAPIKey)
 		p.TTSAPIKey = strings.TrimSpace(p.TTSAPIKey)

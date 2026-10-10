@@ -120,6 +120,9 @@ test.beforeAll(async () => {
   });
   const hello = await invoke('connect');
   expect(hello.version).toBe(1);
+  // Most regression fixtures use fast mode; the paced-run test verifies real gaps.
+  expect(hello.settings.stepDelayMs).toBe(4000);
+  await invoke('settings.save', { stepDelayMs: 0 });
   target = await context.newPage();
 });
 test.afterAll(async () => {
@@ -171,6 +174,60 @@ test('website URL is readable before site access and Test this tab selects the a
   await target.bringToFront();
   await control.getByRole('button', { name: 'Test this tab' }).evaluate((button) => button.click());
   await expect(control.getByRole('alert')).toHaveCount(0);
+});
+
+test('paced execution shows each action and Stop interrupts the gap', async () => {
+  await control.bringToFront();
+  await control.getByLabel('Gap between steps').selectOption('3000');
+  await expect.poll(async () => (await invoke('settings.get')).stepDelayMs).toBe(3000);
+  await target.goto('http://127.0.0.1:4173/');
+  await target.bringToFront();
+  const plan = await invoke('plan.propose', { request: 'Run fixture', demo: true });
+  await invoke('plan.confirm', { id: plan.id, version: plan.version });
+  const { runId } = await invoke('run.start', {
+    planId: plan.id,
+    version: plan.version,
+    key: crypto.randomUUID(),
+  });
+  await expect
+    .poll(
+      async () => {
+        const r = await invoke('run.get', { id: runId });
+        const last = r.steps.at(-1);
+        return (
+          last?.action.target === 'testid:add-mug' &&
+          last.status === 'passed' &&
+          Boolean(r.nextStepAt)
+        );
+      },
+      { timeout: 20000, intervals: [100] },
+    )
+    .toBe(true);
+  const run = await invoke('run.get', { id: runId });
+  expect(run.stepDelayMs).toBe(3000);
+  expect(run.nextStep.action.label).toBe('Add another mug');
+  for (let i = 1; i < run.steps.length; i++) {
+    expect(
+      Date.parse(run.steps[i].startedAt) - Date.parse(run.steps[i - 1].completedAt),
+    ).toBeGreaterThanOrEqual(2900);
+  }
+  await expect(target.getByTestId('mug-count')).toHaveText('1');
+  await expect(control.getByRole('region', { name: 'Live test progress' })).toContainText(
+    'Next in',
+  );
+  await control.screenshot({ path: resolve(work, 'step-countdown.png'), fullPage: true });
+  const began = Date.now();
+  await control.getByRole('button', { name: 'Stop', exact: true }).click();
+  await expect
+    .poll(async () => (await invoke('run.get', { id: runId })).status, {
+      timeout: 2500,
+      intervals: [50],
+    })
+    .toBe('cancelled');
+  expect(Date.now() - began).toBeLessThan(2500);
+  await expect(target.getByTestId('mug-count')).toHaveText('1');
+  expect((await invoke('run.get', { id: runId })).nextStep).toBeUndefined();
+  await invoke('settings.save', { stepDelayMs: 0 });
 });
 
 test('healthy desktop/mobile fixture performs real browser actions and passes', async () => {

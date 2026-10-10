@@ -31,6 +31,7 @@ type Settings struct {
 	TTSAPIKey          string `json:"ttsApiKey,omitempty"`
 	HasTTSAPIKey       bool   `json:"hasTtsApiKey"`
 	TTSReuseMainKey    bool   `json:"ttsReuseMainKey"`
+	StepDelayMS        int    `json:"stepDelayMs"`
 }
 type Assertion struct {
 	Kind      string  `json:"kind"`
@@ -92,6 +93,10 @@ type Run struct {
 	Error       string         `json:"error,omitempty"`
 	Usage       map[string]int `json:"usage"`
 	DurationMS  int64          `json:"durationMs"`
+	StepDelayMS int            `json:"stepDelayMs"`
+	TotalSteps  int            `json:"totalSteps"`
+	NextStep    *Step          `json:"nextStep,omitempty"`
+	NextStepAt  string         `json:"nextStepAt,omitempty"`
 }
 
 var operations = map[string]bool{"navigate": true, "click": true, "fill": true, "select": true, "scroll": true, "key": true, "assert": true}
@@ -123,6 +128,9 @@ func ValidatePlan(p Plan) error {
 	for caseIndex, c := range p.Cases {
 		if strings.TrimSpace(c.Name) == "" || len(c.Steps) == 0 {
 			return errors.New("each test needs a name and steps")
+		}
+		if c.Steps[0].Operation != "navigate" {
+			return fmt.Errorf("case %d must start by navigating to its starting URL before any clicks or checks; steps must be in execution order", caseIndex+1)
 		}
 		checks := 0
 		for stepIndex, a := range c.Steps {

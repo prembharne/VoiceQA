@@ -3,11 +3,11 @@ package core
 import "testing"
 
 func validPlan() Plan {
-	return Plan{URL: "https://example.test/", Origin: "https://example.test", Viewports: []Viewport{{Width: 1440, Height: 900}}, Cases: []Case{{Name: "Cart", Steps: []Action{{Operation: "assert", Target: "#total", Assertion: &Assertion{Kind: "number", Expected: "24"}}}}}}
+	return Plan{URL: "https://example.test/", Origin: "https://example.test", Viewports: []Viewport{{Width: 1440, Height: 900}}, Cases: []Case{{Name: "Cart", Steps: []Action{{Operation: "navigate", Value: "https://example.test/"}, {Operation: "assert", Target: "#total", Assertion: &Assertion{Kind: "number", Expected: "24"}}}}}}
 }
 func TestRequireIndependentAssertion(t *testing.T) {
 	p := validPlan()
-	p.Cases[0].Steps = []Action{{Operation: "click", Target: "#submit"}}
+	p.Cases[0].Steps = []Action{{Operation: "navigate", Value: p.URL}, {Operation: "click", Target: "#submit"}}
 	if ValidatePlan(p) == nil {
 		t.Fatal("action-only plan accepted")
 	}
@@ -17,6 +17,14 @@ func TestRejectCrossOriginNavigation(t *testing.T) {
 	p.Cases[0].Steps = append(p.Cases[0].Steps, Action{Operation: "navigate", Value: "https://other.test/"})
 	if ValidatePlan(p) == nil {
 		t.Fatal("cross-origin plan accepted")
+	}
+}
+
+func TestRejectChecksBeforeCaseReset(t *testing.T) {
+	p := validPlan()
+	p.Cases[0].Steps[0], p.Cases[0].Steps[1] = p.Cases[0].Steps[1], p.Cases[0].Steps[0]
+	if ValidatePlan(p) == nil {
+		t.Fatal("reversed case order was accepted")
 	}
 }
 func TestRejectArbitraryCode(t *testing.T) {
@@ -48,7 +56,7 @@ func TestBooleanExpectationsRemainStrict(t *testing.T) {
 	for _, kind := range []string{"visible", "enabled", "selected", "focus", "no_overflow"} {
 		for _, expected := range []string{"true", "false", "yes", "error shown", "", "True"} {
 			p := validPlan()
-			p.Cases[0].Steps[0].Assertion = &Assertion{Kind: kind, Expected: expected}
+			p.Cases[0].Steps[1].Assertion = &Assertion{Kind: kind, Expected: expected}
 			e := ValidatePlan(p)
 			valid := expected == "true" || expected == "false"
 			if (e == nil) != valid {
@@ -61,7 +69,7 @@ func TestBooleanExpectationsRemainStrict(t *testing.T) {
 func TestCountExpectationsAreNonnegativeIntegers(t *testing.T) {
 	for _, expected := range []string{"0", "2", "-1", "2.5", "many", ""} {
 		p := validPlan()
-		p.Cases[0].Steps[0].Assertion = &Assertion{Kind: "count", Expected: expected}
+		p.Cases[0].Steps[1].Assertion = &Assertion{Kind: "count", Expected: expected}
 		e := ValidatePlan(p)
 		valid := expected == "0" || expected == "2"
 		if (e == nil) != valid {

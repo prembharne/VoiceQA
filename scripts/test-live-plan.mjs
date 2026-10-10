@@ -3,7 +3,7 @@
 import { chromium } from '@playwright/test';
 import { spawn } from 'node:child_process';
 import { DatabaseSync } from 'node:sqlite';
-import { copyFile, mkdir, mkdtemp, unlink, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, mkdtemp, readFile, unlink, writeFile } from 'node:fs/promises';
 import { resolve, join } from 'node:path';
 import { once } from 'node:events';
 
@@ -128,8 +128,9 @@ try {
   await rpc('project.configure', { origin: 'http://127.0.0.1:4173', url: page.url() });
   console.log(`Drafting the coupon/cart request with OpenRouter ${model}...`);
   const plan = await rpc('plan.propose', {
-    request:
-      'Check that invalid coupon is rejected and cart total is updated correctly. The value for a mug is $12.',
+    request: process.argv[2]
+      ? await readFile(resolve(process.argv[2]), 'utf8')
+      : 'Check that invalid coupon is rejected and cart total is updated correctly. The value for a mug is $12.',
     url: page.url(),
     origin: 'http://127.0.0.1:4173',
     responsive: true,

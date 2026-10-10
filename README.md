@@ -42,6 +42,16 @@ AI output must pass local plan validation before review. Boolean expectations ar
 
 For an opt-in live planning check, start `npm run demo`, then run `node scripts/test-live-plan.mjs`. It uses your saved OpenRouter key and selected model in isolated test data, reads a real demo DOM observation, and drafts the coupon/cart request. It does not confirm a plan or execute test actions. This calls the model API and may use credits. Encrypted key copies are removed at teardown; the accepted draft is saved under `test-results/live-plan-*/accepted-plan.json`. The deterministic browser suite does not make live model calls.
 
+## Step-by-step execution
+
+Runs execute one action at a time with a **4-second inspection gap** by default. In the Test screen, choose **Gap between steps** to use 3, 4, or 5 seconds. **No gap · fast automation** is available for unattended regression runs. The pace is fixed when a run starts; it cannot change mid-run. Existing settings inherit the 4-second default unless a pace was explicitly saved.
+
+Results show the current action, its case/viewport, the previous step's outcome, and a countdown before the next action. The gap also applies to layout changes, page resets, assertions and accessibility checks. **Stop** interrupts the wait immediately, preventing the next action from being dispatched. Assertions still wait for their conditions; the inspection gap is additional time to watch the website.
+
+Each test case must start with a navigation/reset. Plans that put checks before their reset are rejected and sent for the bounded correction attempt. The planner is instructed to emit steps in execution order: reset → interact → check. Cases run across the selected viewports automatically. Regenerate older plans that placed checks first; saved plans are not silently reordered.
+
+The live planning script accepts an optional text-file path for a specific request. `node scripts/test-live-run.mjs PATH_TO_ACCEPTED_PLAN_JSON` verifies a generated mug/coupon plan in an isolated Chrome extension/native-host session with four-second gaps, saves screenshots and a run record, and restores test registration afterward. Its scope excludes checkout/sign-in and targets only the local demo. It performs the demo actions and makes no further model calls.
+
 Click **Start voice session**, allow the microphone, and describe a workflow. The tool pauses recording while speaking, asks for missing requirements, and reads back assertions before execution. Say:
 
 - “Run these tests” — confirm and start the current plan.
