@@ -120,12 +120,12 @@ func ValidatePlan(p Plan) error {
 			return errors.New("viewport is out of bounds")
 		}
 	}
-	for _, c := range p.Cases {
+	for caseIndex, c := range p.Cases {
 		if strings.TrimSpace(c.Name) == "" || len(c.Steps) == 0 {
 			return errors.New("each test needs a name and steps")
 		}
 		checks := 0
-		for _, a := range c.Steps {
+		for stepIndex, a := range c.Steps {
 			n++
 			if !operations[a.Operation] || len(a.Target) > 500 || len(a.Value) > 4000 {
 				return errors.New("invalid test action")
@@ -147,8 +147,14 @@ func ValidatePlan(p Plan) error {
 						return errors.New("numeric assertion requires a finite expected number")
 					}
 				}
+				if a.Assertion.Kind == "count" {
+					count, e := strconv.Atoi(a.Assertion.Expected)
+					if e != nil || count < 0 {
+						return fmt.Errorf("case %d, step %d (count): expected must be a nonnegative integer string", caseIndex+1, stepIndex+1)
+					}
+				}
 				if (a.Assertion.Kind == "visible" || a.Assertion.Kind == "enabled" || a.Assertion.Kind == "selected" || a.Assertion.Kind == "focus" || a.Assertion.Kind == "no_overflow") && a.Assertion.Expected != "true" && a.Assertion.Expected != "false" {
-					return errors.New("boolean assertion requires true or false")
+					return fmt.Errorf("case %d, step %d (%s): boolean assertion requires the string true or false", caseIndex+1, stepIndex+1, a.Assertion.Kind)
 				}
 			}
 		}

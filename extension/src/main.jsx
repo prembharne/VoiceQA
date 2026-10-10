@@ -235,6 +235,7 @@ function App() {
       return;
     }
     const token = generation.current;
+    setPlan(null);
     await perform(async () => {
       const p = await rpc('plan.propose', {
         request: demo ? 'Run the local demo shop fixture suite' : prompt,

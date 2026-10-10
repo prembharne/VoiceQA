@@ -38,6 +38,10 @@ For **OpenRouter**, select OpenRouter and enter the key in **OpenRouter API key*
 
 Microphone transcription continues to use OpenAI (`gpt-4o-mini-transcribe` by default). With OpenRouter, enter a separate key in **OpenAI speech API key (optional)** to enable the microphone, or use typed requests without one. The saved OpenAI AI key or `OPENAI_API_KEY` can also supply transcription. Browser text-to-speech needs no key; API text-to-speech uses its dedicated OpenAI key, or the OpenAI speech/main key when reuse is enabled. OpenRouter keys are never reused for OpenAI speech. Saved plans retain their AI provider for later UI target resolution.
 
+AI output must pass local plan validation before review. Boolean expectations are constrained to the strings `true`/`false` in the model schema. Invalid drafts receive at most one correction request with the same model, original requirements, observations, and a shared 100-second deadline. Authentication, transport, refusal, and incomplete-response errors are not retried. A model must choose between a plan and a clarification question; clarification responses carry no runnable actions. Generating a replacement draft clears the old panel plan.
+
+For an opt-in live planning check, start `npm run demo`, then run `node scripts/test-live-plan.mjs`. It uses your saved OpenRouter key and selected model in isolated test data, reads a real demo DOM observation, and drafts the coupon/cart request. It does not confirm a plan or execute test actions. This calls the model API and may use credits. Encrypted key copies are removed at teardown; the accepted draft is saved under `test-results/live-plan-*/accepted-plan.json`. The deterministic browser suite does not make live model calls.
+
 Click **Start voice session**, allow the microphone, and describe a workflow. The tool pauses recording while speaking, asks for missing requirements, and reads back assertions before execution. Say:
 
 - “Run these tests” — confirm and start the current plan.

@@ -4,7 +4,17 @@ This document records current evidence, not projected reliability.
 
 ## OpenRouter support — 2026-10-10
 
-The companion now routes OpenRouter planning and target resolution through its Responses endpoint with strict schemas and parameter-compatible provider routing. Mock HTTP tests verify endpoint selection, request shape, response parsing, token usage, and that OpenRouter credentials cannot reach OpenAI. Windows tests verify legacy-key recovery, encrypted provider-specific key storage, blank-key preservation, and separation from speech keys. Go race tests and vet pass. Live OpenRouter model generation and account credit/model availability have not been verified.
+The companion now routes OpenRouter planning and target resolution through its Responses endpoint with strict schemas and parameter-compatible provider routing. Mock HTTP tests verify endpoint selection, request shape, response parsing, token usage, and that OpenRouter credentials cannot reach OpenAI. Windows tests verify legacy-key recovery, encrypted provider-specific key storage, blank-key preservation, and separation from speech keys. Go race tests and vet pass.
+
+### Generated-plan validation regression
+
+- Fixed the schema gap that allowed prose or empty strings as boolean expectations. Boolean assertion schemas now require literal `true`/`false` strings. Local validation remains strict and identifies the failing case/step. Numeric count expectations must be nonnegative integer strings.
+- The model chooses a nested plan-or-clarification result. Clarification drafts contain no runnable actions. A rejected draft gets at most one correction request, preserving the selected model, original request, origin, observation and a shared 100-second deadline. Authentication, transport, refusal, incomplete responses and cancelled work are not retried. Token usage from both attempts is retained.
+- Verified rejection-to-repair, exhausted repair, cancellation, authentication, clarification handling and removal of unused assertion metadata with mocked HTTP regression tests and Go's race detector. All 18 JavaScript unit tests and 15 Chromium/native-host integration tests passed.
+- **Live planning verified:** `scripts/test-live-plan.mjs` used the saved OpenRouter credential and selected `dots-studio/dots-3-note-preview:free` model, with a real Chromium DOM observation of the local demo. The coupon/cart request returned two valid independent cases and two checks, targeting a $24 total for two $12 mugs and the exact `Coupon is not valid` message. Provider usage was 1,675 input + 2,643 output = 4,318 tokens. The accepted draft was unconfirmed; no test actions were executed in this smoke check.
+- The live check used isolated app data, preserved the production SQLite records and registration, and removed copied encrypted keys at teardown. Its ignored evidence is `test-results/live-plan-T2fzqo/accepted-plan.json`. Earlier live attempts exposed the clarification-field ambiguity before the response schema was corrected; they are not counted as successful planning.
+
+This establishes live plan generation for that request and model. It does not establish general reliability across sites, live microphone transcription, paid TTS, or model-driven test execution. Nested union schemas follow the [official Structured Outputs schema subset](https://developers.openai.com/api/docs/guides/structured-outputs).
 
 ## Local verification — 2026-10-10
 

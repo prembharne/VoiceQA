@@ -43,3 +43,29 @@ func TestOriginExactMatch(t *testing.T) {
 		t.Fatal("same-origin route rejected")
 	}
 }
+
+func TestBooleanExpectationsRemainStrict(t *testing.T) {
+	for _, kind := range []string{"visible", "enabled", "selected", "focus", "no_overflow"} {
+		for _, expected := range []string{"true", "false", "yes", "error shown", "", "True"} {
+			p := validPlan()
+			p.Cases[0].Steps[0].Assertion = &Assertion{Kind: kind, Expected: expected}
+			e := ValidatePlan(p)
+			valid := expected == "true" || expected == "false"
+			if (e == nil) != valid {
+				t.Fatalf("%s expectation %q validation: %v", kind, expected, e)
+			}
+		}
+	}
+}
+
+func TestCountExpectationsAreNonnegativeIntegers(t *testing.T) {
+	for _, expected := range []string{"0", "2", "-1", "2.5", "many", ""} {
+		p := validPlan()
+		p.Cases[0].Steps[0].Assertion = &Assertion{Kind: "count", Expected: expected}
+		e := ValidatePlan(p)
+		valid := expected == "0" || expected == "2"
+		if (e == nil) != valid {
+			t.Fatalf("count expectation %q validation: %v", expected, e)
+		}
+	}
+}

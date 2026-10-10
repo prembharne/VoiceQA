@@ -335,29 +335,9 @@ func (a *App) dispatch(m native.Message) (any, error) {
 			if e != nil {
 				return nil, e
 			}
-			s := a.getSettings()
-			raw, usage, e := a.aiClient(s.AIProvider).Structured(ctx, a.keyFor(s.AIProvider), s.Model, provider.PlanInstructions, map[string]any{"request": p.Request, "url": p.URL, "approvedOrigin": p.Origin, "observation": obs}, provider.PlanSchema())
+			plan, e = a.draftPlan(ctx, p.Request, p.URL, p.Origin, p.Responsive, obs)
 			if e != nil {
 				return nil, e
-			}
-			if e = json.Unmarshal(raw, &plan); e != nil {
-				return nil, e
-			}
-			plan.ID = core.ID()
-			plan.Version = 1
-			plan.URL = p.URL
-			plan.Origin = p.Origin
-			plan.Request = p.Request
-			plan.Model = s.Model
-			plan.AIProvider = s.AIProvider
-			plan.Usage = usage
-			plan.CreatedAt = core.Now()
-			plan.Viewports = []core.Viewport{{Width: 1440, Height: 900}}
-			if p.Responsive {
-				plan.Viewports = append(plan.Viewports, core.Viewport{Width: 390, Height: 844})
-			}
-			for i := range plan.Cases {
-				plan.Cases[i].Source = "agent-proposed; requires confirmation"
 			}
 		}
 		plan.Visual = p.Visual
