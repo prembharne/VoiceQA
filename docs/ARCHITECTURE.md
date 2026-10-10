@@ -42,6 +42,8 @@ SQLite migration version 1 uses a document-record table with `(kind,id)` primary
 - DOM assertions poll to explicit deadlines instead of fixed multi-second sleeps.
 - Responsive tests use fixed CSS viewport widths without mobile page autoscaling, keeping pointer coordinates and overflow checks consistent.
 - Bundled JavaScript validation generated at build time; no runtime `eval` required by schema compilation.
+- Both Chrome communication layers use a generation-bound reconnectable port channel. Failed commands are rejected, never replayed; old-port disconnect events cannot close a replacement connection.
+- Motion is limited to interaction/page feedback, with reduced-motion support. Inter is bundled locally (Latin subset), and Lucide icons are tree-shaken into the panel.
 - SQLite WAL and one database connection avoid multi-writer contention.
 
 ## Desktop migration

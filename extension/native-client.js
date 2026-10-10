@@ -1,67 +1,39 @@
 import validate from '../shared/envelope-validator.js';
 import { envelope, HOST_NAME, MAX_CHUNK_BYTES } from '../shared/protocol.js';
+import { PortChannel } from '../shared/port-channel.js';
 
 export class NativeClient {
-  port = null;
-  pending = new Map();
   connected = false;
   constructor(onMessage, onDisconnect) {
     this.onMessage = onMessage;
     this.onDisconnect = onDisconnect;
+    this.channel = new PortChannel({
+      createPort: () => chrome.runtime.connectNative(HOST_NAME),
+      makeRequest: envelope,
+      responseID: (message) => (message.type === 'rpc.result' ? message.payload.requestId : null),
+      validate,
+      lastError: () => chrome.runtime.lastError?.message || '',
+      onMessage,
+      onDisconnect: (error) => {
+        this.connected = false;
+        return onDisconnect(error);
+      },
+    });
   }
   connect() {
-    if (this.port) return;
-    this.port = chrome.runtime.connectNative(HOST_NAME);
-    this.port.onMessage.addListener((message) => {
-      if (!validate(message)) {
-        this.disconnect(new Error('Companion sent an invalid protocol envelope'));
-        return;
-      }
-      if (message.type === 'rpc.result') {
-        const p = this.pending.get(message.payload.requestId);
-        if (!p) return;
-        clearTimeout(p.timer);
-        this.pending.delete(message.payload.requestId);
-        if (message.payload.error) p.reject(new Error(message.payload.error));
-        else p.resolve(message.payload.result);
-      } else this.onMessage(message);
-    });
-    this.port.onDisconnect.addListener(() => {
-      const message = chrome.runtime.lastError?.message || 'Companion disconnected';
-      this.disconnect(new Error(message));
-    });
+    this.channel.open();
+  }
+  get port() {
+    return this.channel.port;
   }
   disconnect(error) {
-    this.port = null;
-    this.connected = false;
-    for (const p of this.pending.values()) {
-      clearTimeout(p.timer);
-      p.reject(error);
-    }
-    this.pending.clear();
-    this.onDisconnect(error);
+    this.channel.drop(error);
   }
   send(message) {
-    if (!this.port) throw new Error('Companion is not connected');
-    this.port.postMessage(message);
+    this.channel.send(message);
   }
   async rpc(type, payload = {}, extra = {}) {
-    this.connect();
-    const message = envelope(type, payload, extra);
-    return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
-        this.pending.delete(message.id);
-        reject(new Error('Companion request timed out'));
-      }, 120000);
-      this.pending.set(message.id, { resolve, reject, timer });
-      try {
-        this.send(message);
-      } catch (e) {
-        clearTimeout(timer);
-        this.pending.delete(message.id);
-        reject(e);
-      }
-    });
+    return this.channel.request(type, payload, extra);
   }
   async upload(bytes, mime) {
     const hash = await crypto.subtle.digest('SHA-256', bytes);

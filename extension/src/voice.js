@@ -86,8 +86,41 @@ export function say(text, onDone) {
   speechSynthesis.cancel();
   const u = new SpeechSynthesisUtterance(text);
   u.rate = 1.05;
-  u.onend = onDone;
-  u.onerror = onDone;
+  let finished = false;
+  let startTimer, totalTimer;
+  const finish = (error) => {
+    if (finished) return;
+    finished = true;
+    clearTimeout(startTimer);
+    clearTimeout(totalTimer);
+    onDone(error);
+  };
+  startTimer = setTimeout(() => {
+    speechSynthesis.cancel();
+    finish(
+      new Error(
+        'Browser speech did not start. Check your browser voices or select OpenAI speech in Local setup.',
+      ),
+    );
+  }, 5000);
+  u.onstart = () => {
+    clearTimeout(startTimer);
+    totalTimer = setTimeout(
+      () => {
+        speechSynthesis.cancel();
+        finish(new Error('Browser speech timed out.'));
+      },
+      Math.max(15000, text.length * 100),
+    );
+  };
+  u.onend = () => finish();
+  u.onerror = (event) =>
+    finish(new Error(`Browser speech failed${event.error ? `: ${event.error}` : ''}.`));
   speechSynthesis.speak(u);
-  return () => speechSynthesis.cancel();
+  return () => {
+    finished = true;
+    clearTimeout(startTimer);
+    clearTimeout(totalTimer);
+    speechSynthesis.cancel();
+  };
 }

@@ -52,9 +52,11 @@ export class SpeechPlayer {
     const generation = this.generation;
     try {
       if (provider === 'browser') {
-        await new Promise((resolve) => {
+        await new Promise((resolve, reject) => {
           this.finishPlayback = resolve;
-          this.browserStop = this.deps.browserSay(text, resolve);
+          this.browserStop = this.deps.browserSay(text, (error) =>
+            error ? reject(error) : resolve(),
+          );
         });
       } else if (provider === 'openai') {
         for (const chunk of splitSpeech(text)) {

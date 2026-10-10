@@ -84,8 +84,12 @@ chrome.runtime.onConnect.addListener((port) => {
 async function handlePanel(method, payload) {
   await ready;
   if (method === 'state') return state;
+  if (method === 'system.info')
+    return { extensionId: chrome.runtime.id, version: chrome.runtime.getManifest().version };
   if (method === 'connect') {
     const result = await native.rpc('hello');
+    if (!native.port)
+      throw new Error('Local engine disconnected during startup. Retry connection.');
     state.connected = true;
     native.connected = true;
     state.settings = result.settings;

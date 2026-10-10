@@ -20,7 +20,7 @@ npm run demo
    ```
 
 3. Open <http://127.0.0.1:4173/> in a dedicated QA Chrome profile.
-4. Click the extension icon to open its side panel. Click **Test this tab** and grant access to that site's origin.
+4. Click the extension icon to open its side panel. If offline, choose **Retry connection**; the screen displays your extension ID and a copyable setup command. Once connected, click **Test this tab** and grant access to that site's origin.
 5. Click **Load fixture plan**, review its expected outcomes, and choose **Confirm and run tests**.
 6. Inspect evidence and export an HTML, JSON, or JUnit report.
 
@@ -83,7 +83,17 @@ Useful failures to demonstrate:
 
 Companion runtime data defaults to `%LOCALAPPDATA%\VoiceQA`. Override `VOICEQA_DATA_DIR` for isolated testing. Logs go to stderr, never into the native message stream. Protocol errors identify the operation without exposing keys. On a crash, dispatched actions have unknown outcomes and are not replayed.
 
-If Chrome cannot find the host, verify the installed extension ID matches `dist/native-host.json`, rerun registration, and reconnect. Keep the built executable at its registered path. To remove registration:
+If Chrome cannot find the host, verify the installed extension ID matches `dist/native-host.json`, rerun registration, and reconnect. Keep the built executable at its registered path.
+
+The installer registers both Chrome and Chromium by default. To check registration and executable startup without touching real runs or credentials:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\check-host.ps1 -ExtensionId YOUR_EXTENSION_ID
+```
+
+Version 0.2 adds recovery from disconnected ports, copyable in-panel setup, Motion-powered buttons/page transitions, local Inter fonts, Lucide icons, and actionable empty states. Reduced-motion preferences disable physical motion. Browser speech has a startup watchdog so an unavailable voice cannot leave the microphone blocked indefinitely. After updating an unpacked build, click **Reload** for VoiceQA at `chrome://extensions`, then reopen the panel.
+
+To remove registration:
 
 ```powershell
 powershell -NoProfile -File .\scripts\uninstall-host.ps1

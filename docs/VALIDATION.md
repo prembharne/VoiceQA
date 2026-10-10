@@ -10,8 +10,8 @@ This document records current evidence, not projected reliability.
 | Windows Go companion build | Passed |
 | Go unit tests with race detector | 26 tests passed |
 | Go vet | Passed |
-| JavaScript unit/contract tests | 13 tests passed |
-| Actual extension + native-host browser integration | 10 tests passed, approximately 1 minute |
+| JavaScript unit/contract tests | 18 tests passed |
+| Actual extension + native-host browser integration | 13 tests passed, approximately 1 minute |
 | npm dependency audit | 0 vulnerabilities reported |
 
 Browser integration used Chrome for Testing 156.0.8078.4 in an isolated Chromium profile. It verified healthy desktop/mobile-width workflows, seeded cart and coupon failures, serious accessibility violations, overflow, visual-baseline approval/replay, debugger cleanup after cancellation, explicit missing-key errors, and cancellation while paused. The latter checks that returning to a tab cannot revive old asynchronous browser actions.
@@ -21,6 +21,16 @@ The application uses a generation fence for cancelled work, serial browser dispa
 The side panel was also visually inspected from a real browser capture. Native test registration was removed/restored at teardown; ordinary Chrome settings were not changed.
 
 API text-to-speech is implemented with a dedicated encrypted key slot, explicit main-key reuse, saved provider/model/voice controls, browser playback, temporary audio transfer/release, bounded text chunks, and cancellation. Tests verify the provider HTTP request against a mock service, Windows DPAPI encryption and key redaction, migration from old settings, late-playback suppression, and the Chrome settings UI. Real OpenAI-generated audio has not been tested without credentials.
+
+## Version 0.2 — connection recovery and interface polish
+
+- Reproduced a disconnected panel port and recovered through **Retry connection** without reopening the panel. Unit tests also cover synchronous stale-port failures, old-generation disconnect events, and rejection without replay of mutating requests.
+- Verified the actual `dist/extension` with the currently registered production host and its real extension ID through `scripts/smoke-installed.mjs`; registration was not replaced by that smoke check. `scripts/check-host.ps1` independently verified registration and executable startup with isolated temporary data.
+- Repaired Windows registration for both Chrome and Chromium, preserving the existing application data and API keys.
+- Visually inspected connection recovery, empty history, and 330/600-pixel side panels. Motion, Lucide, and locally bundled Inter provide the interface; reduced-motion preferences are respected. Automated serious/critical accessibility checks passed for the history view.
+- Added a browser-speech startup watchdog and cancellation cleanup so unavailable speech cannot leave the UI indefinitely in its speaking state.
+
+Total locally verified test cases: **57** (26 Go, 18 JavaScript, 13 browser). Go race/vet and npm audit passed. Live model-generated QA and paid TTS still require credentials for independent acceptance testing.
 
 - Production extension and Windows Go companion build locally.
 - Go tests cover native framing, limits, independent assertions, origin boundaries, interrupted-run recovery, cancellation, checksummed transfers, visual comparison, and provider-response parsing.

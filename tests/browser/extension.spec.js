@@ -89,6 +89,16 @@ test.beforeAll(async () => {
     '-BackupPath',
     backupPath,
   ]);
+  await context.addInitScript(() => {
+    if (!globalThis.chrome?.runtime?.connect) return;
+    const original = chrome.runtime.connect.bind(chrome.runtime);
+    globalThis.__voiceqaTestPorts = [];
+    chrome.runtime.connect = (...args) => {
+      const port = original(...args);
+      if (args[0]?.name === 'voiceqa-panel') globalThis.__voiceqaTestPorts.push(port);
+      return port;
+    };
+  });
   control = await context.newPage();
   await control.goto(`chrome-extension://${extensionId}/panel.html`);
   await control.evaluate(() => {
@@ -124,6 +134,16 @@ test.afterAll(async () => {
       '-BackupPath',
       backupPath,
     ]);
+});
+test('empty history gives a clear next step before the first run', async () => {
+  await control.bringToFront();
+  await control.setViewportSize({ width: 420, height: 900 });
+  await control.getByRole('button', { name: 'History', exact: true }).click();
+  await expect(control.getByRole('heading', { name: 'A clean slate' })).toBeVisible();
+  await expect(control.getByRole('button', { name: 'Start your first test' })).toBeVisible();
+  await control.screenshot({ path: resolve(work, 'empty-history.png'), fullPage: true });
+  await control.getByRole('button', { name: 'Start your first test' }).click();
+  await expect(control.getByRole('heading', { name: 'Test with confidence.' })).toBeVisible();
 });
 test('healthy desktop/mobile fixture performs real browser actions and passes', async () => {
   const run = await suite('http://127.0.0.1:4173/');
@@ -256,11 +276,51 @@ test('side panel renders offline-safe UI without remote code or JavaScript error
   await control.bringToFront();
   await control.getByRole('button', { name: 'Test', exact: true }).click();
   await control.setViewportSize({ width: 420, height: 1000 });
-  await expect(
-    control.getByRole('heading', { name: 'Your next test starts with a voice.' }),
-  ).toBeVisible();
+  await expect(control.getByRole('heading', { name: 'Test with confidence.' })).toBeVisible();
   await control.screenshot({ path: resolve(work, 'side-panel.png'), fullPage: true });
   expect(errors).toEqual([]);
+});
+test('the panel recovers from its disconnected port without reopening the page', async () => {
+  await control.bringToFront();
+  await control.getByRole('button', { name: 'Open setup' }).click();
+  await expect(control.getByRole('heading', { name: 'Local setup' })).toBeVisible();
+  await control.evaluate(() => globalThis.__voiceqaTestPorts[0].disconnect());
+  await control.getByRole('button', { name: 'Save settings', exact: true }).click();
+  await expect(
+    control.getByRole('heading', { name: 'Bring your test engine online.' }),
+  ).toBeVisible();
+  await expect(control.getByLabel('Extension ID', { exact: true })).toHaveValue(extensionId);
+  await control.screenshot({ path: resolve(work, 'connection-recovery.png'), fullPage: true });
+  await control.getByRole('button', { name: 'Retry connection', exact: true }).click();
+  await expect(control.getByText('Engine connected', { exact: true })).toBeVisible();
+  await control.getByRole('button', { name: 'Test', exact: true }).click();
+  await expect(control.getByRole('heading', { name: 'Test with confidence.' })).toBeVisible();
+});
+test('polished views fit narrow and wide panels and respect reduced motion', async () => {
+  await control.bringToFront();
+  await control.getByRole('button', { name: 'Test', exact: true }).click();
+  for (const width of [330, 600]) {
+    await control.setViewportSize({ width, height: 950 });
+    await expect
+      .poll(() => control.evaluate(() => document.documentElement.scrollWidth <= innerWidth))
+      .toBe(true);
+    await control.screenshot({ path: resolve(work, `panel-${width}.png`), fullPage: true });
+  }
+  await control.emulateMedia({ reducedMotion: 'reduce' });
+  await control.getByRole('button', { name: 'History', exact: true }).click();
+  await expect(control.getByRole('heading', { name: 'Run history' })).toBeVisible();
+  await control.screenshot({ path: resolve(work, 'history.png'), fullPage: true });
+  await control.addScriptTag({ url: `chrome-extension://${extensionId}/axe.min.js` });
+  const issues = await control.evaluate(async () => {
+    const result = await axe.run(document, {
+      runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa'] },
+    });
+    return result.violations
+      .filter((v) => ['serious', 'critical'].includes(v.impact))
+      .map((v) => ({ id: v.id, nodes: v.nodes.map((n) => n.target) }));
+  });
+  expect(issues).toEqual([]);
+  await control.emulateMedia({ reducedMotion: 'no-preference' });
 });
 test('TTS settings expose a dedicated key slot and fail explicitly without credentials', async () => {
   await control.bringToFront();
