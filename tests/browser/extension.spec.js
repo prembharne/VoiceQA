@@ -146,7 +146,7 @@ test('empty history gives a clear next step before the first run', async () => {
   await expect(control.getByRole('button', { name: 'Start your first test' })).toBeVisible();
   await control.screenshot({ path: resolve(work, 'empty-history.png'), fullPage: true });
   await control.getByRole('button', { name: 'Start your first test' }).click();
-  await expect(control.getByRole('heading', { name: 'Test with confidence.' })).toBeVisible();
+  await expect(control.getByRole('heading', { name: 'What should we test?' })).toBeVisible();
 });
 test('website URL is readable before site access and Test this tab selects the active website', async () => {
   // Unlike 127.0.0.1, localhost has no pre-granted host permission in this fixture.
@@ -163,22 +163,30 @@ test('website URL is readable before site access and Test this tab selects the a
   await target.bringToFront();
   // A side panel click leaves the website active. Evaluate the actual DOM click
   // because this test renders the panel in a tab, which Playwright would activate.
-  await control.getByRole('button', { name: 'Test this tab' }).evaluate((button) => button.click());
+  await control
+    .getByRole('button', { name: 'Share current tab' })
+    .evaluate((button) => button.click());
   await expect.poll(async () => (await invoke('state')).target?.url).toBe('http://127.0.0.1:4173/');
-  await expect(control.locator('.target-card')).toContainText('CONNECTED WEBSITE');
+  await expect(control.locator('.sharing-chip')).toContainText('Sharing');
   await expect(control.getByRole('alert')).toHaveCount(0);
 
   await control.bringToFront();
-  await control.getByRole('button', { name: 'Test this tab' }).click();
+  await control.getByRole('button', { name: 'Stop sharing this tab' }).click();
+  await expect(control.getByRole('button', { name: 'Share current tab' })).toBeVisible();
+  await control.getByRole('button', { name: 'Share current tab' }).click();
   await expect(control.getByRole('alert')).toContainText('Switch to a normal website');
   await target.bringToFront();
-  await control.getByRole('button', { name: 'Test this tab' }).evaluate((button) => button.click());
+  await control
+    .getByRole('button', { name: 'Share current tab' })
+    .evaluate((button) => button.click());
   await expect(control.getByRole('alert')).toHaveCount(0);
 });
 
 test('paced execution shows each action and Stop interrupts the gap', async () => {
   await control.bringToFront();
+  await control.getByLabel('Test options', { exact: true }).click();
   await control.getByLabel('Gap between steps').selectOption('3000');
+  await control.getByLabel('Test options', { exact: true }).click();
   await expect.poll(async () => (await invoke('settings.get')).stepDelayMs).toBe(3000);
   await target.goto('http://127.0.0.1:4173/');
   await target.bringToFront();
@@ -206,6 +214,8 @@ test('paced execution shows each action and Stop interrupts the gap', async () =
   const run = await invoke('run.get', { id: runId });
   expect(run.stepDelayMs).toBe(3000);
   expect(run.nextStep.action.label).toBe('Add another mug');
+  await expect(control.getByRole('button', { name: 'Stop sharing this tab' })).toBeDisabled();
+  await expect(invoke('unbind')).rejects.toThrow('Stop the active run');
   for (let i = 1; i < run.steps.length; i++) {
     expect(
       Date.parse(run.steps[i].startedAt) - Date.parse(run.steps[i - 1].completedAt),
@@ -355,20 +365,40 @@ test('paused asynchronous actions cannot revive after cancellation', async () =>
   await new Promise((resolve) => setTimeout(resolve, 350));
   expect(await target.getByTestId('mug-count').textContent()).toBe(before);
 });
+test('chat reviews a fixture plan and streams a real run into the conversation', async () => {
+  await control.getByRole('button', { name: 'New chat', exact: true }).click();
+  await target.goto('http://127.0.0.1:4173/');
+  await target.bringToFront();
+  await control
+    .getByRole('button', { name: 'Run the demo test suite', exact: true })
+    .evaluate((button) => button.click());
+  await expect(control.locator('.user-message')).toContainText('Run the local demo fixture suite.');
+  await expect(control.getByRole('heading', { name: 'Test plan', exact: true })).toBeVisible();
+  await control.screenshot({ path: resolve(work, 'chat-plan.png'), fullPage: true });
+  await control
+    .getByRole('button', { name: 'Confirm and run tests', exact: true })
+    .evaluate((button) => button.click());
+  await expect(control.getByRole('heading', { name: 'Test results', exact: true })).toBeVisible();
+  await expect.poll(async () => (await invoke('state')).runId, { timeout: 15000 }).toBe(null);
+  await expect(control.locator('.result-banner .status')).toHaveText('passed');
+  await expect(control.getByRole('button', { name: 'Export HTML', exact: true })).toBeVisible();
+  await control.screenshot({ path: resolve(work, 'chat-results.png'), fullPage: true });
+});
+
 test('side panel renders offline-safe UI without remote code or JavaScript errors', async () => {
   const errors = [];
   control.on('pageerror', (e) => errors.push(e.message));
   await control.bringToFront();
-  await control.getByRole('button', { name: 'Test', exact: true }).click();
+  await control.getByRole('button', { name: 'New chat', exact: true }).click();
   await control.setViewportSize({ width: 420, height: 1000 });
-  await expect(control.getByRole('heading', { name: 'Test with confidence.' })).toBeVisible();
+  await expect(control.getByRole('heading', { name: 'What should we test?' })).toBeVisible();
   await control.screenshot({ path: resolve(work, 'side-panel.png'), fullPage: true });
   expect(errors).toEqual([]);
 });
 test('the panel recovers from its disconnected port without reopening the page', async () => {
   await control.bringToFront();
-  await control.getByRole('button', { name: 'Open setup' }).click();
-  await expect(control.getByRole('heading', { name: 'Local setup' })).toBeVisible();
+  await control.getByRole('button', { name: 'Open settings' }).click();
+  await expect(control.getByRole('heading', { name: 'Settings' })).toBeVisible();
   await control.evaluate(() => globalThis.__voiceqaTestPorts[0].disconnect());
   await control.getByRole('button', { name: 'Save settings', exact: true }).click();
   await expect(
@@ -377,13 +407,13 @@ test('the panel recovers from its disconnected port without reopening the page',
   await expect(control.getByLabel('Extension ID', { exact: true })).toHaveValue(extensionId);
   await control.screenshot({ path: resolve(work, 'connection-recovery.png'), fullPage: true });
   await control.getByRole('button', { name: 'Retry connection', exact: true }).click();
-  await expect(control.getByText('Engine connected', { exact: true })).toBeVisible();
-  await control.getByRole('button', { name: 'Test', exact: true }).click();
-  await expect(control.getByRole('heading', { name: 'Test with confidence.' })).toBeVisible();
+  await expect(control.locator('.engine-dot.connected')).toBeVisible();
+  await control.getByRole('button', { name: 'New chat', exact: true }).click();
+  await expect(control.getByRole('heading', { name: 'What should we test?' })).toBeVisible();
 });
 test('polished views fit narrow and wide panels and respect reduced motion', async () => {
   await control.bringToFront();
-  await control.getByRole('button', { name: 'Test', exact: true }).click();
+  await control.getByRole('button', { name: 'New chat', exact: true }).click();
   for (const width of [330, 600]) {
     await control.setViewportSize({ width, height: 950 });
     await expect
@@ -409,7 +439,7 @@ test('polished views fit narrow and wide panels and respect reduced motion', asy
 });
 test('TTS settings expose a dedicated key slot and fail explicitly without credentials', async () => {
   await control.bringToFront();
-  await control.getByRole('button', { name: 'Open setup' }).click();
+  await control.getByRole('button', { name: 'Open settings' }).click();
   await control.getByLabel('Speech provider').selectOption('openai');
   await expect(control.getByLabel('Text-to-speech API key', { exact: true })).toBeVisible();
   await expect(control.getByLabel('Text-to-speech model', { exact: true })).toHaveValue('tts-1');
@@ -439,6 +469,9 @@ test('OpenRouter setup saves the provider and keeps speech credentials separate'
   expect(settings.apiKey).toBeUndefined();
   expect(settings.speechApiKey).toBeUndefined();
   expect(settings.hasSpeechApiKey).toBe(false);
+  await control.locator('.utility-content').evaluate((el) => {
+    el.scrollTop = 0;
+  });
   await control.screenshot({ path: resolve(work, 'openrouter-settings.png'), fullPage: true });
   await control.getByLabel('AI provider').selectOption('openai');
   await control.getByRole('button', { name: 'Save settings', exact: true }).click();

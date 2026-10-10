@@ -64,7 +64,7 @@ for (const name of ['install-host.ps1', 'uninstall-host.ps1', 'check-host.ps1'])
 }
 await writeFile(
   `${root}/INSTALL.txt`,
-  `VoiceQA ${version}\r\n\r\n1. Chrome > chrome://extensions > Developer mode > Load unpacked > extension folder.\r\n2. Run: powershell -NoProfile -ExecutionPolicy Bypass -File .\\install-host.ps1 -ExtensionId YOUR_ID\r\n3. Open the side panel. The connection screen shows your extension ID and a setup command. Choose Retry connection.\r\n4. On a website, choose Test this tab and configure your API key in Local setup.\r\n5. Review the plan before running. Use a dedicated QA profile and synthetic data.\r\n\r\nDiagnostic: powershell -NoProfile -File .\\check-host.ps1 -ExtensionId YOUR_ID\r\nKeep this folder in place: Chrome starts the executable at its installed path.\r\n`,
+  `VoiceQA ${version}\r\n\r\n1. Chrome > chrome://extensions > Developer mode > Load unpacked > extension folder.\r\n2. Run: powershell -NoProfile -ExecutionPolicy Bypass -File .\\install-host.ps1 -ExtensionId YOUR_ID\r\n3. Open the side panel. The connection screen shows your extension ID and a setup command. Choose Retry connection.\r\n4. On a website, choose Share current tab in the bottom composer and configure your API key using the top-right settings gear.\r\n5. Review the plan before running. Use a dedicated QA profile and synthetic data.\r\n\r\nDiagnostic: powershell -NoProfile -File .\\check-host.ps1 -ExtensionId YOUR_ID\r\nKeep this folder in place: Chrome starts the executable at its installed path.\r\n`,
 );
 await cp('docs/VALIDATION.md', `${root}/VALIDATION.md`);
 if (process.platform === 'win32')

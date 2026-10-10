@@ -2,6 +2,10 @@
 
 A Chrome side-panel extension that plans, executes, and independently verifies website tests from spoken requests. JavaScript controls the selected Chrome tab; a local Go companion handles AI, persistence, baselines, and reports.
 
+The side panel is a conversational workspace: share the current website from the bottom composer, type or speak a test request, review the inline plan and watch results stream into the conversation. The top-right settings gear contains API providers, keys, models and speech settings; the clock/history icon opens saved runs and plans. The **+** menu holds test options and the step gap. New chat clears the visible conversation while preserving saved records. Removing the sharing chip disconnects the selected test target and is disabled during an active run.
+
+For the proposed hosted product and commercial rollout, see [the micro-SaaS roadmap](docs/MICRO_SAAS.md). Hosted accounts, collaboration and billing are future work.
+
 ## Quick start on Windows
 
 Requirements: Node.js 24+, Go 1.26+, Chrome 125+, and PowerShell. No Node runtime is needed by the installed extension or companion after building.
@@ -20,11 +24,11 @@ npm run demo
    ```
 
 3. Open <http://127.0.0.1:4173/> in a dedicated QA Chrome profile.
-4. Click the extension icon to open its side panel. If offline, choose **Retry connection**; the screen displays your extension ID and a copyable setup command. Once connected, click **Test this tab** and grant access to that site's origin.
-5. Click **Load fixture plan**, review its expected outcomes, and choose **Confirm and run tests**.
+4. Click the extension icon to open its side panel. If offline, choose **Retry connection**; the screen displays your extension ID and a copyable setup command. Once connected, click **Share current tab** and grant access to that site's origin.
+5. Click **Run the demo test suite**, review its expected outcomes, and choose **Confirm and run tests**.
 6. Inspect evidence and export an HTML, JSON, or JUnit report.
 
-After updating an unpacked build, click **Reload** on VoiceQA at `chrome://extensions`, then close and reopen the side panel. Keep a normal HTTP(S) website active when clicking **Test this tab**; Chrome settings, new-tab pages, and extension pages cannot be tested. The `tabs` permission lets the panel read the active website's URL even when it was opened without a fresh extension-icon click. Reading or interacting with page content still requires the separate site-access grant.
+After updating an unpacked build, click **Reload** on VoiceQA at `chrome://extensions`, then close and reopen the side panel. Keep a normal HTTP(S) website active when clicking **Share current tab**; Chrome settings, new-tab pages, and extension pages cannot be tested. The `tabs` permission lets the panel read the active website's URL even when it was opened without a fresh extension-icon click. Reading or interacting with page content still requires the separate site-access grant.
 
 `npm run package` builds a portable Windows distribution in `dist/package` and `dist/voiceqa-windows.zip`. Extract it to a stable folder before registering its companion; moving it later requires registration again.
 
@@ -32,7 +36,7 @@ The fixture suite uses real browser input, screenshots, DOM assertions, native m
 
 ## Voice and AI mode
 
-Open **Local setup**, select **AI provider**, enter that provider's API key, and set a reasoning model available to your account. OpenAI uses `https://api.openai.com/v1`; OpenRouter uses `https://openrouter.ai/api/v1`. Both use structured Responses requests. OpenRouter also requires providers to support the requested parameters. Unavailable models fail explicitly; there is no silent fallback. Keys are encrypted locally with Windows DPAPI. API billing is separate from subscriptions.
+Open **Settings**, select **AI provider**, enter that provider's API key, and set a reasoning model available to your account. OpenAI uses `https://api.openai.com/v1`; OpenRouter uses `https://openrouter.ai/api/v1`. Both use structured Responses requests. OpenRouter also requires providers to support the requested parameters. Unavailable models fail explicitly; there is no silent fallback. Keys are encrypted locally with Windows DPAPI. API billing is separate from subscriptions.
 
 For **OpenRouter**, select OpenRouter and enter the key in **OpenRouter API key**. Use a full model ID such as `openai/gpt-4o` (the initial OpenRouter default), with structured-output support. Save settings, then describe a test in the text box. `OPENROUTER_API_KEY` is an alternative to saving the key. The first upgrade recognizes an OpenRouter key saved in the old generic field and switches the AI provider to OpenRouter. Subsequent provider selections are preserved. OpenAI and OpenRouter keys are stored separately; blank fields keep saved keys.
 
@@ -44,7 +48,7 @@ For an opt-in live planning check, start `npm run demo`, then run `node scripts/
 
 ## Step-by-step execution
 
-Runs execute one action at a time with a **4-second inspection gap** by default. In the Test screen, choose **Gap between steps** to use 3, 4, or 5 seconds. **No gap · fast automation** is available for unattended regression runs. The pace is fixed when a run starts; it cannot change mid-run. Existing settings inherit the 4-second default unless a pace was explicitly saved.
+Runs execute one action at a time with a **4-second inspection gap** by default. Open the composer’s **+ → Test options → Gap between steps** to use 3, 4, or 5 seconds. **No gap · fast automation** is available for unattended regression runs. The pace is fixed when a run starts; it cannot change mid-run. Existing settings inherit the 4-second default unless a pace was explicitly saved.
 
 Results show the current action, its case/viewport, the previous step's outcome, and a countdown before the next action. The gap also applies to layout changes, page resets, assertions and accessibility checks. **Stop** interrupts the wait immediately, preventing the next action from being dispatched. Assertions still wait for their conditions; the inspection gap is additional time to watch the website.
 
@@ -52,7 +56,7 @@ Each test case must start with a navigation/reset. Plans that put checks before 
 
 The live planning script accepts an optional text-file path for a specific request. `node scripts/test-live-run.mjs PATH_TO_ACCEPTED_PLAN_JSON` verifies a generated mug/coupon plan in an isolated Chrome extension/native-host session with four-second gaps, saves screenshots and a run record, and restores test registration afterward. Its scope excludes checkout/sign-in and targets only the local demo. It performs the demo actions and makes no further model calls.
 
-Click **Start voice session**, allow the microphone, and describe a workflow. The tool pauses recording while speaking, asks for missing requirements, and reads back assertions before execution. Say:
+Click the microphone icon (**Start voice session**), allow the microphone, and describe a workflow. The tool pauses recording while speaking, asks for missing requirements, and reads back assertions before execution. Say:
 
 - “Run these tests” — confirm and start the current plan.
 - “Cancel test” — stop new actions and preserve partial evidence.
@@ -65,7 +69,7 @@ A typed request is also supported. Spoken cancellation includes transcription la
 
 ### Text-to-speech API key
 
-Open **Local setup → Text-to-speech**. Choose **OpenAI API speech**, enter a dedicated **Text-to-speech API key**, and configure a speech model and voice. Click **Save settings**, then **Test saved speech settings**. Replies use an AI-generated voice.
+Open **Settings → Text-to-speech**. Choose **OpenAI API speech**, enter a dedicated **Text-to-speech API key**, and configure a speech model and voice. Click **Save settings**, then **Test saved speech settings**. Replies use an AI-generated voice.
 
 The default API speech settings are `tts-1` and `alloy`; change them to a model/voice combination available to your account. A dedicated TTS key takes priority. If you explicitly enable **Use the main OpenAI key when no TTS key is set**, speech can reuse the existing reasoning/transcription key. `VOICEQA_TTS_API_KEY` is an alternative to saving the dedicated key. Saved keys are encrypted with Windows DPAPI and are never returned in settings, logs, or reports. Leaving a key field blank preserves its saved value.
 

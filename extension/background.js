@@ -105,7 +105,7 @@ async function handlePanel(method, payload) {
       throw new Error('Choose an HTTP(S) website tab');
     const origin = url.origin;
     if (!(await chrome.permissions.contains({ origins: [origin + '/*'] })))
-      throw new Error('Grant site access using Test this tab first');
+      throw new Error('Share the current tab and allow site access first');
     await cleanup();
     state.target = {
       tabId: tab.id,
@@ -121,6 +121,14 @@ async function handlePanel(method, payload) {
     await ensureContent();
     await save();
     return state.target;
+  }
+  if (method === 'unbind') {
+    if (state.runId) throw new Error('Stop the active run before removing its website.');
+    await cleanup();
+    state.target = null;
+    state.error = '';
+    await save();
+    return { unbound: true };
   }
   if (method === 'observe') {
     return content({ type: 'vqa.observe', maskSelectors: state.settings?.maskSelectors });

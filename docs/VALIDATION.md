@@ -2,6 +2,14 @@
 
 This document records current evidence, not projected reliability.
 
+## Conversational UI — 2026-10-10
+
+- Replaced the dashboard landing/tabs with a compact chat workspace, top-right settings gear, fixed composer, selected-tab sharing chip, voice controls and a **+** test-options menu. Plans and run outcomes appear inline. All provider, model, main/speech/TTS key fields remain in Settings.
+- The production extension build and **18 JavaScript tests** pass. **17 actual Chromium/native-host tests** pass, including sharing/unsharing, blocking unshare during a run, three-second pacing/cancellation, offline recovery, API/TTS controls, and the new UI-driven fixture-plan → confirm → real browser run → results/export-controls flow. Model calls are not made by that fixture UI test.
+- Inspected captures at 330, 420 and 600 pixels. The chat composer fits without horizontal overflow, plan cards render immediately, and long title/model strings truncate within their controls. Serious/critical axe checks passed on the history screen; reduced-motion checks passed. This is scoped UI verification, not a claim of complete accessibility conformance.
+- Local captures: `test-results/native-integration/side-panel.png`, `panel-330.png`, `panel-600.png`, `chat-plan.png`, `chat-results.png`, `openrouter-settings.png`, `step-countdown.png`, and `connection-recovery.png`. These files are ignored artifacts.
+- The commercial architecture in `docs/MICRO_SAAS.md` is a proposal. No hosted accounts, billing, cloud collaboration or deployment were added by this interface change.
+
 ## Step-by-step runs — 2026-10-10
 
 The user's failed demo run was inspected from the production SQLite records without changing them. Its generated cases checked totals/coupon messages before the clicks/fills, with reset navigation last. This was an invalid action order, rather than evidence that the demo's healthy cart/coupon implementation was broken. Local validation now requires navigation as the first step of each case; the planner receives explicit action-before-check examples and instructions to let the runner repeat cases across viewports.
