@@ -368,3 +368,22 @@ test('TTS settings expose a dedicated key slot and fail explicitly without crede
   await control.getByRole('button', { name: 'Save settings', exact: true }).click();
   await expect.poll(async () => (await invoke('settings.get')).ttsProvider).toBe('browser');
 });
+
+test('OpenRouter setup saves the provider and keeps speech credentials separate', async () => {
+  await control.getByLabel('AI provider').selectOption('openrouter');
+  await expect(control.getByLabel('OpenRouter API key', { exact: true })).toBeVisible();
+  await expect(control.getByLabel('Reasoning model', { exact: true })).toHaveValue('openai/gpt-4o');
+  await expect(
+    control.getByLabel('OpenAI speech API key (optional)', { exact: true }),
+  ).toBeVisible();
+  await control.getByRole('button', { name: 'Save settings', exact: true }).click();
+  await expect.poll(async () => (await invoke('settings.get')).aiProvider).toBe('openrouter');
+  const settings = await invoke('settings.get');
+  expect(settings.apiKey).toBeUndefined();
+  expect(settings.speechApiKey).toBeUndefined();
+  expect(settings.hasSpeechApiKey).toBe(false);
+  await control.screenshot({ path: resolve(work, 'openrouter-settings.png'), fullPage: true });
+  await control.getByLabel('AI provider').selectOption('openai');
+  await control.getByRole('button', { name: 'Save settings', exact: true }).click();
+  await expect.poll(async () => (await invoke('settings.get')).aiProvider).toBe('openai');
+});

@@ -18,14 +18,28 @@ import (
 type Client struct {
 	HTTP    *http.Client
 	BaseURL string
+	Router  bool
 }
 
 func New() *Client {
 	return &Client{HTTP: &http.Client{Timeout: 90 * time.Second}, BaseURL: "https://api.openai.com/v1"}
 }
+
+// ForProvider returns a copy so speech always keeps the OpenAI endpoint.
+func (c *Client) ForProvider(name string) *Client {
+	clone := *c
+	if name == "openrouter" {
+		clone.BaseURL = "https://openrouter.ai/api/v1"
+		clone.Router = true
+	}
+	return &clone
+}
 func (c *Client) post(ctx context.Context, path, key, contentType string, body io.Reader) ([]byte, error) {
 	if key == "" {
 		return nil, errors.New("Configure an API key in Setup, or use the explicit fixture demo")
+	}
+	if strings.HasPrefix(key, "sk-or-") && !c.Router {
+		return nil, errors.New("OpenRouter key cannot be sent to OpenAI. Select OpenRouter in Local setup; speech requires an OpenAI key")
 	}
 	req, e := http.NewRequestWithContext(ctx, "POST", c.BaseURL+path, body)
 	if e != nil {
@@ -64,6 +78,9 @@ func (c *Client) post(ctx context.Context, path, key, contentType string, body i
 func (c *Client) Structured(ctx context.Context, key, model, instructions string, input any, schema any) (json.RawMessage, map[string]int, error) {
 	inputJSON, _ := json.Marshal(input)
 	body := map[string]any{"model": model, "instructions": instructions, "input": string(inputJSON), "max_output_tokens": 6000, "text": map[string]any{"format": map[string]any{"type": "json_schema", "name": "qa_result", "strict": true, "schema": schema}}}
+	if c.Router {
+		body["provider"] = map[string]any{"require_parameters": true}
+	}
 	b, _ := json.Marshal(body)
 	data, e := c.post(ctx, "/responses", key, "application/json", bytes.NewReader(b))
 	if e != nil {

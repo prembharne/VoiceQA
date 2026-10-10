@@ -52,6 +52,13 @@ func New(s *store.Store, send func(native.Message) error) *App {
 	a := &App{Store: s, Provider: provider.New(), Send: send, pending: map[string]chan browserReply{}, uploads: map[string]*upload{}, workCancels: map[string]context.CancelFunc{}, speechCancels: map[string]context.CancelFunc{}, speechCancelled: map[string]time.Time{}}
 	a.settings = defaultSettings()
 	_ = s.Get("settings", "default", &a.settings)
+	var savedSettings map[string]json.RawMessage
+	_ = s.Get("settings", "default", &savedSettings)
+	if len(savedSettings["aiProvider"]) == 0 && a.settings.AIProvider == "openai" && strings.HasPrefix(a.storedKey("api-key.dpapi"), "sk-or-") {
+		a.settings.AIProvider = "openrouter"
+		a.settings.Model = "openai/gpt-4o"
+		_ = s.Put("settings", "default", a.settings)
+	}
 	a.cleanSpeechArtifacts()
 	runs, _ := s.List("run")
 	for _, raw := range runs {
@@ -152,11 +159,8 @@ func (a *App) browser(ctx context.Context, runID, actionID string, payload any) 
 type BrowserError struct{ Code, Message string }
 
 func (e *BrowserError) Error() string { return e.Message }
-func (a *App) key() string {
-	if k := os.Getenv("OPENAI_API_KEY"); k != "" {
-		return k
-	}
-	b, e := os.ReadFile(filepath.Join(a.Store.Dir, "api-key.dpapi"))
+func (a *App) storedKey(filename string) string {
+	b, e := os.ReadFile(filepath.Join(a.Store.Dir, filename))
 	if e != nil {
 		return ""
 	}
@@ -166,13 +170,45 @@ func (a *App) key() string {
 	}
 	return string(b)
 }
+func (a *App) keyFor(providerName string) string {
+	if providerName == "openrouter" {
+		if k := os.Getenv("OPENROUTER_API_KEY"); k != "" {
+			return k
+		}
+		if k := a.storedKey("openrouter-api-key.dpapi"); k != "" {
+			return k
+		}
+		// Recover OpenRouter keys entered before provider selection existed.
+		if k := a.storedKey("api-key.dpapi"); strings.HasPrefix(k, "sk-or-") {
+			return k
+		}
+		return ""
+	}
+	k := os.Getenv("OPENAI_API_KEY")
+	if k == "" {
+		k = a.storedKey("api-key.dpapi")
+	}
+	if strings.HasPrefix(k, "sk-or-") {
+		return ""
+	}
+	return k
+}
+func (a *App) speechKey() string {
+	if k := a.storedKey("speech-api-key.dpapi"); k != "" && !strings.HasPrefix(k, "sk-or-") {
+		return k
+	}
+	return a.keyFor("openai")
+}
+func (a *App) aiClient(name string) *provider.Client { return a.Provider.ForProvider(name) }
 func (a *App) getSettings() core.Settings {
 	a.mu.Lock()
 	s := a.settings
 	a.mu.Unlock()
 	s.APIKey = ""
+	s.SpeechAPIKey = ""
+	s.HasSpeechAPIKey = a.speechKey() != ""
 	s.TTSAPIKey = ""
-	s.HasAPIKey = a.key() != ""
+	s.HasAPIKey = a.keyFor(s.AIProvider) != ""
 	s.HasTTSAPIKey = a.dedicatedTTSKey() != ""
 	return s
 }
@@ -205,18 +241,37 @@ func (a *App) dispatch(m native.Message) (any, error) {
 		if p.Model == "" || p.TranscriptionModel == "" || len(p.MaskSelectors) > 2000 {
 			return nil, errors.New("invalid settings")
 		}
+		p.APIKey = strings.TrimSpace(p.APIKey)
+		p.SpeechAPIKey = strings.TrimSpace(p.SpeechAPIKey)
+		p.TTSAPIKey = strings.TrimSpace(p.TTSAPIKey)
+		if p.AIProvider != "openai" && p.AIProvider != "openrouter" {
+			return nil, errors.New("choose OpenAI or OpenRouter as the AI provider")
+		}
+		if p.AIProvider == "openrouter" && !strings.Contains(p.Model, "/") {
+			return nil, errors.New("OpenRouter requires a full model ID, such as openai/gpt-4o")
+		}
+		if (p.AIProvider == "openai" && strings.HasPrefix(p.APIKey, "sk-or-")) || strings.HasPrefix(p.SpeechAPIKey, "sk-or-") || strings.HasPrefix(p.TTSAPIKey, "sk-or-") {
+			return nil, errors.New("OpenRouter keys can only be used with the OpenRouter AI provider, not OpenAI speech")
+		}
 		if e := validateSpeechSettings(p); e != nil {
 			return nil, e
 		}
 		if p.APIKey != "" {
-			b, e := secrets.Protect([]byte(p.APIKey))
-			if e != nil {
-				return nil, e
+			filename := "api-key.dpapi"
+			if p.AIProvider == "openrouter" {
+				filename = "openrouter-api-key.dpapi"
 			}
-			if e = os.WriteFile(filepath.Join(a.Store.Dir, "api-key.dpapi"), b, 0600); e != nil {
+			if e := a.saveSecret(filename, strings.TrimSpace(p.APIKey)); e != nil {
 				return nil, e
 			}
 		}
+		if p.SpeechAPIKey != "" {
+			if e := a.saveSecret("speech-api-key.dpapi", strings.TrimSpace(p.SpeechAPIKey)); e != nil {
+				return nil, e
+			}
+		}
+		p.SpeechAPIKey = ""
+		p.HasSpeechAPIKey = false
 		p.APIKey = ""
 		p.HasAPIKey = false
 		if p.TTSAPIKey != "" {
@@ -281,7 +336,7 @@ func (a *App) dispatch(m native.Message) (any, error) {
 				return nil, e
 			}
 			s := a.getSettings()
-			raw, usage, e := a.Provider.Structured(ctx, a.key(), s.Model, provider.PlanInstructions, map[string]any{"request": p.Request, "url": p.URL, "approvedOrigin": p.Origin, "observation": obs}, provider.PlanSchema())
+			raw, usage, e := a.aiClient(s.AIProvider).Structured(ctx, a.keyFor(s.AIProvider), s.Model, provider.PlanInstructions, map[string]any{"request": p.Request, "url": p.URL, "approvedOrigin": p.Origin, "observation": obs}, provider.PlanSchema())
 			if e != nil {
 				return nil, e
 			}
@@ -294,6 +349,7 @@ func (a *App) dispatch(m native.Message) (any, error) {
 			plan.Origin = p.Origin
 			plan.Request = p.Request
 			plan.Model = s.Model
+			plan.AIProvider = s.AIProvider
 			plan.Usage = usage
 			plan.CreatedAt = core.Now()
 			plan.Viewports = []core.Viewport{{Width: 1440, Height: 900}}
@@ -412,7 +468,7 @@ func (a *App) dispatch(m native.Message) (any, error) {
 		}
 		defer os.Remove(a.Store.Artifact(p.ArtifactID))
 		s := a.getSettings()
-		t, e := a.Provider.Transcribe(ctx, a.key(), s.TranscriptionModel, p.MIME, b)
+		t, e := a.Provider.Transcribe(ctx, a.speechKey(), s.TranscriptionModel, p.MIME, b)
 		return map[string]any{"text": t}, e
 	case "speech.synthesize":
 		return a.synthesize(ctx, m)

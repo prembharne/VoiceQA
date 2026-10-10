@@ -2,6 +2,10 @@
 
 This document records current evidence, not projected reliability.
 
+## OpenRouter support — 2026-10-10
+
+The companion now routes OpenRouter planning and target resolution through its Responses endpoint with strict schemas and parameter-compatible provider routing. Mock HTTP tests verify endpoint selection, request shape, response parsing, token usage, and that OpenRouter credentials cannot reach OpenAI. Windows tests verify legacy-key recovery, encrypted provider-specific key storage, blank-key preservation, and separation from speech keys. Go race tests and vet pass. Live OpenRouter model generation and account credit/model availability have not been verified.
+
 ## Local verification — 2026-10-10
 
 | Check | Result |

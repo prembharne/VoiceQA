@@ -36,6 +36,7 @@ function App() {
   const [visual, setVisual] = useState(false);
   const [responsive, setResponsive] = useState(true);
   const [settings, setSettings] = useState({
+    aiProvider: 'openai',
     model: 'gpt-5.6-sol',
     transcriptionModel: 'gpt-4o-mini-transcribe',
     maskSelectors: 'input[type=password], input[type=email], [data-private]',
@@ -45,6 +46,7 @@ function App() {
     ttsVoice: 'alloy',
     ttsReuseMainKey: true,
     ttsApiKey: '',
+    speechApiKey: '',
   });
   const recorder = useRef(new VoiceRecorder());
   const commandRef = useRef();
@@ -103,6 +105,7 @@ function App() {
               ...m.state.settings,
               apiKey: '',
               ttsApiKey: '',
+              speechApiKey: '',
             };
             setSettings(settingsRef.current);
           }
@@ -137,6 +140,7 @@ function App() {
         ...result.settings,
         apiKey: '',
         ttsApiKey: '',
+        speechApiKey: '',
       };
       setSettings(settingsRef.current);
       await refresh();
@@ -159,6 +163,7 @@ function App() {
         ...result.settings,
         apiKey: '',
         ttsApiKey: '',
+        speechApiKey: '',
       };
       setSettings(settingsRef.current);
       await refresh();
@@ -445,7 +450,12 @@ function App() {
                   </div>
                   <Button
                     className={`voice-button ${voiceMode ? 'listening' : ''}`}
-                    disabled={!state.target || !state.connected || !state.settings?.hasApiKey}
+                    disabled={
+                      !state.target ||
+                      !state.connected ||
+                      !state.settings?.hasApiKey ||
+                      !state.settings?.hasSpeechApiKey
+                    }
                     onClick={() => {
                       if (voiceMode) {
                         setVoiceMode(false);
@@ -468,8 +478,8 @@ function App() {
                         ? 'Say “run these tests” or “cancel test”'
                         : !state.target
                           ? 'Select a website to begin'
-                          : !state.settings?.hasApiKey
-                            ? 'Add your AI key to enable voice'
+                          : !state.settings?.hasApiKey || !state.settings?.hasSpeechApiKey
+                            ? 'Add AI and OpenAI speech keys in Setup to enable voice'
                             : 'Speak naturally. We’ll handle the clicks.'}
                     </span>
                     <span
@@ -877,14 +887,35 @@ function App() {
                       e.preventDefault();
                       void perform(async () => {
                         const s = await rpc('settings.save', settings);
-                        settingsRef.current = { ...s, apiKey: '', ttsApiKey: '' };
+                        settingsRef.current = { ...s, apiKey: '', ttsApiKey: '', speechApiKey: '' };
                         setSettings(settingsRef.current);
                         speak('Settings saved.');
                       });
                     }}
                   >
                     <label>
-                      API key
+                      AI provider
+                      <select
+                        value={settings.aiProvider || 'openai'}
+                        onChange={(e) =>
+                          setSettings({
+                            ...settings,
+                            aiProvider: e.target.value,
+                            apiKey: '',
+                            hasApiKey: false,
+                            model:
+                              e.target.value === 'openrouter' ? 'openai/gpt-4o' : 'gpt-5.6-sol',
+                          })
+                        }
+                      >
+                        <option value="openai">OpenAI</option>
+                        <option value="openrouter">OpenRouter</option>
+                      </select>
+                    </label>
+                    <label>
+                      {settings.aiProvider === 'openrouter'
+                        ? 'OpenRouter API key'
+                        : 'OpenAI API key'}
                       <input
                         type="password"
                         autoComplete="off"
@@ -900,6 +931,26 @@ function App() {
                         onChange={(e) => setSettings({ ...settings, model: e.target.value })}
                       />
                     </label>
+                    {settings.aiProvider === 'openrouter' && (
+                      <p className="muted">
+                        Use a full OpenRouter model ID with structured-output support. Your saved
+                        OpenRouter key is used only for planning and UI reasoning.
+                      </p>
+                    )}
+                    <label>
+                      OpenAI speech API key (optional)
+                      <input
+                        type="password"
+                        autoComplete="off"
+                        value={settings.speechApiKey || ''}
+                        onChange={(e) => setSettings({ ...settings, speechApiKey: e.target.value })}
+                        placeholder="For microphone transcription; blank keeps saved key"
+                      />
+                    </label>
+                    <p className="muted">
+                      Microphone transcription uses OpenAI and needs an OpenAI key. Typed tests and
+                      browser speech work with OpenRouter alone.
+                    </p>
                     <label>
                       Transcription model
                       <input

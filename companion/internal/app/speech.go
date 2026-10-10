@@ -14,7 +14,7 @@ import (
 )
 
 func defaultSettings() core.Settings {
-	return core.Settings{Model: "gpt-5.6-sol", TranscriptionModel: "gpt-4o-mini-transcribe", MaskSelectors: "input[type=password], input[type=email], [data-private]", TTSProvider: "browser", TTSModel: "tts-1", TTSVoice: "alloy", TTSReuseMainKey: true}
+	return core.Settings{AIProvider: "openai", Model: "gpt-5.6-sol", TranscriptionModel: "gpt-4o-mini-transcribe", MaskSelectors: "input[type=password], input[type=email], [data-private]", TTSProvider: "browser", TTSModel: "tts-1", TTSVoice: "alloy", TTSReuseMainKey: true}
 }
 func validateSpeechSettings(s core.Settings) error {
 	if s.TTSProvider != "browser" && s.TTSProvider != "openai" {
@@ -62,7 +62,7 @@ func (a *App) ttsKey(s core.Settings) string {
 		return key
 	}
 	if s.TTSReuseMainKey {
-		return a.key()
+		return a.speechKey()
 	}
 	return ""
 }

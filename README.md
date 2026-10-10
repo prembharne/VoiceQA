@@ -32,7 +32,11 @@ The fixture suite uses real browser input, screenshots, DOM assertions, native m
 
 ## Voice and AI mode
 
-Open **Local setup**, enter your OpenAI API key, and set a reasoning model available to your account. The plan's initial defaults are `gpt-5.6-sol` and `gpt-4o-mini-transcribe`; unavailable models fail explicitly, so adjust them to your account's supported IDs. There is no silent fallback. Keys are encrypted locally with Windows DPAPI; you can alternatively set `OPENAI_API_KEY` before starting Chrome. API billing is separate from subscriptions.
+Open **Local setup**, select **AI provider**, enter that provider's API key, and set a reasoning model available to your account. OpenAI uses `https://api.openai.com/v1`; OpenRouter uses `https://openrouter.ai/api/v1`. Both use structured Responses requests. OpenRouter also requires providers to support the requested parameters. Unavailable models fail explicitly; there is no silent fallback. Keys are encrypted locally with Windows DPAPI. API billing is separate from subscriptions.
+
+For **OpenRouter**, select OpenRouter and enter the key in **OpenRouter API key**. Use a full model ID such as `openai/gpt-4o` (the initial OpenRouter default), with structured-output support. Save settings, then describe a test in the text box. `OPENROUTER_API_KEY` is an alternative to saving the key. The first upgrade recognizes an OpenRouter key saved in the old generic field and switches the AI provider to OpenRouter. Subsequent provider selections are preserved. OpenAI and OpenRouter keys are stored separately; blank fields keep saved keys.
+
+Microphone transcription continues to use OpenAI (`gpt-4o-mini-transcribe` by default). With OpenRouter, enter a separate key in **OpenAI speech API key (optional)** to enable the microphone, or use typed requests without one. The saved OpenAI AI key or `OPENAI_API_KEY` can also supply transcription. Browser text-to-speech needs no key; API text-to-speech uses its dedicated OpenAI key, or the OpenAI speech/main key when reuse is enabled. OpenRouter keys are never reused for OpenAI speech. Saved plans retain their AI provider for later UI target resolution.
 
 Click **Start voice session**, allow the microphone, and describe a workflow. The tool pauses recording while speaking, asks for missing requirements, and reads back assertions before execution. Say:
 

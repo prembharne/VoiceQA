@@ -17,6 +17,9 @@ func ID() string  { b := make([]byte, 16); _, _ = rand.Read(b); return hex.Encod
 func Now() string { return time.Now().UTC().Format(time.RFC3339Nano) }
 
 type Settings struct {
+	AIProvider         string `json:"aiProvider"`
+	SpeechAPIKey       string `json:"speechApiKey,omitempty"`
+	HasSpeechAPIKey    bool   `json:"hasSpeechApiKey"`
 	Model              string `json:"model"`
 	TranscriptionModel string `json:"transcriptionModel"`
 	APIKey             string `json:"apiKey,omitempty"`
@@ -48,6 +51,7 @@ type Case struct {
 	Steps  []Action `json:"steps"`
 }
 type Plan struct {
+	AIProvider    string         `json:"aiProvider,omitempty"`
 	ID            string         `json:"id"`
 	Version       int            `json:"version"`
 	Origin        string         `json:"origin"`
