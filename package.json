@@ -1,0 +1,29 @@
+{
+  "name": "voiceqa",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node scripts/generate-contracts.mjs && vite build && node scripts/copy-extension.mjs",
+    "build:host": "go build -trimpath -o dist/voiceqa-host.exe ./companion/cmd/voiceqa",
+    "build:all": "npm run build && npm run build:host",
+    "package": "npm run build:all && node scripts/package.mjs",
+    "demo": "node demo/server.mjs",
+    "test": "node scripts/generate-contracts.mjs && node --test tests/unit/*.test.mjs",
+    "test:browser": "playwright test",
+    "test:go": "go test -race ./companion/...",
+    "check": "npm run test && go test ./companion/... && npm run build"
+  },
+  "dependencies": {
+    "ajv": "^8.20.0",
+    "axe-core": "^4.14.0",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.64.0",
+    "@vitejs/plugin-react": "^6.1.2",
+    "prettier": "^3.9.9",
+    "vite": "^8.3.4"
+  }
+}

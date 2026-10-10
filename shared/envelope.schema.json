@@ -1,0 +1,14 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "id", "type", "payload"],
+  "properties": {
+    "version": { "const": 1 },
+    "id": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "type": { "type": "string", "minLength": 1, "maxLength": 64 },
+    "runId": { "type": "string", "maxLength": 128 },
+    "actionId": { "type": "string", "maxLength": 128 },
+    "payload": { "type": "object" }
+  }
+}

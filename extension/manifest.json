@@ -1,0 +1,15 @@
+{
+  "manifest_version": 3,
+  "name": "VoiceQA — QA from your voice",
+  "version": "0.1.0",
+  "description": "Plan, execute, and verify website tests from a Chrome side panel, with a local Go companion.",
+  "minimum_chrome_version": "125",
+  "permissions": ["sidePanel", "storage", "scripting", "activeTab", "nativeMessaging", "debugger"],
+  "optional_host_permissions": ["http://*/*", "https://*/*"],
+  "action": { "default_title": "Open VoiceQA" },
+  "side_panel": { "default_path": "panel.html" },
+  "background": { "service_worker": "background.js", "type": "module" },
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'none'; base-uri 'self'"
+  }
+}
