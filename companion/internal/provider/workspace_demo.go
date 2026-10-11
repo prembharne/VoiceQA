@@ -79,6 +79,7 @@ func WorkspaceRequirements(raw, origin string) map[string]any {
 	return map[string]any{
 		"application": "RelayDesk synthetic operations workspace",
 		"resetURL":    workspaceReset(origin, "/", raw, false),
+		"sessionRule": "The main resetURL starts an authenticated synthetic Alice session. Only the authentication lab requires a saved credential/TOTP profile. Security lab loginAlice/loginBob buttons establish authorized fixture sessions without that profile.",
 		"navigation":  map[string]string{"orders": "testid:nav-orders", "settings": "testid:nav-settings", "overview": "testid:nav-overview"},
 		"orderWizard": map[string]any{
 			"open": "testid:new-order", "next": "testid:wizard-next", "error": "testid:wizard-error",
@@ -91,5 +92,22 @@ func WorkspaceRequirements(raw, origin string) map[string]any {
 		},
 		"orderTable":  map[string]any{"search": "testid:order-search", "filter": "testid:order-filter", "nextPage": "testid:next-page", "summary": "testid:orders-summary", "rows": "[data-testid=orders-rows] tr", "page": "testid:page-number", "initialMatching": 5, "pageSize": 3, "NorthstarResult": "Northstar Studio", "empty": "testid:empty-orders"},
 		"preferences": map[string]any{"notifications": "testid:notifications", "initialNotifications": true, "timezone": "testid:timezone", "timezoneValues": []string{"UTC", "Asia/Kolkata", "America/New_York"}, "save": "testid:save-settings", "feedback": "testid:settings-result", "savedText": "Preferences saved", "persistence": "Settings persist after navigation; reset restores defaults"},
+		"authentication": map[string]any{
+			"resetURL": workspaceReset(origin, "/app/auth", raw, true),
+			"username": "testid:auth-username", "password": "testid:auth-password", "otp": "testid:auth-otp", "submit": "testid:verify-login",
+			"profileRule": "Use only a supplied origin-bound authProfiles alias with username, password and TOTP. If unavailable, explicitly defer authentication or ask for a saved test profile; never invent a secret.",
+			"result":      "testid:auth-result", "authenticatedText": "Authenticated as Alice Morgan", "identity": "testid:identity",
+			"challenge": "An operator completes the synthetic checkbox during human_checkpoint captcha; independently verify testid:challenge-result text Challenge completed. Never automate a production CAPTCHA bypass.",
+		},
+		"security": map[string]any{
+			"resetURL": workspaceReset(origin, "/app/security", raw, true), "loginAlice": "testid:login-alice", "loginBob": "testid:login-bob", "identity": "testid:identity",
+			"access":        "GET /workspace/api/orders/ORD-2001: guest 401, Alice 200 /owner=alice. Alice GET ORD-2002: 403. Bob owns ORD-2002.",
+			"roles":         "testid:client-admin claims admin only in testid:client-role. GET /workspace/api/admin: Alice 403; Bob manager 200 /allowed=true.",
+			"writes":        "POST /workspace/api/orders needs server session and CSRF source meta:workspace-csrf, header X-CSRF-Token. Guest 401; authenticated but missing token 403; legitimate authenticated creation 201. Only when apiWritesAllowed.",
+			"orderBody":     map[string]any{"customer": "Northstar Studio", "email": "qa@relay.test", "product": "studio-display", "quantity": 2, "shipping": "express"},
+			"price":         "Server ignores client price; studio-display costs 120 and express shipping 15. Quantity 2 total 255, even with client price 0.01. JSON pointers /total, /id.",
+			"idempotency":   "Header Idempotency-Key: first valid POST 201; identical body and key replay 200 with same /id; changed body with same key 409. Capture actual ID before comparison.",
+			"authorization": "Security requests require explicitly selected security mode and securityAuthorized. Do not silently broaden authorization.",
+		},
 	}
 }

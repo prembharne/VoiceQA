@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { PortChannel } from '../../shared/port-channel.js';
+import { nativeTimeout, panelTimeout } from '../../shared/request-timeouts.js';
 function event() {
   const listeners = [];
   return {
@@ -74,4 +75,21 @@ test('disconnected mutating requests are rejected and never replayed', async () 
   );
   ports[1].onMessage.emit({ id: '2', result: 'ready' });
   await hello;
+});
+test('planning deadlines outlive the companion while ordinary methods keep their limits', () => {
+  assert.ok(nativeTimeout('plan.propose') > 300000);
+  assert.ok(panelTimeout('plan.propose') > nativeTimeout('plan.propose'));
+  for (const method of ['hello', 'audio.complete', 'run.start', 'speech.synthesize']) {
+    assert.equal(nativeTimeout(method), 120000);
+    assert.equal(panelTimeout(method), 150000);
+  }
+});
+test('a short request expiring does not interrupt a longer planning request', async () => {
+  const { ports, channel } = fixture();
+  channel.timeout = (type) => (type === 'plan.propose' ? 2000 : 10);
+  const planning = channel.request('plan.propose');
+  await assert.rejects(channel.request('hello'), /timed out/);
+  assert.equal(channel.pending.size, 1);
+  ports[0].onMessage.emit({ id: '1', result: { draft: true } });
+  assert.deepEqual(await planning, { draft: true });
 });

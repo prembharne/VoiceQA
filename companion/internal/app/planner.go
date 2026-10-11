@@ -3,9 +3,9 @@ package app
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
-	"time"
 	"voiceqa/companion/internal/core"
 	"voiceqa/companion/internal/provider"
 )
@@ -16,7 +16,28 @@ func (a *App) draftPlan(ctx context.Context, request, url, origin string, respon
 	return a.draftConfiguredPlan(ctx, request, url, origin, responsive, obs, core.Plan{}, pages...)
 }
 func (a *App) draftConfiguredPlan(ctx context.Context, request, url, origin string, responsive bool, obs map[string]any, config core.Plan, pages ...core.Page) (core.Plan, error) {
-	ctx, cancel := context.WithTimeout(ctx, 100*time.Second)
+	return a.draftPlanWithProgress(ctx, request, url, origin, responsive, obs, config, nil, pages...)
+}
+func planningError(err error) error {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return &planningFailure{err, "The AI provider did not finish building the plan within 4 minutes. No tests were run. Try again, or choose another model from the chat composer."}
+	}
+	if errors.Is(err, context.Canceled) {
+		return &planningFailure{err, "Planning stopped. No tests were run."}
+	}
+	return err
+}
+
+// Preserve cancellation identity without exposing Go's transport error in chat.
+type planningFailure struct {
+	cause   error
+	message string
+}
+
+func (e *planningFailure) Error() string { return e.message }
+func (e *planningFailure) Unwrap() error { return e.cause }
+func (a *App) draftPlanWithProgress(ctx context.Context, request, url, origin string, responsive bool, obs map[string]any, config core.Plan, progress func(provider.PlanProgress), pages ...core.Page) (core.Plan, error) {
+	ctx, cancel := context.WithTimeout(ctx, provider.PlanningTimeout)
 	defer cancel()
 	s := a.getSettings()
 	client := a.aiClient(s.AIProvider)
@@ -40,6 +61,7 @@ func (a *App) draftConfiguredPlan(ctx context.Context, request, url, origin stri
 	}
 	input["actionBudget"] = limit / (rows * views)
 	input["apiCheckBudget"] = 20 / (rows * views)
+	input["coverageRule"] = "Create a concise, reviewable suite within actionBudget and apiCheckBudget. State any deferred or blocked requested coverage in the summary. Never claim full coverage from a partial suite. Missing optional credentials can be deferred explicitly while planning other discoverable workflows."
 	if obs["fixture"] == "voiceqa-shop-v1" && (strings.HasPrefix(origin, "http://127.0.0.1:") || strings.HasPrefix(origin, "http://localhost:")) {
 		input["fixtureRequirements"] = provider.DemoPlan(url, origin, "").Cases
 	}
@@ -61,11 +83,7 @@ func (a *App) draftConfiguredPlan(ctx context.Context, request, url, origin stri
 	input["authProfiles"] = allowedProfiles
 	if strings.HasPrefix(origin, "http://127.0.0.1:") || strings.HasPrefix(origin, "http://localhost:") {
 		if obs["fixture"] == "voiceqa-workspace-v1" {
-			if config.Mode == "security" {
-				input["fixtureRequirements"] = provider.WorkspaceSecurityPlan(url, origin, request, config.SecurityAuthorized).Cases
-			} else {
-				input["fixtureRequirements"] = provider.WorkspaceRequirements(url, origin)
-			}
+			input["fixtureRequirements"] = provider.WorkspaceRequirements(url, origin)
 		}
 		if obs["fixture"] == "voiceqa-workspace-layout-v1" {
 			input["fixtureRequirements"] = provider.WorkspaceLayoutPlan(url, origin, request).Cases
@@ -100,15 +118,25 @@ func (a *App) draftConfiguredPlan(ctx context.Context, request, url, origin stri
 	totalUsage := map[string]int{}
 	for attempt := 0; attempt < 2; attempt++ {
 		if e := ctx.Err(); e != nil {
-			return core.Plan{}, e
+			return core.Plan{}, planningError(e)
 		}
-		raw, usage, e := client.StructuredWithBudget(ctx, key, s.Model, provider.PlanInstructions, input, provider.PlanSchema(pages...), 16000)
+		if progress != nil {
+			phase := "waiting"
+			if attempt > 0 {
+				phase = "repairing"
+			}
+			progress(provider.PlanProgress{Phase: phase})
+		}
+		raw, usage, e := client.PlanStructured(ctx, key, s.Model, provider.PlanInstructions, input, provider.PlanSchema(pages...), progress)
 		for name, tokens := range usage {
 			totalUsage[name] += tokens
 		}
 		// Authentication, transport, refusal and incomplete-output errors are not retried.
 		if e != nil {
-			return core.Plan{}, e
+			return core.Plan{}, planningError(e)
+		}
+		if progress != nil {
+			progress(provider.PlanProgress{Phase: "validating"})
 		}
 		var draft struct {
 			Summary string `json:"summary"`
@@ -174,12 +202,15 @@ func (a *App) draftConfiguredPlan(ctx context.Context, request, url, origin stri
 			}
 		}
 		if e == nil {
+			if err := ctx.Err(); err != nil {
+				return core.Plan{}, planningError(err)
+			}
 			return plan, nil
 		}
 		input["validationError"] = e.Error()
 		input["previousDraft"] = raw
 		if attempt == 1 {
-			return core.Plan{}, fmt.Errorf("AI plan was invalid after two attempts. Try again or choose another model in Setup. Details: %w", e)
+			return core.Plan{}, fmt.Errorf("AI plan was invalid after two attempts. Try again or choose another model from the chat composer. Details: %w", e)
 		}
 	}
 	return core.Plan{}, fmt.Errorf("AI plan attempts exhausted")

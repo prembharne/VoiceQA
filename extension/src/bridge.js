@@ -1,12 +1,13 @@
 import { id } from '../../shared/protocol.js';
 import { PortChannel } from '../../shared/port-channel.js';
+import { panelTimeout } from '../../shared/request-timeouts.js';
 const subscribers = new Set();
 const channel = new PortChannel({
   createPort: () => chrome.runtime.connect({ name: 'voiceqa-panel' }),
   makeRequest: (method, payload) => ({ type: 'request', id: id(), method, payload }),
   responseID: (message) => (message.type === 'response' ? message.id : null),
   lastError: () => chrome.runtime.lastError?.message || '',
-  timeout: 150000,
+  timeout: panelTimeout,
   onMessage: (message) => {
     for (const callback of subscribers) callback(message);
   },

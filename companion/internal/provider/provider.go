@@ -19,6 +19,7 @@ type Client struct {
 	HTTP    *http.Client
 	BaseURL string
 	Router  bool
+	NIM     bool
 }
 
 func New() *Client {
@@ -28,18 +29,24 @@ func New() *Client {
 // ForProvider returns a copy so speech always keeps the OpenAI endpoint.
 func (c *Client) ForProvider(name string) *Client {
 	clone := *c
+	clone.Router, clone.NIM = false, false
+	if (name == "openai" || name == "") && (c.Router || c.NIM) {
+		clone.BaseURL = "https://api.openai.com/v1"
+	}
 	if name == "openrouter" {
 		clone.BaseURL = "https://openrouter.ai/api/v1"
 		clone.Router = true
 	}
+	if name == "nvidia" {
+		clone.BaseURL = "https://integrate.api.nvidia.com/v1"
+		clone.Router = false
+		clone.NIM = true
+	}
 	return &clone
 }
 func (c *Client) post(ctx context.Context, path, key, contentType string, body io.Reader) ([]byte, error) {
-	if key == "" {
-		return nil, errors.New("Configure an API key in Setup, or use the explicit fixture demo")
-	}
-	if strings.HasPrefix(key, "sk-or-") && !c.Router {
-		return nil, errors.New("OpenRouter key cannot be sent to OpenAI. Select OpenRouter in Local setup; speech requires an OpenAI key")
+	if e := c.checkKey(key); e != nil {
+		return nil, e
 	}
 	req, e := http.NewRequestWithContext(ctx, "POST", c.BaseURL+path, body)
 	if e != nil {
@@ -84,6 +91,9 @@ func (c *Client) StructuredWithBudget(ctx context.Context, key, model, instructi
 	if budget < 512 || budget > 16000 {
 		return nil, nil, errors.New("structured output budget must be 512–16000 tokens")
 	}
+	if c.NIM {
+		return c.chatStructured(ctx, key, model, instructions, input, schema, budget, false, nil)
+	}
 	inputJSON, e := json.Marshal(input)
 	if e != nil {
 		return nil, nil, e
@@ -97,6 +107,10 @@ func (c *Client) StructuredWithBudget(ctx context.Context, key, model, instructi
 	if e != nil {
 		return nil, nil, e
 	}
+	return parseStructured(data, budget)
+}
+
+func parseStructured(data []byte, budget int) (json.RawMessage, map[string]int, error) {
 	var response struct {
 		Status     string `json:"status"`
 		Incomplete struct {
@@ -115,7 +129,7 @@ func (c *Client) StructuredWithBudget(ctx context.Context, key, model, instructi
 			Total  int `json:"total_tokens"`
 		} `json:"usage"`
 	}
-	if e = json.Unmarshal(data, &response); e != nil {
+	if e := json.Unmarshal(data, &response); e != nil {
 		return nil, nil, e
 	}
 	usage := map[string]int{"input_tokens": response.Usage.Input, "output_tokens": response.Usage.Output, "total_tokens": response.Usage.Total}

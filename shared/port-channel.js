@@ -80,10 +80,13 @@ export class PortChannel {
       try {
         this.open();
         request = this.makeRequest(type, payload, extra);
-        const timer = setTimeout(() => {
-          this.pending.delete(request.id);
-          reject(new Error('Connection request timed out. Retry connection.'));
-        }, this.timeout);
+        const timer = setTimeout(
+          () => {
+            this.pending.delete(request.id);
+            reject(new Error('Connection request timed out. Retry connection.'));
+          },
+          typeof this.timeout === 'function' ? this.timeout(type, payload) : this.timeout,
+        );
         this.pending.set(request.id, { resolve, reject, timer });
         this.send(request);
       } catch (error) {

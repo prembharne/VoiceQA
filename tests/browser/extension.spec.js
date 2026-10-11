@@ -344,6 +344,108 @@ test('planning without credentials fails explicitly rather than falling back', a
     invoke('plan.propose', { request: 'Check the cart total', demo: false, responsive: false }),
   ).rejects.toThrow('Configure an API key');
 });
+
+test('chat shows planning phases and elapsed time, restores a failed request and ignores cancelled results', async () => {
+  test.setTimeout(30000);
+  const panel = await context.newPage();
+  await panel.addInitScript(() => {
+    const listeners = [];
+    let pending;
+    const state = {
+      connected: true,
+      target: {
+        title: 'RelayDesk test',
+        url: 'http://127.0.0.1:4173/',
+        origin: 'http://127.0.0.1:4173',
+      },
+      settings: {
+        model: 'test/model',
+        aiProvider: 'openrouter',
+        hasApiKey: true,
+        ttsProvider: 'browser',
+        stepDelayMs: 4000,
+      },
+      planning: null,
+    };
+    const emit = (message) => listeners.forEach((fn) => fn(message));
+    globalThis.__planningFixture = {
+      phase(phase) {
+        state.planning.phase = phase;
+        emit({ type: 'state', state });
+      },
+      fail() {
+        state.planning = null;
+        emit({ type: 'state', state });
+        emit({
+          type: 'response',
+          id: pending.id,
+          error:
+            'The AI provider did not finish building the plan within 4 minutes. No tests were run.',
+        });
+      },
+      late() {
+        emit({
+          type: 'response',
+          id: pending.id,
+          result: {
+            id: 'late-plan',
+            summary: 'Late draft must not appear',
+            cases: [],
+            clarification: 'stale',
+          },
+        });
+      },
+    };
+    chrome.runtime.connect = () => ({
+      onMessage: { addListener: (fn) => listeners.push(fn) },
+      onDisconnect: { addListener() {} },
+      disconnect() {},
+      postMessage(request) {
+        if (request.method === 'plan.propose') {
+          pending = request;
+          state.planning = { id: request.id, startedAt: Date.now() - 65000, phase: 'waiting' };
+          queueMicrotask(() => emit({ type: 'state', state }));
+          return;
+        }
+        if (request.method === 'cancel') state.planning = null;
+        const result =
+          request.method === 'connect'
+            ? { settings: state.settings }
+            : request.method.endsWith('.list')
+              ? []
+              : {};
+        queueMicrotask(() => {
+          emit({ type: 'state', state });
+          emit({ type: 'response', id: request.id, result });
+        });
+      },
+    });
+  });
+  try {
+    await panel.goto(`chrome-extension://${extensionId}/panel.html`);
+    const composer = panel.getByPlaceholder('Ask VoiceQA to test this page…');
+    const prompt = 'Discover and test the complete order workflow.';
+    await composer.fill(prompt);
+    await panel.getByRole('button', { name: 'Send test request', exact: true }).click();
+    await expect(panel.getByRole('status')).toContainText('Waiting for your AI provider');
+    await expect(panel.locator('.planning-elapsed')).toHaveText(/1:0[5-9]/);
+    await panel.evaluate(() => globalThis.__planningFixture.phase('generating'));
+    await expect(panel.getByRole('status')).toContainText('Building your test plan');
+    await panel.screenshot({ path: resolve(work, 'planning-progress.png'), fullPage: true });
+    await panel.evaluate(() => globalThis.__planningFixture.fail());
+    await expect(composer).toHaveValue(prompt);
+    await expect(panel.locator('.thinking-message')).toHaveCount(0);
+    await panel.getByRole('button', { name: 'Send test request', exact: true }).click();
+    await expect(panel.locator('.thinking-message')).toBeVisible();
+    await panel.getByRole('button', { name: 'Stop', exact: true }).click();
+    await expect(panel.locator('.thinking-message')).toHaveCount(0);
+    await panel.evaluate(() => globalThis.__planningFixture.late());
+    await expect(panel.getByText('Late draft must not appear')).toHaveCount(0);
+    await expect(panel.getByRole('alert')).toHaveCount(1); // Preserve the earlier timeout message in chat.
+  } finally {
+    await panel.close();
+  }
+});
 test('paused asynchronous actions cannot revive after cancellation', async () => {
   const url = 'http://127.0.0.1:4173/fixtures/shop';
   await target.goto(url);
@@ -402,11 +504,12 @@ test('side panel renders offline-safe UI without remote code or JavaScript error
   expect(errors).toEqual([]);
 });
 test('the panel recovers from its disconnected port without reopening the page', async () => {
+  test.setTimeout(30000);
   await control.bringToFront();
   await control.getByRole('button', { name: 'Open settings' }).click();
   await expect(control.getByRole('heading', { name: 'Settings' })).toBeVisible();
   await control.evaluate(() => globalThis.__voiceqaTestPorts[0].disconnect());
-  await control.getByRole('button', { name: 'Save settings', exact: true }).click();
+  await control.getByRole('button', { name: 'Save API key', exact: true }).click();
   await expect(
     control.getByRole('heading', { name: 'Bring your test engine online.' }),
   ).toBeVisible();
@@ -443,45 +546,111 @@ test('polished views fit narrow and wide panels and respect reduced motion', asy
   expect(issues).toEqual([]);
   await control.emulateMedia({ reducedMotion: 'no-preference' });
 });
-test('TTS settings expose a dedicated key slot and fail explicitly without credentials', async () => {
+test('Settings contains only provider/key controls and saves NVIDIA keys privately', async () => {
   await control.bringToFront();
   await control.getByRole('button', { name: 'Open settings' }).click();
-  await control.getByLabel('Speech provider').selectOption('openai');
-  await expect(control.getByLabel('Text-to-speech API key', { exact: true })).toBeVisible();
-  await expect(control.getByLabel('Text-to-speech model', { exact: true })).toHaveValue('tts-1');
-  await control.getByLabel('Use the main OpenAI key when no TTS key is set').uncheck();
-  await control.getByRole('button', { name: 'Save settings', exact: true }).click();
-  await expect(control.getByRole('alert')).toContainText('text-to-speech API key');
+  await expect(control.getByRole('heading', { name: 'Settings', exact: true })).toBeVisible();
+  await expect(control.locator('.api-settings input')).toHaveCount(1);
+  for (const label of [
+    'Reasoning model',
+    'Transcription model',
+    'Speech provider',
+    'Text-to-speech API key',
+    'Profile alias',
+    'Redacted CSS selectors',
+  ])
+    await expect(control.getByLabel(label, { exact: true })).toHaveCount(0);
+  await control.getByLabel('AI provider').selectOption('nvidia');
+  const key = control.getByLabel('NVIDIA NIM API key', { exact: true });
+  await expect(key).toHaveAttribute('type', 'password');
+  await key.fill('nvapi-isolated-fixture');
+  await control.getByRole('button', { name: 'Save API key', exact: true }).click();
+  await expect.poll(async () => (await invoke('settings.get')).aiProvider).toBe('nvidia');
+  await expect(key).toHaveValue('');
   const settings = await invoke('settings.get');
-  expect(settings.ttsProvider).toBe('openai');
-  expect(settings.ttsReuseMainKey).toBe(false);
-  expect(settings.ttsApiKey).toBeUndefined();
-  await control.screenshot({ path: resolve(work, 'tts-settings.png'), fullPage: true });
-  await control.getByLabel('Speech provider').selectOption('browser');
-  await control.getByRole('button', { name: 'Save settings', exact: true }).click();
-  await expect.poll(async () => (await invoke('settings.get')).ttsProvider).toBe('browser');
+  expect(settings.hasApiKey).toBe(true);
+  expect(settings.model).toBe('nvidia/nemotron-3-nano-30b-a3b');
+  expect(settings.apiKey).toBeUndefined();
+  expect(JSON.stringify(settings)).not.toContain('nvapi-isolated-fixture');
+  await control.setViewportSize({ width: 360, height: 800 });
+  expect(await control.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(
+    true,
+  );
+  await control.screenshot({ path: resolve(work, 'clean-api-settings.png'), fullPage: true });
+  await control.getByLabel('AI provider').selectOption('openai');
+  await control.getByRole('button', { name: 'Save API key', exact: true }).click();
+  await expect.poll(async () => (await invoke('settings.get')).aiProvider).toBe('openai');
 });
 
-test('OpenRouter setup saves the provider and keeps speech credentials separate', async () => {
+test('OpenRouter key setup keeps models in the composer and preserves blank saved keys', async () => {
   await control.getByLabel('AI provider').selectOption('openrouter');
   await expect(control.getByLabel('OpenRouter API key', { exact: true })).toBeVisible();
-  await expect(control.getByLabel('Reasoning model', { exact: true })).toHaveValue('openai/gpt-4o');
-  await expect(
-    control.getByLabel('OpenAI speech API key (optional)', { exact: true }),
-  ).toBeVisible();
-  await control.getByRole('button', { name: 'Save settings', exact: true }).click();
+  await control.getByRole('button', { name: 'Save API key', exact: true }).click();
   await expect.poll(async () => (await invoke('settings.get')).aiProvider).toBe('openrouter');
-  const settings = await invoke('settings.get');
-  expect(settings.apiKey).toBeUndefined();
-  expect(settings.speechApiKey).toBeUndefined();
-  expect(settings.hasSpeechApiKey).toBe(false);
-  await control.locator('.utility-content').evaluate((el) => {
-    el.scrollTop = 0;
-  });
-  await control.screenshot({ path: resolve(work, 'openrouter-settings.png'), fullPage: true });
+  await control.getByRole('button', { name: 'Back to chat', exact: true }).click();
+  await control.getByLabel('Choose AI model', { exact: true }).click();
+  const bounds = await control.locator('.model-popover').boundingBox();
+  expect(bounds.x).toBeGreaterThanOrEqual(0);
+  expect(bounds.x + bounds.width).toBeLessThanOrEqual(control.viewportSize().width);
+  await expect(control.getByLabel('AI model', { exact: true })).toHaveValue('openai/gpt-4o');
+  await control.getByLabel('AI model', { exact: true }).fill('test/structured-model');
+  await control.getByRole('button', { name: 'Use model', exact: true }).click();
+  await expect.poll(async () => (await invoke('settings.get')).model).toBe('test/structured-model');
+  await control.getByRole('button', { name: 'Open settings' }).click();
   await control.getByLabel('AI provider').selectOption('openai');
-  await control.getByRole('button', { name: 'Save settings', exact: true }).click();
+  await control.getByRole('button', { name: 'Save API key', exact: true }).click();
   await expect.poll(async () => (await invoke('settings.get')).aiProvider).toBe('openai');
+});
+
+test('microphone transcribes editable text without an API key or automatic submission', async () => {
+  test.setTimeout(30000);
+  const panel = await context.newPage();
+  await panel.addInitScript(() => {
+    globalThis.SpeechRecognition = class {
+      start() {
+        globalThis.__dictation = this;
+        this.onstart?.();
+      }
+      stop() {
+        this.onend?.();
+      }
+      abort() {
+        this.onend?.();
+      }
+    };
+  });
+  try {
+    await panel.goto(`chrome-extension://${extensionId}/panel.html`);
+    const composer = panel.getByPlaceholder('Ask VoiceQA to test this page…');
+    await composer.fill('Please');
+    const plansBefore = (await invoke('plan.list')).length;
+    await panel.getByRole('button', { name: 'Transcribe request', exact: true }).click();
+    await expect(panel.getByRole('status')).toContainText('Listening');
+    await panel.evaluate(() =>
+      globalThis.__dictation.onresult({ results: [[{ transcript: 'test the order' }]] }),
+    );
+    await expect(composer).toHaveValue('Please test the order');
+    await panel.evaluate(() =>
+      globalThis.__dictation.onresult({
+        results: [[{ transcript: 'test the order and invoice' }]],
+      }),
+    );
+    await expect(composer).toHaveValue('Please test the order and invoice');
+    await panel.screenshot({ path: resolve(work, 'dictation-draft.png'), fullPage: true });
+    await panel.getByRole('button', { name: 'Finish transcription', exact: true }).click();
+    await expect(composer).toBeEditable();
+    await composer.fill('Please test the order and invoice on mobile.');
+    expect((await invoke('plan.list')).length).toBe(plansBefore);
+    await expect(panel.getByText('Your proposed plan', { exact: true })).toHaveCount(0);
+    await panel.getByRole('button', { name: 'Transcribe request', exact: true }).click();
+    await panel.getByRole('button', { name: 'Stop', exact: true }).click();
+    await panel.evaluate(() =>
+      globalThis.__dictation.onresult({ results: [[{ transcript: 'stale speech' }]] }),
+    );
+    await expect(composer).toHaveValue('Please test the order and invoice on mobile.');
+  } finally {
+    await panel.close();
+  }
 });
 
 const advancedOrigin = 'http://127.0.0.1:4174';
@@ -514,9 +683,11 @@ async function advancedRun() {
   return { runId, plan, tabId };
 }
 
-test('test credentials are saved through Settings with no plaintext returned', async () => {
+test('test credentials live in Test options and no plaintext is returned', async () => {
   await control.bringToFront();
-  await control.getByRole('button', { name: 'Open settings' }).click();
+  await control.getByRole('button', { name: 'New chat', exact: true }).click();
+  await control.getByLabel('Test options', { exact: true }).click();
+  await control.getByRole('button', { name: 'Test credentials & MFA', exact: true }).click();
   await control.getByLabel('Profile alias', { exact: true }).fill('advanced-test');
   await control.getByLabel('Profile label', { exact: true }).fill('Advanced lab');
   await control.getByLabel('Credential origin', { exact: true }).fill(advancedOrigin);

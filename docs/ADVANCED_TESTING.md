@@ -15,7 +15,7 @@ Opening a second origin is explicit authorization for that origin within the run
 
 ## Test credentials and MFA
 
-Use the top-right gear → **Test credentials & MFA**. Set a lowercase profile alias, descriptive label and exact origin (scheme, hostname, optional port; no path), then enter test username/password and optionally a Base32 TOTP seed or `otpauth://totp/...` URI. Save using **Save test credentials**. These fields are separate from AI and speech API keys.
+Use **+ → Test options → Test credentials & MFA**. Set a lowercase profile alias, descriptive label and exact origin (scheme, hostname, optional port; no path), then enter test username/password and optionally a Base32 TOTP seed or `otpauth://totp/...` URI. Save using **Save test credentials**. These fields are separate from AI and speech API keys.
 
 Saved profiles use Windows DPAPI. SQLite and public settings contain metadata and availability flags. The planner sees profile aliases, origins and flags, not stored credentials. Plans record references such as `qa-account:password`; the Go host resolves them only at execution time. The browser checks the actual origin before entry. Passwords, one-time-code fields and fields marked by secure entry are masked in DOM observations and screenshots. Value assertions on private fields are blocked. Do not make your application echo secrets into ordinary page text; use custom redaction selectors for any other sensitive content.
 

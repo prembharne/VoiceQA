@@ -2,9 +2,11 @@
 
 A Chrome side-panel extension that plans, executes, and independently verifies website tests from spoken requests. JavaScript controls the selected Chrome tab; a local Go companion handles AI, persistence, baselines, and reports.
 
-The side panel is a conversational workspace: share the current website from the bottom composer, type or speak a test request, review the inline plan and watch results stream into the conversation. The top-right settings gear contains API providers, keys, models and speech settings; the clock/history icon opens saved runs and plans. The **+** menu holds test options and the step gap. New chat clears the visible conversation while preserving saved records. Removing the sharing chip disconnects the selected test target and is disabled during an active run.
+The side panel is a conversational workspace: share the current website from the bottom composer, type or speak a test request, review the inline plan and watch results stream into the conversation. The top-right settings gear contains only the AI provider and its encrypted API key; the clock/history icon opens saved runs and plans. The **+** menu holds test options and the step gap. New chat clears the visible conversation while preserving saved records. Removing the sharing chip disconnects the selected test target and is disabled during an active run.
 
 For the proposed hosted product and commercial rollout, see [the micro-SaaS roadmap](docs/MICRO_SAAS.md). Hosted accounts, collaboration and billing are future work.
+
+Version 0.5.0 adds NVIDIA NIM, clean API-only Settings, a model picker in the composer and microphone dictation into an editable draft. Test credentials move to **+ → Test options → Test credentials & MFA**. It also fixes AI planning deadlines with streamed progress, cancellation and clear failure messages. Partial output never becomes a runnable plan.
 
 Version 0.4.1 replaces the default shop with RelayDesk: server-backed order tables, a validated wizard, persistent settings, invoices, TOTP and scoped security scenarios. Four fixture suites and a coverage guide separate supported checks from manual limitations.
 
@@ -40,15 +42,17 @@ The fixture suite uses real browser input, screenshots, DOM assertions, native m
 
 ## Voice and AI mode
 
-Open **Settings**, select **AI provider**, enter that provider's API key, and set a reasoning model available to your account. OpenAI uses `https://api.openai.com/v1`; OpenRouter uses `https://openrouter.ai/api/v1`. Both use structured Responses requests. OpenRouter also requires providers to support the requested parameters. Unavailable models fail explicitly; there is no silent fallback. Keys are encrypted locally with Windows DPAPI. API billing is separate from subscriptions.
+Open **Settings**, choose OpenAI, OpenRouter or **NVIDIA NIM**, paste that provider's key and click **Save API key**. Keys are encrypted locally with Windows DPAPI and stored separately. Blank input keeps a saved key. Choose or edit the model using the model selector in the chat composer. Switching providers chooses its initial model; updating a key preserves the selected model. Unavailable models/unsupported parameters fail explicitly, with no silent provider or model fallback.
 
-For **OpenRouter**, select OpenRouter and enter the key in **OpenRouter API key**. Use a full model ID such as `openai/gpt-4o` (the initial OpenRouter default), with structured-output support. Save settings, then describe a test in the text box. `OPENROUTER_API_KEY` is an alternative to saving the key. The first upgrade recognizes an OpenRouter key saved in the old generic field and switches the AI provider to OpenRouter. Subsequent provider selections are preserved. OpenAI and OpenRouter keys are stored separately; blank fields keep saved keys.
+OpenAI uses `https://api.openai.com/v1/responses`; OpenRouter uses `https://openrouter.ai/api/v1/responses` with parameter-compatible routing. Hosted NVIDIA NIM uses `https://integrate.api.nvidia.com/v1/chat/completions`, streamed JSON-schema requests and the initial model `nvidia/nemotron-3-nano-30b-a3b`. The public catalog and account access can change; choose another supported NIM model in the composer when needed. `OPENAI_API_KEY`, `OPENROUTER_API_KEY` and `NVIDIA_API_KEY` are alternatives to saving keys. Provider keys are never shared with another provider or OpenAI speech. API usage/billing is separate from subscriptions and depends on your account.
 
-Microphone transcription continues to use OpenAI (`gpt-4o-mini-transcribe` by default). With OpenRouter, enter a separate key in **OpenAI speech API key (optional)** to enable the microphone, or use typed requests without one. The saved OpenAI AI key or `OPENAI_API_KEY` can also supply transcription. Browser text-to-speech needs no key; API text-to-speech uses its dedicated OpenAI key, or the OpenAI speech/main key when reuse is enabled. OpenRouter keys are never reused for OpenAI speech. Saved plans retain their AI provider for later UI target resolution.
+Click the **microphone**, speak and watch the transcript appear in the chat input. Click the microphone again to finish, edit the text and explicitly press **Send**. Dictation never submits a prompt, runs tests or executes spoken commands automatically. It preserves existing draft text, replaces interim results and suppresses late results after Stop or New chat. It does not require an AI key, a selected website, a transcription model or a speech API key. Chrome's Web Speech recognition needs microphone permission and can send audio to Chrome's speech service; it is not promised to work offline. Permission/service failures are shown clearly. Real microphone recognition depends on your Chrome installation, language and network.
 
-AI output must pass local plan validation before review. Boolean expectations are constrained to the strings `true`/`false` in the model schema. Invalid drafts receive at most one correction request with the same model, original requirements, observations, and a shared 100-second deadline. Authentication, transport, refusal, and incomplete-response errors are not retried. A model must choose between a plan and a clarification question; clarification responses carry no runnable actions. Generating a replacement draft clears the old panel plan.
+The Settings page intentionally omits speech/TTS models, TTS keys, masks and test-account forms. **+ → Test options → Test credentials & MFA** keeps origin-bound test profiles available separately. Default private-field redaction still applies. The companion retains existing speech RPCs/settings and saved secrets for backward compatibility; the panel uses browser playback and does not invoke a hidden API TTS configuration.
 
-For an opt-in live planning check, start `npm run demo`, then run `node scripts/test-live-plan.mjs`. It uses your saved OpenRouter key and selected model in isolated test data, reads a real demo DOM observation, and drafts the coupon/cart request. It does not confirm a plan or execute test actions. This calls the model API and may use credits. Encrypted key copies are removed at teardown; the accepted draft is saved under `test-results/live-plan-*/accepted-plan.json`. The deterministic browser suite does not make live model calls.
+AI output must pass local plan validation before review. Boolean expectations are constrained to the strings `true`/`false` in the model schema. Invalid drafts receive at most one correction request with the same model, original requirements, observations, and a shared four-minute planning deadline. Authentication, transport, refusal, and incomplete-response errors are not retried. A model must choose between a plan and a clarification question; clarification responses carry no runnable actions. Generating a replacement draft clears the old panel plan. Planning uses streamed Responses events and shows phases plus elapsed time. The companion RPC allows five minutes including observations; the native and panel bridges allow 5.5 and six minutes respectively. Ordinary speech and target-grounding requests retain the 90-second HTTP limit. Stop cancels planning; a failed typed request returns to the composer for editing. A slow or unavailable provider can still hit the bounded deadline.
+
+For an opt-in live planning check, start `npm run demo`, then run `node scripts/test-live-plan.mjs`. It uses your saved OpenRouter key and selected model in isolated test data, reads a real demo DOM observation, and drafts the coupon/cart request. It does not confirm a plan or execute test actions. This calls the model API and may use credits. Encrypted key copies are removed at teardown; the accepted draft is saved under `.tools/live-checks/live-plan-*/accepted-plan.json`. The deterministic browser suite does not make live model calls.
 
 ## Step-by-step execution
 
@@ -60,7 +64,7 @@ Each test case must start with a navigation/reset. Plans that put checks before 
 
 The live planning script accepts an optional text-file path for a specific request. `node scripts/test-live-run.mjs PATH_TO_ACCEPTED_PLAN_JSON` verifies a generated mug/coupon plan in an isolated Chrome extension/native-host session with four-second gaps, saves screenshots and a run record, and restores test registration afterward. Its scope excludes checkout/sign-in and targets only the local demo. It performs the demo actions and makes no further model calls.
 
-Click the microphone icon (**Start voice session**), allow the microphone, and describe a workflow. The tool pauses recording while speaking, asks for missing requirements, and reads back assertions before execution. Say:
+Click **Transcribe request**, allow the microphone and describe a workflow. Finish dictation, review the text and press Send. Commands below are processed only when you submit them:
 
 - “Run these tests” — confirm and start the current plan.
 - “Cancel test” — stop new actions and preserve partial evidence.
@@ -69,15 +73,11 @@ Click the microphone icon (**Start voice session**), allow the microphone, and d
 - “Resume” — resume after returning to the selected tab.
 - “Run again” — rerun the reviewed plan.
 
-A typed request is also supported. Spoken cancellation includes transcription latency; the panel's Stop button cancels locally without waiting for the speech provider. Microphone and model-provider behavior require a live validation with your credentials and permissions.
+Typed and dictated requests both require explicit submission and plan approval. The panel's **Stop** cancels locally and does not wait for voice transcription.
 
-### Text-to-speech API key
+## Speech playback
 
-Open **Settings → Text-to-speech**. Choose **OpenAI API speech**, enter a dedicated **Text-to-speech API key**, and configure a speech model and voice. Click **Save settings**, then **Test saved speech settings**. Replies use an AI-generated voice.
-
-The default API speech settings are `tts-1` and `alloy`; change them to a model/voice combination available to your account. A dedicated TTS key takes priority. If you explicitly enable **Use the main OpenAI key when no TTS key is set**, speech can reuse the existing reasoning/transcription key. `VOICEQA_TTS_API_KEY` is an alternative to saving the dedicated key. Saved keys are encrypted with Windows DPAPI and are never returned in settings, logs, or reports. Leaving a key field blank preserves its saved value.
-
-**Browser speech — no API key** remains the default. Provider failures are explicit; OpenAI speech never silently switches to browser speech. Stop cancels pending synthesis and current playback. Temporary speech files are released after playback or cancellation; long replies are split into bounded chunks.
+The panel uses browser speech, with no API key or configuration form. Stop cancels playback. The companion's legacy API synthesis endpoints remain available to existing clients, but they are not used by the clean chat UI.
 
 ## Visual baselines
 

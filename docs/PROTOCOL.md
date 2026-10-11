@@ -8,6 +8,8 @@ Chrome Native Messaging uses a 4-byte little-endian UTF-8 byte length followed b
 
 Replies use `rpc.result` with `payload.requestId`, `result`, and optional `error`. Host-to-browser operations use `browser.request`; responses use `browser.result` with `requestId`, `result`, `error`, and `code`. `runId` and `actionId` bind execution and journals. Run events contain a persisted sequence number and a run snapshot.
 
+`plan.progress` events carry `requestId`, `phase` (waiting/analyzing/generating/validating/repairing) and `receivedChars`, a UTF-8 output byte count. These are transient planning metadata, never raw output or reasoning. The worker accepts only the active planning ID and clears it on Stop, completion, restart or disconnect. `plan.propose` has a five-minute companion deadline, with four minutes shared by AI generation and its optional single validation repair. Native/panel bridges wait 5.5/six minutes; all other method limits remain unchanged.
+
 Supported RPCs: `hello`, `settings.get/save`, `project.configure`, `plan.propose/confirm/get/list/fork`, `run.start/cancel/get/list/compare`, `upload.begin/chunk/complete`, `artifact.get`, `audio.complete`, `baseline.approve`, and `report.export`.
 
 Speech RPCs: `speech.synthesize` takes `text` (1–4096 characters) and a unique `speechId`, returning a temporary MP3 artifact ID. `speech.cancel` cancels a specific synthesis without stopping a test run. `speech.release` deletes only a marked temporary speech artifact; it cannot delete test evidence. Existing chunked `artifact.get` transfers audio to the panel. The panel uses generation checks to suppress late playback after cancellation.

@@ -3,12 +3,109 @@ package app
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 	"voiceqa/companion/internal/core"
+	"voiceqa/companion/internal/native"
 )
+
+func TestPlannerDeadlineIsFriendlyAndPreservesIdentity(t *testing.T) {
+	a := newTestApp(t)
+	t.Setenv("OPENAI_API_KEY", "fixture-key")
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, "data: {\"type\":\"response.created\"}\n\n")
+		w.(http.Flusher).Flush()
+		<-r.Context().Done()
+	}))
+	defer server.Close()
+	a.Provider.BaseURL = server.URL
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	_, err := a.draftPlan(ctx, "Check this workflow", "https://example.test/", "https://example.test", false, nil)
+	if !errors.Is(err, context.DeadlineExceeded) || !strings.Contains(err.Error(), "No tests were run") || strings.Contains(err.Error(), "context deadline exceeded") {
+		t.Fatal(err)
+	}
+}
+func TestQueuedPlanningCannotStartAfterStop(t *testing.T) {
+	a := newTestApp(t)
+	a.Send = func(native.Message) error { t.Fatal("cancelled queued work requested browser access"); return nil }
+	generation := a.workGeneration
+	_, err := a.dispatch(message("run.cancel", map[string]any{}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = a.dispatchWork(message("plan.propose", map[string]any{}), &generation)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatal("queued planning revived", err)
+	}
+}
+
+func TestCancelPlanningRPCDiscardsStreamAndEmitsOnlyScopedProgress(t *testing.T) {
+	a := newTestApp(t)
+	t.Setenv("OPENAI_API_KEY", "fixture-key")
+	started := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, "data: {\"type\":\"response.created\"}\n\n")
+		w.(http.Flusher).Flush()
+		close(started)
+		<-r.Context().Done()
+	}))
+	defer server.Close()
+	a.Provider.BaseURL = server.URL
+	request := message("plan.propose", map[string]any{"request": "Check this workflow", "url": "https://example.test/", "origin": "https://example.test"})
+	_, err := a.dispatch(message("project.configure", map[string]any{"url": "https://example.test/", "origin": "https://example.test"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	notices := make(chan native.Message, 10)
+	a.Send = func(m native.Message) error {
+		if m.Type == "browser.request" {
+			a.Handle(message("browser.result", map[string]any{"requestId": m.ID, "result": map[string]any{}}))
+		}
+		if m.Type == "plan.progress" {
+			notices <- m
+		}
+		return nil
+	}
+	done := make(chan error, 1)
+	go func() { _, err := a.dispatch(request); done <- err }()
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("provider not started")
+	}
+	_, err = a.dispatch(message("run.cancel", map[string]any{}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err = <-done:
+		if !errors.Is(err, context.Canceled) || !strings.Contains(err.Error(), "Planning stopped") {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Stop did not cancel planning")
+	}
+	close(notices)
+	for m := range notices {
+		var p map[string]any
+		_ = json.Unmarshal(m.Payload, &p)
+		if p["requestId"] != request.ID || len(p) != 3 {
+			t.Fatal("unscoped or unsanitized progress", p)
+		}
+	}
+	plans, _ := a.Store.List("plan")
+	if len(plans) != 0 {
+		t.Fatal("cancelled partial plan was persisted")
+	}
+}
 
 func draftOutput(expected string) map[string]any {
 	return map[string]any{"summary": "Reject invalid coupon", "result": map[string]any{"type": "plan", "cases": []any{map[string]any{

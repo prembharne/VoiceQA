@@ -31,6 +31,7 @@ await mkdir(dataDir);
 let browser, host;
 const secretFiles = ['openrouter-api-key.dpapi', 'api-key.dpapi'];
 const tasks = new Map();
+const progress = [];
 try {
   for (const file of secretFiles) {
     try {
@@ -96,10 +97,13 @@ try {
   const rpc = (type, payload = {}) =>
     new Promise((done, fail) => {
       const id = crypto.randomUUID();
-      const timer = setTimeout(() => {
-        tasks.delete(id);
-        fail(new Error('Native request timed out.'));
-      }, 130000);
+      const timer = setTimeout(
+        () => {
+          tasks.delete(id);
+          fail(new Error('Native request timed out.'));
+        },
+        type === 'plan.propose' ? 360000 : 130000,
+      );
       tasks.set(id, { done, fail, timer });
       send(type, payload, { id });
     });
@@ -110,6 +114,15 @@ try {
       const length = buffer.readUInt32LE(0);
       const message = JSON.parse(buffer.subarray(4, 4 + length));
       buffer = buffer.subarray(4 + length);
+      if (message.type === 'plan.progress') {
+        progress.push({
+          phase: message.payload.phase,
+          receivedChars: message.payload.receivedChars,
+          at: Date.now(),
+        });
+        if (progress.length === 1 || progress.at(-2).phase !== message.payload.phase)
+          console.log(`Planning: ${message.payload.phase}`);
+      }
       if (message.type === 'browser.request') {
         if (message.payload.operation !== 'observe') {
           send('browser.result', {
@@ -147,6 +160,7 @@ try {
   console.log(
     `Drafting the ${workspace ? 'RelayDesk order workflow' : security ? 'logical security' : 'coupon/cart'} request with OpenRouter ${model}...`,
   );
+  const startedAt = Date.now();
   const plan = await rpc('plan.propose', {
     request: requestFile
       ? await readFile(resolve(requestFile), 'utf8')
@@ -160,6 +174,7 @@ try {
     responsive: !security && !workspace,
     mode: security ? 'security' : 'qa',
     securityAuthorized: security,
+    apiWritesAllowed: security && workspace && process.argv.includes('--writes'),
     visual: false,
   });
   const checks = plan.cases.flatMap((c) =>
@@ -168,6 +183,10 @@ try {
   if (!plan.clarification && !checks.length) throw new Error('Accepted plan has no checks.');
   if (plan.confirmed) throw new Error('Draft was incorrectly confirmed.');
   await writeFile(join(folder, 'accepted-plan.json'), JSON.stringify(plan, null, 2));
+  await writeFile(
+    join(folder, 'planning-progress.json'),
+    JSON.stringify({ startedAt, elapsedMs: Date.now() - startedAt, progress }, null, 2),
+  );
   console.log(
     JSON.stringify({
       accepted: true,
@@ -177,6 +196,8 @@ try {
       clarification: plan.clarification,
       confirmed: plan.confirmed,
       usage: plan.usage,
+      elapsedMs: Date.now() - startedAt,
+      progressEvents: progress.length,
       evidence: join(folder, 'accepted-plan.json'),
     }),
   );

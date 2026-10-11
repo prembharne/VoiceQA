@@ -32,7 +32,7 @@ This complete 50-action suite supports up to four rows within the 200-action mul
 
 ## Authentication profile
 
-In VoiceQA Settings → Test credentials, save an origin matching the website and this public fixture account:
+In VoiceQA **+ → Test options → Test credentials & MFA**, save an origin matching the website and this public fixture account:
 
 - Profile ID: `relay`
 - Username: `qa@voiceqa.test`

@@ -154,6 +154,7 @@ body::before {
   background: radial-gradient(ellipse at bottom, #23376255, transparent 75%);
 }
 .chat-composer {
+  position: relative;
   margin: 0;
   border: 1px solid #383b42;
   border-radius: 26px;
@@ -428,6 +429,62 @@ body::before {
   color: #c3cee3;
   margin: 12px 0 20px;
   font-size: 12px;
+}
+.thinking-message > div {
+  flex: 1;
+  min-width: 0;
+}
+.thinking-message small {
+  display: block;
+  margin-top: 6px;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.5;
+}
+.planning-elapsed {
+  font-variant-numeric: tabular-nums;
+  align-self: flex-start;
+  white-space: nowrap;
+}
+.model-picker {
+  position: static;
+}
+.model-picker > summary {
+  list-style: none;
+  cursor: pointer;
+}
+.model-picker > summary::-webkit-details-marker {
+  display: none;
+}
+.model-popover {
+  position: absolute;
+  bottom: calc(100% + 16px);
+  right: 12px;
+  width: min(280px, calc(100vw - 56px));
+  padding: 18px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  box-shadow: 0 16px 48px #0008;
+  z-index: 10;
+}
+.model-popover input {
+  margin-top: 8px;
+}
+.api-settings {
+  max-width: 440px;
+  margin: 0 auto;
+}
+.api-settings .settings-fields {
+  display: grid;
+  gap: 16px;
+}
+.api-settings .settings-fields label {
+  display: grid;
+  gap: 10px;
+}
+.api-settings .small {
+  line-height: 1.6;
 }
 .chat-thread .section-heading {
   margin: 0 0 16px;

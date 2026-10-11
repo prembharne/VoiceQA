@@ -1,6 +1,6 @@
 import { PageRegistry } from './page-registry.js';
 import { NativeClient } from './native-client.js';
-import { envelope, validateAction, isAllowedURL } from '../shared/protocol.js';
+import { envelope, id, validateAction, isAllowedURL } from '../shared/protocol.js';
 import { ExecutionFence } from '../shared/execution-fence.js';
 import { NetworkRecorder, publicURL } from './network-recorder.js';
 import { auditConfiguration } from './security-audit.js';
@@ -17,6 +17,7 @@ let state = {
   currentPage: 'main',
   handoff: null,
   runId: null,
+  planning: null,
   paused: false,
   cancelled: false,
   attached: false,
@@ -33,7 +34,7 @@ let detaching = false;
 const ready = (async () => {
   const saved = await chrome.storage.session.get(['session', 'journal']);
   if (saved.session) {
-    Object.assign(state, saved.session, { connected: false, attached: false });
+    Object.assign(state, saved.session, { connected: false, attached: false, planning: null });
     if (state.runId) {
       state.cancelled = true;
       state.error = 'Extension restarted. The interrupted run will not be replayed.';
@@ -65,6 +66,7 @@ function fault(message, code = 'error') {
 const native = new NativeClient(onNative, async (error) => {
   fence.invalidate();
   state.connected = false;
+  state.planning = null;
   state.error = error.message;
   if (state.runId) {
     state.cancelled = true;
@@ -108,6 +110,20 @@ chrome.runtime.onConnect.addListener((port) => {
 async function handlePanel(method, payload) {
   await ready;
   registry.ensure();
+  if (
+    state.planning &&
+    [
+      'bind',
+      'unbind',
+      'pages.share',
+      'pages.remove',
+      'run.start',
+      'settings.save',
+      'auth.save',
+      'auth.delete',
+    ].includes(method)
+  )
+    throw new Error('Finish or stop planning before changing its target or settings.');
   if (method === 'state') return state;
   if (method === 'system.info')
     return { extensionId: chrome.runtime.id, version: chrome.runtime.getManifest().version };
@@ -239,24 +255,45 @@ async function handlePanel(method, payload) {
   if (method === 'plan.propose') {
     if (!state.target) throw new Error('Select a target tab first');
     if (state.runId) throw new Error('Finish the current run first');
+    if (stopping || state.planning)
+      throw new Error('Finish or stop the current planning request first');
+    const requestId = id();
+    state.planning = { id: requestId, startedAt: Date.now(), phase: 'reading' };
     state.cancelled = false;
-    const tab = await checkTarget();
-    state.target.url = tab.url;
-    const main = registry.primary();
-    if (state.target.tabId !== main.tabId)
-      throw new Error('Return to the main shared tab to create a plan.');
-    main.url = tab.url;
-    if (main.origin !== state.target.origin) {
-      main.origin = state.target.origin;
-      await native.rpc('project.configure', { origin: main.origin, url: tab.url });
-    }
     await save();
-    return native.rpc(method, {
-      ...payload,
-      url: tab.url,
-      origin: registry.primary().origin,
-      pages: registry.publicPages(),
-    });
+    try {
+      const tab = await checkTarget();
+      state.target.url = tab.url;
+      const main = registry.primary();
+      if (state.target.tabId !== main.tabId)
+        throw new Error('Return to the main shared tab to create a plan.');
+      main.url = tab.url;
+      if (main.origin !== state.target.origin) {
+        main.origin = state.target.origin;
+        await native.rpc('project.configure', { origin: main.origin, url: tab.url });
+      }
+      await save();
+      if (state.planning?.id !== requestId || state.cancelled)
+        throw new Error('Planning stopped. No tests were run.');
+      const result = await native.rpc(
+        method,
+        {
+          ...payload,
+          url: tab.url,
+          origin: registry.primary().origin,
+          pages: registry.publicPages(),
+        },
+        { id: requestId },
+      );
+      if (state.planning?.id !== requestId || state.cancelled)
+        throw new Error('Planning stopped. No tests were run.');
+      return result;
+    } finally {
+      if (state.planning?.id === requestId) {
+        state.planning = null;
+        await save();
+      }
+    }
   }
   if (method === 'run.start') {
     if (!state.target) throw new Error('Select a target first');
@@ -325,13 +362,15 @@ async function stop() {
   stopping = true;
   fence.invalidate();
   state.cancelled = true;
+  state.planning = null;
   state.paused = false;
   state.handoff = null;
   await save();
   try {
+    // Abort the provider before awaiting browser/tab cleanup.
+    if (native.port) await native.rpc('run.cancel', {}, state.runId ? { runId: state.runId } : {});
     await cleanup();
     await registry.cleanupCreated();
-    if (native.port) await native.rpc('run.cancel', {}, state.runId ? { runId: state.runId } : {});
   } catch (e) {
     state.error = e.message;
   } finally {
@@ -713,6 +752,15 @@ async function capture(maskSelectors, token, visualMaskSelectors = '') {
   }
 }
 async function onNative(message) {
+  if (message.type === 'plan.progress') {
+    const p = message.payload;
+    if (state.cancelled || !state.planning || p.requestId !== state.planning.id) return;
+    if (!['waiting', 'analyzing', 'generating', 'validating', 'repairing'].includes(p.phase))
+      return;
+    state.planning.phase = p.phase;
+    broadcast({ type: 'state', state });
+    return;
+  }
   if (message.type === 'run.event') {
     state.lastEvent = Date.now();
     broadcast({ type: 'run', ...message.payload });

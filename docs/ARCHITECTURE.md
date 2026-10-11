@@ -4,7 +4,8 @@
 flowchart LR
   P[React side panel] <--> W[Manifest V3 worker]
   W <--> N[Go native host]
-  N <--> M[Reasoning / transcription APIs]
+  N <--> M[OpenAI / OpenRouter / NVIDIA NIM]
+  P <--> S[Chrome speech recognition / browser playback]
   N --> D[SQLite + artifact files]
   W <--> C[Content observations / assertions]
   W <--> B[Chrome debugger / CDP input]
@@ -18,14 +19,14 @@ flowchart LR
 2. **JavaScript owns browser execution.** Fixed content handlers observe and assert; CDP dispatches browser input. No model-generated code is evaluated.
 3. **Planning is separate from verification.** Strict structured output creates a proposal. An exact plan version must be confirmed. Each case must contain an independent assertion.
 4. **AI is bounded.** Model calls occur during planning and only when a target cannot be resolved. Known selectors replay without a model call, reducing cost and latency. Only a `target_missing` failure in click/fill/select permits re-grounding; ambiguous submissions never retry.
-5. **Evidence is local and chunked.** Screenshots are redacted before transfer. Audio is deleted after transcription. Native messages stay under 512 KiB.
+5. **Evidence is local and chunked.** Screenshots are redacted before transfer. Browser dictation updates only the unsent composer. Legacy audio uploads are deleted after transcription. Native messages stay under 512 KiB.
 6. **One active tab and one run.** A page registry tracks up to five explicitly approved pages and run-created tabs. Generation tokens bind actions to the run and current tab. Planned switches detach/reattach the debugger and restore viewport metrics; unrelated focus changes pause actions. Host loss or unexpected debugger detachment stops execution.
 7. **Protocol interruption does not imply an action failed.** Journal states distinguish dispatch from completion. Unknown outcomes require review.
 8. **No required hosted browser.** Chrome runs the test in a selected QA profile. The local fixture makes the project demonstrable without paid model calls.
 
 ## Conversational interface
 
-The React side panel has a fixed header and bottom composer with an independently scrolling conversation. The header exposes new chat, saved history and a settings gear. API provider/model fields and separate speech credentials are inside Settings. The composer holds the current-tab sharing chip, text/voice controls, model settings and a progressive-disclosure test-options menu.
+The React side panel has a fixed header and bottom composer with an independently scrolling conversation. The header exposes new chat, saved history and a settings gear. Settings contains only the AI provider and encrypted key. Model selection stays in the composer; origin-bound credentials live in Test options. The microphone uses Chrome recognition to fill an editable draft, never to submit or execute automatically. The composer holds the current-tab sharing chip, text/dictation controls, model selection and a progressive-disclosure test-options menu.
 
 User requests, reviewable plan cards and streamed run records appear in the conversation. Plan confirmation still calls the original exact-version Go gate. During a run, the UI shows the live countdown and latest steps; completed runs expose their full records and existing exports. Export handlers use the specific displayed run ID, so older results do not export a newer run accidentally. Background events do not interrupt an open settings/history view.
 
@@ -43,7 +44,7 @@ Test authentication is implemented by Go's local encrypted profile store and RFC
 
 ## Workflow and security execution
 
-The trusted panel request supplies mode, approved pages, public data rows and write authorization. The Go planner cannot enlarge that scope. A bounded structured call (up to 16,000 output tokens for complete multi-case plans, including provider reasoning) proposes fixed operations; local validation resolves every row, checks variable ordering and requires independent assertions. Authentication, transport and incomplete output do not trigger automatic retries. An invalid draft gets at most one repair under the same deadline/model.
+The trusted panel request supplies mode, approved pages, public data rows and write authorization. The Go planner cannot enlarge that scope. A bounded structured call (up to 16,000 output tokens for complete multi-case plans, including provider reasoning) proposes fixed operations; local validation resolves every row, checks variable ordering and requires independent assertions. Authentication, transport and incomplete output do not trigger automatic retries. An invalid draft gets at most one repair under the same four-minute planning deadline/model. Planning alone streams Responses events using a context deadline rather than the ordinary 90-second HTTP body timeout; only a completed, locally validated result is saved. Sanitized phases and numeric output counts are tagged with the planning RPC ID. The five-minute companion RPC is nested inside 5.5-minute native and six-minute panel limits. Cancelled/stale results cannot revive a panel draft; no partial JSON or model reasoning is shown.
 
 Each row/case receives fresh variables. DOM captures and selected public API scalars can supply later steps; URL interpolation escapes path/query data and JSON interpolation preserves JSON values. Credential profile references resolve locally. Named bearer and anti-CSRF sources resolve inside the browser immediately before a request; their actual values never enter the plan, model input or reports.
 

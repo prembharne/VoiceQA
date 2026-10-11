@@ -1,6 +1,7 @@
 import validate from '../shared/envelope-validator.js';
 import { envelope, HOST_NAME, MAX_CHUNK_BYTES } from '../shared/protocol.js';
 import { PortChannel } from '../shared/port-channel.js';
+import { nativeTimeout } from '../shared/request-timeouts.js';
 
 export class NativeClient {
   connected = false;
@@ -10,6 +11,7 @@ export class NativeClient {
     this.channel = new PortChannel({
       createPort: () => chrome.runtime.connectNative(HOST_NAME),
       makeRequest: envelope,
+      timeout: nativeTimeout,
       responseID: (message) => (message.type === 'rpc.result' ? message.payload.requestId : null),
       validate,
       lastError: () => chrome.runtime.lastError?.message || '',

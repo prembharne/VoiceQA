@@ -43,6 +43,7 @@ type App struct {
 	cancel          context.CancelFunc
 	settings        core.Settings
 	workCancels     map[string]context.CancelFunc
+	workGeneration  uint64
 	speechCancels   map[string]context.CancelFunc
 	speechCancelled map[string]time.Time
 	closing         bool
@@ -121,8 +122,15 @@ func (a *App) Handle(m native.Message) {
 		}
 		return
 	}
+	var generation *uint64
+	if m.Type == "plan.propose" || m.Type == "audio.complete" {
+		a.mu.Lock()
+		value := a.workGeneration
+		generation = &value
+		a.mu.Unlock()
+	}
 	go func() {
-		result, e := a.dispatch(m)
+		result, e := a.dispatchWork(m, generation)
 		reply := map[string]any{"requestId": m.ID, "result": result}
 		if e != nil {
 			reply["error"] = e.Error()
@@ -171,6 +179,12 @@ func (a *App) storedKey(filename string) string {
 	return string(b)
 }
 func (a *App) keyFor(providerName string) string {
+	if providerName == "nvidia" {
+		if key := os.Getenv("NVIDIA_API_KEY"); key != "" {
+			return key
+		}
+		return a.storedKey("nvidia-api-key.dpapi")
+	}
 	if providerName == "openrouter" {
 		if k := os.Getenv("OPENROUTER_API_KEY"); k != "" {
 			return k
@@ -188,7 +202,7 @@ func (a *App) keyFor(providerName string) string {
 	if k == "" {
 		k = a.storedKey("api-key.dpapi")
 	}
-	if strings.HasPrefix(k, "sk-or-") {
+	if strings.HasPrefix(k, "sk-or-") || strings.HasPrefix(k, "nvapi-") {
 		return ""
 	}
 	return k
@@ -214,17 +228,28 @@ func (a *App) getSettings() core.Settings {
 }
 func decode(m native.Message, v any) error { return json.Unmarshal(m.Payload, v) }
 func (a *App) dispatch(m native.Message) (any, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	return a.dispatchWork(m, nil)
+}
+func (a *App) dispatchWork(m native.Message, generation *uint64) (any, error) {
+	timeout := 2 * time.Minute
+	if m.Type == "plan.propose" {
+		timeout = provider.PlanningTimeout + time.Minute
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	if m.Type == "plan.propose" || m.Type == "audio.complete" {
 		a.mu.Lock()
+		if a.closing || (generation != nil && *generation != a.workGeneration) {
+			a.mu.Unlock()
+			return nil, planningError(context.Canceled)
+		}
 		a.workCancels[m.ID] = cancel
 		a.mu.Unlock()
 		defer func() { a.mu.Lock(); delete(a.workCancels, m.ID); a.mu.Unlock() }()
 	}
 	switch m.Type {
 	case "hello":
-		return map[string]any{"version": 1, "hostVersion": "0.4.1", "settings": a.getSettings(), "capabilities": []string{"dom", "input", "assertions", "accessibility", "visual", "voice", "reports", "multi-tab", "totp", "human-checkpoints", "condition-waits", "test-data", "workflow-variables", "http-checks", "logical-security", "network-evidence", "triage", "run-comparison"}}, nil
+		return map[string]any{"version": 1, "hostVersion": "0.5.0", "settings": a.getSettings(), "capabilities": []string{"dom", "input", "assertions", "accessibility", "visual", "voice", "reports", "multi-tab", "totp", "human-checkpoints", "condition-waits", "test-data", "workflow-variables", "http-checks", "logical-security", "network-evidence", "triage", "run-comparison"}}, nil
 	case "auth.list", "auth.save", "auth.delete":
 		return a.authDispatch(m)
 	case "settings.get":
@@ -249,11 +274,22 @@ func (a *App) dispatch(m native.Message) (any, error) {
 		p.APIKey = strings.TrimSpace(p.APIKey)
 		p.SpeechAPIKey = strings.TrimSpace(p.SpeechAPIKey)
 		p.TTSAPIKey = strings.TrimSpace(p.TTSAPIKey)
-		if p.AIProvider != "openai" && p.AIProvider != "openrouter" {
-			return nil, errors.New("choose OpenAI or OpenRouter as the AI provider")
+		if strings.HasPrefix(p.SpeechAPIKey, "nvapi-") || strings.HasPrefix(p.TTSAPIKey, "nvapi-") {
+			return nil, errors.New("NVIDIA NIM keys cannot be used for OpenAI speech")
+		}
+		if p.AIProvider != "openai" && p.AIProvider != "openrouter" && p.AIProvider != "nvidia" {
+			return nil, errors.New("choose OpenAI, OpenRouter or NVIDIA NIM as the AI provider")
 		}
 		if p.AIProvider == "openrouter" && !strings.Contains(p.Model, "/") {
 			return nil, errors.New("OpenRouter requires a full model ID, such as openai/gpt-4o")
+		}
+		if p.AIProvider == "nvidia" && !strings.Contains(p.Model, "/") {
+			return nil, errors.New("NVIDIA NIM requires a full model ID")
+		}
+		if p.APIKey != "" {
+			if err := a.aiClient(p.AIProvider).ValidateKey(p.APIKey); err != nil {
+				return nil, err
+			}
 		}
 		if (p.AIProvider == "openai" && strings.HasPrefix(p.APIKey, "sk-or-")) || strings.HasPrefix(p.SpeechAPIKey, "sk-or-") || strings.HasPrefix(p.TTSAPIKey, "sk-or-") {
 			return nil, errors.New("OpenRouter keys can only be used with the OpenRouter AI provider, not OpenAI speech")
@@ -265,6 +301,9 @@ func (a *App) dispatch(m native.Message) (any, error) {
 			filename := "api-key.dpapi"
 			if p.AIProvider == "openrouter" {
 				filename = "openrouter-api-key.dpapi"
+			}
+			if p.AIProvider == "nvidia" {
+				filename = "nvidia-api-key.dpapi"
 			}
 			if e := a.saveSecret(filename, strings.TrimSpace(p.APIKey)); e != nil {
 				return nil, e
@@ -404,7 +443,9 @@ func (a *App) dispatch(m native.Message) (any, error) {
 				extra[page.Alias] = view
 			}
 			obs["additionalPages"] = extra
-			plan, e = a.draftConfiguredPlan(ctx, p.Request, p.URL, p.Origin, p.Responsive, obs, core.Plan{Mode: p.Mode, SecurityAuthorized: p.SecurityAuthorized, Dataset: p.Dataset, APIWritesAllowed: p.APIWritesAllowed}, p.Pages...)
+			plan, e = a.draftPlanWithProgress(ctx, p.Request, p.URL, p.Origin, p.Responsive, obs, core.Plan{Mode: p.Mode, SecurityAuthorized: p.SecurityAuthorized, Dataset: p.Dataset, APIWritesAllowed: p.APIWritesAllowed}, func(progress provider.PlanProgress) {
+				_ = a.emit("plan.progress", map[string]any{"requestId": m.ID, "phase": progress.Phase, "receivedChars": progress.ReceivedChars}, "", "")
+			}, p.Pages...)
 			if e != nil {
 				return nil, e
 			}
@@ -421,6 +462,9 @@ func (a *App) dispatch(m native.Message) (any, error) {
 			if e := core.ValidatePlan(plan); e != nil {
 				return nil, fmt.Errorf("generated plan rejected: %w", e)
 			}
+		}
+		if e := ctx.Err(); e != nil {
+			return nil, planningError(e)
 		}
 		return plan, a.Store.Put("plan", plan.ID, plan)
 	case "plan.confirm":
@@ -463,6 +507,7 @@ func (a *App) dispatch(m native.Message) (any, error) {
 			a.mu.Unlock()
 			return nil, errors.New("run ID is not active")
 		}
+		a.workGeneration++
 		if a.cancel != nil {
 			a.cancel()
 		}

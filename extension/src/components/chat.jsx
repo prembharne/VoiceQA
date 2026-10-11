@@ -1,8 +1,9 @@
 import React, { useLayoutEffect, useRef } from 'react';
-import { ArrowUp, ChevronDown, Globe2, Mic, Plus, Sparkles, Square, X } from 'lucide-react';
+import { ArrowUp, Globe2, Mic, Plus, Sparkles, Square, X } from 'lucide-react';
 import { Button } from './ui.jsx';
 import { PageSharing } from './page-sharing.jsx';
 import { WorkflowOptions } from './workflow-options.jsx';
+import { ModelPicker } from './model-picker.jsx';
 
 export function ChatWelcome({ target, onPrompt, onDemo, busy }) {
   const demo = /^http:\/\/(127\.0\.0\.1|localhost):417[3-6]$/.test(target?.origin || '');
@@ -117,6 +118,8 @@ export function ChatComposer({
   onVoice,
   onStop,
   onSettings,
+  onModel,
+  onCredentials,
   settings,
   onPace,
   responsive,
@@ -130,10 +133,6 @@ export function ChatComposer({
     text.current.style.height = 'auto';
     text.current.style.height = `${Math.min(132, Math.max(48, text.current.scrollHeight))}px`;
   }, [request]);
-  const model = (settings.model || 'Choose a model')
-    .split('/')
-    .at(-1)
-    .replace(/:free$/, ' · free');
   return (
     <div className="composer-dock">
       {!hasKey && connected && (
@@ -143,7 +142,7 @@ export function ChatComposer({
       )}
       {voiceMode && (
         <p className="voice-status" role="status">
-          {speaking ? 'Speaking…' : voiceState} · Microphone session active
+          {voiceState} · Transcribing into your draft
         </p>
       )}
       <form
@@ -191,7 +190,7 @@ export function ChatComposer({
           placeholder="Ask VoiceQA to test this page…"
           rows={1}
           maxLength={8000}
-          disabled={!connected || busy || running}
+          disabled={busy || running || voiceMode}
           onKeyDown={(e) => {
             if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
               e.preventDefault();
@@ -229,6 +228,9 @@ export function ChatComposer({
                 onShare={onSharePage}
                 onRemove={onRemovePage}
               />
+              <Button disabled={!connected || busy || running} onClick={onCredentials}>
+                Test credentials &amp; MFA
+              </Button>
               <Button
                 className="share-option"
                 disabled={busy || running || !connected}
@@ -269,27 +271,22 @@ export function ChatComposer({
             </div>
           </details>
           <div className="composer-actions">
-            <button
-              type="button"
-              className="model-button"
-              onClick={onSettings}
-              title={settings.model}
-              aria-label="Model settings"
-            >
-              <span>{model}</span>
-              <ChevronDown size={14} aria-hidden="true" />
-            </button>
+            <ModelPicker
+              settings={settings}
+              disabled={!connected || busy || running || voiceMode}
+              onSave={onModel}
+            />
             <button
               type="button"
               className={`composer-icon ${voiceMode ? 'active-mic' : ''}`}
-              aria-label={voiceMode ? 'End voice session' : 'Start voice session'}
+              aria-label={voiceMode ? 'Finish transcription' : 'Transcribe request'}
               aria-pressed={voiceMode}
               onClick={onVoice}
               disabled={!canVoice && !voiceMode}
               title={
                 canVoice
-                  ? 'Voice session'
-                  : 'Share a tab and add AI / OpenAI speech keys in Settings'
+                  ? 'Speak to fill your draft. Click again to finish; nothing is sent automatically.'
+                  : 'Transcription needs speech recognition in Google Chrome.'
               }
             >
               <Mic size={20} aria-hidden="true" />
@@ -318,9 +315,11 @@ export function ChatComposer({
         </div>
       </form>
       <p className="composer-caption">
-        {running
-          ? 'Testing one step at a time. Stop is always available.'
-          : 'Review the plan before running. Shift + Enter for a new line.'}
+        {voiceMode
+          ? 'Speak your request. Review the text before sending.'
+          : running
+            ? 'Testing one step at a time. Stop is always available.'
+            : 'Review the plan before running. Shift + Enter for a new line.'}
       </p>
     </div>
   );

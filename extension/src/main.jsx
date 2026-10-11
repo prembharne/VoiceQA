@@ -2,7 +2,9 @@ import { runCounts } from '../run-counts.js';
 import React, { useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { rpc, subscribe, artifact } from './bridge.js';
-import { VoiceRecorder, say } from './voice.js';
+import { say } from './voice.js';
+import { Dictation } from '../../shared/dictation.js';
+import { APISettings } from './components/api-settings.jsx';
 import './ui.css';
 import { classifyCommand } from '../../shared/commands.js';
 import { SpeechPlayer } from '../../shared/speech-player.js';
@@ -13,6 +15,7 @@ import { ArrowLeft, MessageSquarePlus, LoaderCircle } from 'lucide-react';
 import './chat.css';
 import { AuthSettings } from './components/auth-settings.jsx';
 import { RunProgress } from './components/run-progress.jsx';
+import { PlanningStatus } from './components/planning-status.jsx';
 import { parseTestData } from './components/workflow-options.jsx';
 
 const terminal = (status) => !['running', 'paused', 'queued'].includes(status);
@@ -27,7 +30,6 @@ function App() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [request, setRequest] = useState('');
-  const [transcript, setTranscript] = useState('');
   const [plan, setPlan] = useState(null);
   const [run, setRun] = useState(null);
   const [history, setHistory] = useState([]);
@@ -58,7 +60,7 @@ function App() {
     speechApiKey: '',
     stepDelayMs: 4000,
   });
-  const recorder = useRef(new VoiceRecorder());
+  const recorder = useRef(new Dictation());
   const commandRef = useRef();
   const latestRun = useRef(null);
   const generation = useRef(0);
@@ -76,17 +78,19 @@ function App() {
       revokeURL: (url) => URL.revokeObjectURL(url),
     }),
   );
-  async function perform(fn, onError) {
+  async function perform(fn, onError, isCurrent = () => true) {
     setBusy(true);
     setError('');
     try {
       return await fn();
     } catch (e) {
-      setError(e.message);
-      onError?.(e);
+      if (isCurrent()) {
+        setError(e.message);
+        onError?.(e);
+      }
       return null;
     } finally {
-      setBusy(false);
+      if (isCurrent()) setBusy(false);
     }
   }
   function speak(text) {
@@ -94,7 +98,7 @@ function App() {
     setSpeaking(true);
     void speech.current.speak(
       text,
-      settingsRef.current.ttsProvider,
+      'browser',
       () => setSpeaking(false),
       (e) => setError(`Speech failed: ${e.message}`),
     );
@@ -132,7 +136,7 @@ function App() {
         if (m.type === 'run') {
           setRun(m.run);
           upsertRun(m.run);
-          setPage((p) => (['setup', 'history'].includes(p) ? p : 'console'));
+          setPage((p) => (['setup', 'history', 'credentials'].includes(p) ? p : 'console'));
           if (terminal(m.run.status) && latestRun.current !== m.run.id) {
             latestRun.current = m.run.id;
             speak(
@@ -182,40 +186,48 @@ function App() {
     });
   }
   useEffect(() => {
-    if (!voiceMode || busy || speaking || !state.connected || !state.target) {
+    if (['setup', 'history', 'credentials'].includes(page)) {
       recorder.current.stop(true);
+      setVoiceMode(false);
+    }
+  }, [page]);
+  function toggleDictation() {
+    if (voiceMode) {
+      recorder.current.stop(false);
       return;
     }
-    const timer = setTimeout(
-      () =>
-        recorder.current.start(
-          async (audio) => {
-            const token = generation.current;
-            setBusy(true);
-            setVoiceState('Transcribing');
-            try {
-              const { text } = await rpc('transcribe', audio);
-              if (token !== generation.current) return;
-              if (!text) throw new Error('No speech was recognized');
-              setTranscript(text);
-              setBusy(false);
-              await commandRef.current(text);
-            } catch (e) {
-              if (token === generation.current) setError(e.message);
-            } finally {
-              setBusy(false);
-            }
-          },
-          setVoiceState,
-          (e) => {
-            setError(e.message);
-            setVoiceMode(false);
-          },
-        ),
-      400,
+    speech.current.cancel();
+    setSpeaking(false);
+    setError('');
+    const token = generation.current;
+    const prefix = request.trimEnd();
+    recorder.current.start(
+      (text) => {
+        if (token === generation.current)
+          setRequest((prefix + (prefix && text ? ' ' : '') + text).slice(0, 8000));
+      },
+      (status) => {
+        if (token === generation.current) {
+          setVoiceState(status);
+          setVoiceMode(status !== 'Idle');
+        }
+      },
+      (error) => {
+        if (token === generation.current) {
+          setError(error.message);
+          setVoiceMode(false);
+        }
+      },
     );
-    return () => clearTimeout(timer);
-  }, [voiceMode, busy, speaking, state.connected, state.target, voiceState]);
+  }
+  async function saveModel(model) {
+    return perform(async () => {
+      const saved = await rpc('settings.save', { model });
+      settingsRef.current = { ...saved, apiKey: '', ttsApiKey: '', speechApiKey: '' };
+      setSettings(settingsRef.current);
+      return saved;
+    });
+  }
   async function bind() {
     await perform(async () => {
       const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -282,7 +294,7 @@ function App() {
         if (token !== generation.current) return;
         setPlan(p);
         setMessages((items) => [...items, { id: p.id, kind: 'plan', plan: p }]);
-        setPage((p) => (['setup', 'history'].includes(p) ? p : 'console'));
+        setPage((p) => (['setup', 'history', 'credentials'].includes(p) ? p : 'console'));
         const expectations = p.cases
           .flatMap((c) =>
             c.steps
@@ -299,14 +311,17 @@ function App() {
         );
       },
       (e) => {
-        if (token === generation.current)
+        if (token === generation.current) {
+          if (!demo) setRequest((current) => current || prompt);
           setMessages((items) => [
             ...items,
             { id: crypto.randomUUID(), kind: 'error', text: e.message },
           ]);
+        }
       },
+      () => token === generation.current,
     );
-    setDrafting(false);
+    if (token === generation.current) setDrafting(false);
   }
   async function start(selected = plan) {
     if (!selected) return;
@@ -331,6 +346,7 @@ function App() {
   }
   async function cancel() {
     generation.current++;
+    setDrafting(false);
     setVoiceMode(false);
     recorder.current.stop(true);
     speech.current.cancel();
@@ -434,7 +450,8 @@ function App() {
     });
   }
   useEffect(() => {
-    if (!follow.current || !scroll.current || ['setup', 'history'].includes(page)) return;
+    if (!follow.current || !scroll.current || ['setup', 'history', 'credentials'].includes(page))
+      return;
     const progress = scroll.current.querySelector('[aria-label="Live test progress"]');
     const checkpoint = scroll.current.querySelector('.handoff-card');
     const planMessage = scroll.current.querySelector(
@@ -458,7 +475,8 @@ function App() {
     } else scroll.current.scrollTop = scroll.current.scrollHeight;
   }, [messages, drafting, page]);
   useEffect(() => {
-    if (['setup', 'history'].includes(page) && scroll.current) scroll.current.scrollTop = 0;
+    if (['setup', 'history', 'credentials'].includes(page) && scroll.current)
+      scroll.current.scrollTop = 0;
   }, [page]);
   function renderPlan(plan) {
     return (
@@ -936,235 +954,33 @@ function App() {
   }
   function renderSettings() {
     return (
-      <>
-        <div className="section-heading">
-          <span className="eyebrow">
-            <ShieldCheck size={13} aria-hidden="true" />
-            YOUR MODELS. YOUR KEYS.
-          </span>
-          <h1>Settings</h1>
-        </div>
-        <div className="card settings-security">
-          <p>
-            Your saved API keys are encrypted on this computer. Each provider uses its own
-            credentials.
-          </p>
-          <span className="tag">{settings.hasApiKey ? 'API KEY CONFIGURED' : 'NO API KEY'}</span>
-        </div>
-        <form
-          onSubmit={(e) => {
-            e.preventDefault();
-            void perform(async () => {
-              const s = await rpc('settings.save', settings);
-              settingsRef.current = { ...s, apiKey: '', ttsApiKey: '', speechApiKey: '' };
-              setSettings(settingsRef.current);
-              speak('Settings saved.');
-            });
-          }}
-        >
-          <fieldset
-            className="settings-fields"
-            disabled={!state.connected || Boolean(state.runId) || drafting}
-          >
-            <label>
-              AI provider
-              <select
-                value={settings.aiProvider || 'openai'}
-                onChange={(e) =>
-                  setSettings({
-                    ...settings,
-                    aiProvider: e.target.value,
-                    apiKey: '',
-                    hasApiKey: false,
-                    model: e.target.value === 'openrouter' ? 'openai/gpt-4o' : 'gpt-5.6-sol',
-                  })
-                }
-              >
-                <option value="openai">OpenAI</option>
-                <option value="openrouter">OpenRouter</option>
-              </select>
-            </label>
-            <label>
-              {settings.aiProvider === 'openrouter' ? 'OpenRouter API key' : 'OpenAI API key'}
-              <input
-                type="password"
-                autoComplete="off"
-                value={settings.apiKey || ''}
-                onChange={(e) => setSettings({ ...settings, apiKey: e.target.value })}
-                placeholder="Leave blank to keep the current key"
-              />
-            </label>
-            <label>
-              Reasoning model
-              <input
-                value={settings.model}
-                onChange={(e) => setSettings({ ...settings, model: e.target.value })}
-              />
-            </label>
-            {settings.aiProvider === 'openrouter' && (
-              <p className="muted">
-                Use a full OpenRouter model ID with structured-output support. Your saved OpenRouter
-                key is used only for planning and UI reasoning.
-              </p>
-            )}
-            <label>
-              OpenAI speech API key (optional)
-              <input
-                type="password"
-                autoComplete="off"
-                value={settings.speechApiKey || ''}
-                onChange={(e) => setSettings({ ...settings, speechApiKey: e.target.value })}
-                placeholder="For microphone transcription; blank keeps saved key"
-              />
-            </label>
-            <p className="muted">
-              Microphone transcription uses OpenAI and needs an OpenAI key. Typed tests and browser
-              speech work with OpenRouter alone.
-            </p>
-            <label>
-              Transcription model
-              <input
-                value={settings.transcriptionModel}
-                onChange={(e) => setSettings({ ...settings, transcriptionModel: e.target.value })}
-              />
-            </label>
-            <fieldset className="speech-settings">
-              <legend>Text-to-speech</legend>
-              <label>
-                Speech provider
-                <select
-                  value={settings.ttsProvider}
-                  onChange={(e) => setSettings({ ...settings, ttsProvider: e.target.value })}
-                >
-                  <option value="browser">Browser speech — no API key</option>
-                  <option value="openai">OpenAI API speech</option>
-                </select>
-              </label>
-              {settings.ttsProvider === 'openai' && (
-                <>
-                  <label>
-                    Text-to-speech API key
-                    <input
-                      type="password"
-                      autoComplete="off"
-                      value={settings.ttsApiKey || ''}
-                      onChange={(e) => setSettings({ ...settings, ttsApiKey: e.target.value })}
-                      placeholder="Leave blank to keep the saved TTS key"
-                    />
-                  </label>
-                  <span className="tag">
-                    {settings.hasTtsApiKey
-                      ? 'DEDICATED TTS KEY CONFIGURED'
-                      : 'NO DEDICATED TTS KEY'}
-                  </span>
-                  <label className="checkbox-row">
-                    <input
-                      type="checkbox"
-                      checked={settings.ttsReuseMainKey}
-                      onChange={(e) =>
-                        setSettings({ ...settings, ttsReuseMainKey: e.target.checked })
-                      }
-                    />
-                    Use the main OpenAI key when no TTS key is set
-                  </label>
-                  <label>
-                    Text-to-speech model
-                    <input
-                      value={settings.ttsModel}
-                      onChange={(e) => setSettings({ ...settings, ttsModel: e.target.value })}
-                    />
-                  </label>
-                  <label>
-                    Text-to-speech voice
-                    <select
-                      value={settings.ttsVoice}
-                      onChange={(e) => setSettings({ ...settings, ttsVoice: e.target.value })}
-                    >
-                      {[
-                        'alloy',
-                        'echo',
-                        'fable',
-                        'onyx',
-                        'nova',
-                        'shimmer',
-                        'ash',
-                        'ballad',
-                        'coral',
-                        'sage',
-                        'verse',
-                        'marin',
-                        'cedar',
-                      ].map((voice) => (
-                        <option key={voice} value={voice}>
-                          {voice}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                  <p className="small">
-                    Replies use an AI-generated voice. Model and voice availability depend on your
-                    API account. A dedicated TTS key takes priority.
-                  </p>
-                </>
-              )}
-              <Button
-                type="button"
-                className="secondary"
-                disabled={busy || speaking || !state.connected}
-                onClick={() => speak('Hello. VoiceQA is ready to review your test results.')}
-              >
-                Test saved speech settings
-              </Button>
-              <p className="small">
-                Save changes before testing speech. API errors are shown explicitly; the provider
-                never switches silently.
-              </p>
-            </fieldset>
-            <label>
-              Redacted CSS selectors
-              <textarea
-                rows={3}
-                value={settings.maskSelectors}
-                onChange={(e) => setSettings({ ...settings, maskSelectors: e.target.value })}
-              />
-            </label>
-            <label>
-              Visual-only masks
-              <input
-                value={settings.visualMaskSelectors || ''}
-                onChange={(e) => setSettings({ ...settings, visualMaskSelectors: e.target.value })}
-                placeholder="[data-testid=order-id], .timestamp"
-              />
-            </label>
-            <p className="small">
-              Hide changing public content in screenshots while keeping it available for functional
-              checks. Private-field masks always apply.
-            </p>
-            <Button
-              type="submit"
-              className="primary full glow-button"
-              busy={busy}
-              disabled={!state.connected}
-            >
-              Save settings
-            </Button>
-          </fieldset>
-        </form>
-        <AuthSettings
-          connected={state.connected}
-          running={Boolean(state.runId) || drafting}
-          origin={state.pages?.main?.origin || state.target?.origin}
-          rpc={rpc}
-          perform={perform}
-        />
-        <p className="small">
-          A missing or unavailable model produces an explicit error. There is no silent model
-          fallback.
-        </p>
-      </>
+      <APISettings
+        settings={state.settings || settings}
+        disabled={!state.connected || Boolean(state.runId) || drafting}
+        busy={busy}
+        onSave={(payload) =>
+          perform(async () => {
+            const saved = await rpc('settings.save', payload);
+            settingsRef.current = { ...saved, apiKey: '', ttsApiKey: '', speechApiKey: '' };
+            setSettings(settingsRef.current);
+            return saved;
+          })
+        }
+      />
     );
   }
-  const chat = !['setup', 'history'].includes(page);
+  function renderCredentials() {
+    return (
+      <AuthSettings
+        connected={state.connected}
+        running={Boolean(state.runId) || drafting}
+        origin={state.pages?.main?.origin || state.target?.origin}
+        rpc={rpc}
+        perform={perform}
+      />
+    );
+  }
+  const chat = !['setup', 'history', 'credentials'].includes(page);
   const active = Boolean(state.runId);
   const status = state.connected
     ? active
@@ -1305,16 +1121,12 @@ function App() {
                 )}
               </div>
             )}
-            {drafting && (
-              <div className="thinking-message" role="status">
-                <LoaderCircle className="spinner" size={16} aria-hidden="true" />
-                Reading the page and building your plan…
-              </div>
-            )}
+            {drafting && <PlanningStatus planning={state.planning} />}
           </>
         )}
         {page === 'history' && state.connected && renderHistory()}
         {page === 'setup' && renderSettings()}
+        {page === 'credentials' && renderCredentials()}
       </main>
       {chat && (
         <ChatComposer
@@ -1354,25 +1166,14 @@ function App() {
           running={active}
           speaking={speaking}
           hasKey={Boolean(state.settings?.hasApiKey)}
-          canVoice={Boolean(
-            state.target &&
-            state.connected &&
-            state.settings?.hasApiKey &&
-            state.settings?.hasSpeechApiKey,
-          )}
+          canVoice={Dictation.supported() && !busy && !active}
           voiceMode={voiceMode}
           voiceState={voiceState}
-          onVoice={() => {
-            if (voiceMode) {
-              setVoiceMode(false);
-              recorder.current.stop(true);
-            } else {
-              setVoiceMode(true);
-              setVoiceState('Idle');
-            }
-          }}
+          onVoice={toggleDictation}
           onStop={cancel}
           onSettings={() => setPage('setup')}
+          onModel={saveModel}
+          onCredentials={() => setPage('credentials')}
           settings={settings}
           onPace={(stepDelayMs) => perform(() => rpc('settings.save', { stepDelayMs }))}
           responsive={responsive}
