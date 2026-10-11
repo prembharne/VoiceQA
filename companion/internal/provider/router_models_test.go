@@ -28,9 +28,9 @@ func TestRouterChoosesSupportedFormatsAndBoundsOutput(t *testing.T) {
 		mode       string
 		wantBudget int
 	}{
-		{"Dots schema", []string{"response_format", "structured_outputs", "max_tokens"}, 460800, "json_schema", 32768},
-		{"Qwen JSON", []string{"response_format", "max_tokens", "reasoning"}, 65536, "json_object", 32768},
-		{"Nemotron prompt", []string{"max_tokens", "reasoning"}, 65536, "", 32768},
+		{"Dots schema", []string{"response_format", "structured_outputs", "max_tokens"}, 460800, "json_schema", 460800},
+		{"Qwen JSON", []string{"response_format", "max_tokens", "reasoning"}, 65536, "json_object", 65536},
+		{"Nemotron prompt", []string{"max_tokens", "reasoning"}, 65536, "", 65536},
 		{"Small endpoint", []string{"max_tokens"}, 8192, "", 8192},
 		{"Small reasoning endpoint", []string{"max_tokens", "reasoning"}, 2048, "", 2048},
 	} {
@@ -53,7 +53,7 @@ func TestRouterChoosesSupportedFormatsAndBoundsOutput(t *testing.T) {
 				}
 				var body map[string]any
 				_ = json.NewDecoder(r.Body).Decode(&body)
-				if body["model"] != "test/selected-model" || body["max_tokens"] != float64(tt.wantBudget) || body["provider"].(map[string]any)["require_parameters"] != true {
+				if body["model"] != "test/selected-model" || body["max_tokens"] != nil || body["provider"].(map[string]any)["require_parameters"] != true {
 					t.Error("changed model/budget or disabled parameter routing")
 				}
 				if body["stream_options"] != nil {
@@ -143,8 +143,28 @@ func TestRouterOutputLimitIsNotSilentlyRetried(t *testing.T) {
 	c := New().ForProvider("openrouter")
 	c.BaseURL = server.URL
 	raw, _, err := c.PlanStructured(context.Background(), "sk-or-fixture", "test/model", "rules", nil, nil, nil)
-	if err == nil || !strings.Contains(err.Error(), "32768 tokens") || len(raw) != 0 || calls != 1 {
+	if err == nil || !strings.Contains(err.Error(), "did not impose an output-token cap") || len(raw) != 0 || calls != 1 {
 		t.Fatal("lost budget or replayed a truncated generation", err, calls)
+	}
+}
+func TestRouterUnknownAllowanceDoesNotInventATokenCap(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/models" {
+			writeCatalog(w, testRouterModel("test/model", []string{"max_tokens"}, 0))
+			return
+		}
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		if body["max_tokens"] != nil {
+			t.Error("invented a provider limit")
+		}
+		fmt.Fprint(w, `{"choices":[{"index":0,"finish_reason":"stop","message":{"content":"{}"}}]}`)
+	}))
+	defer server.Close()
+	c := New().ForProvider("openrouter")
+	c.BaseURL = server.URL
+	if _, _, err := c.PlanStructured(context.Background(), "sk-or-fixture", "test/model", "rules", nil, nil, nil); err != nil {
+		t.Fatal(err)
 	}
 }
 func TestPromptJSONOnlyUnwrapsOneExactFence(t *testing.T) {

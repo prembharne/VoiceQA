@@ -244,6 +244,13 @@
         actual = normalize(el.textContent);
         passed = kind === 'text' ? actual === expected : actual.includes(expected);
       } else if (kind === 'value') {
+        if (!['INPUT', 'TEXTAREA', 'SELECT', 'OPTION'].includes(el.tagName))
+          throw Object.assign(
+            new Error(
+              'A value assertion requires a form control. Use text or number for displayed content.',
+            ),
+            { code: 'needs_review' },
+          );
         actual = String(el.value ?? '');
         passed = actual === expected;
       } else if (kind === 'number') {

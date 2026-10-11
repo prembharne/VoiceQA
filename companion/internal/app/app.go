@@ -249,7 +249,7 @@ func (a *App) dispatchWork(m native.Message, generation *uint64) (any, error) {
 	}
 	switch m.Type {
 	case "hello":
-		return map[string]any{"version": 1, "hostVersion": "0.5.1", "settings": a.getSettings(), "capabilities": []string{"dom", "input", "assertions", "accessibility", "visual", "voice", "reports", "multi-tab", "totp", "human-checkpoints", "condition-waits", "test-data", "workflow-variables", "http-checks", "logical-security", "network-evidence", "triage", "run-comparison"}}, nil
+		return map[string]any{"version": 1, "hostVersion": "0.6.0", "settings": a.getSettings(), "capabilities": []string{"dom", "input", "assertions", "accessibility", "visual", "voice", "reports", "multi-tab", "totp", "human-checkpoints", "condition-waits", "test-data", "workflow-variables", "http-checks", "logical-security", "network-evidence", "triage", "run-comparison"}}, nil
 	case "auth.list", "auth.save", "auth.delete":
 		return a.authDispatch(m)
 	case "settings.get":
@@ -379,12 +379,14 @@ func (a *App) dispatchWork(m native.Message, generation *uint64) (any, error) {
 			return nil, e
 		}
 		plan := core.Plan{}
+		var observation map[string]any
 		if p.Demo {
 			u, _ := url.Parse(p.URL)
 			if u.Hostname() != "127.0.0.1" && u.Hostname() != "localhost" {
 				return nil, errors.New("fixture suites are restricted to local VoiceQA test applications")
 			}
 			obs, e := a.browser(ctx, "", "", map[string]any{"operation": "observe", "origin": p.Origin})
+			observation = obs
 			if e != nil {
 				return nil, e
 			}
@@ -428,6 +430,7 @@ func (a *App) dispatchWork(m native.Message, generation *uint64) (any, error) {
 			}
 		} else {
 			obs, e := a.browser(ctx, "", "", map[string]any{"operation": "observe", "origin": p.Origin})
+			observation = obs
 			if e != nil {
 				return nil, e
 			}
@@ -458,6 +461,10 @@ func (a *App) dispatchWork(m native.Message, generation *uint64) (any, error) {
 			plan.Dataset = p.Dataset
 		}
 		plan.Visual = p.Visual
+		if !p.Responsive {
+			plan.PreserveViewport = true
+			plan.Viewports = []core.Viewport{observedViewport(observation)}
+		}
 		if plan.Clarification == "" {
 			if e := core.ValidatePlan(plan); e != nil {
 				return nil, fmt.Errorf("generated plan rejected: %w", e)
@@ -537,8 +544,9 @@ func (a *App) dispatchWork(m native.Message, generation *uint64) (any, error) {
 		return a.compareRuns(m)
 	case "plan.fork":
 		var p struct {
-			ID      string               `json:"id"`
-			Dataset *[]map[string]string `json:"dataset"`
+			ID               string               `json:"id"`
+			Dataset          *[]map[string]string `json:"dataset"`
+			PreserveViewport bool                 `json:"preserveViewport"`
 		}
 		if e := decode(m, &p); e != nil {
 			return nil, e
@@ -549,6 +557,12 @@ func (a *App) dispatchWork(m native.Message, generation *uint64) (any, error) {
 		}
 		if p.Dataset != nil {
 			plan.Dataset = *p.Dataset
+		}
+		if p.PreserveViewport {
+			plan.PreserveViewport = true
+			if len(plan.Viewports) > 0 {
+				plan.Viewports = plan.Viewports[:1]
+			}
 		}
 		plan.ID = core.ID()
 		plan.Version = 1

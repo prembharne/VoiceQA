@@ -57,7 +57,7 @@ try {
     db.close();
   }
   if (modelOverride) model = modelOverride;
-  if ((security || workspace) && !model.endsWith(':free'))
+  if ((security || workspace) && !model.endsWith(':free') && !process.argv.includes('--allow-paid'))
     throw new Error(
       'The live security check requires your selected OpenRouter :free model. It will not switch models or spend paid credits.',
     );

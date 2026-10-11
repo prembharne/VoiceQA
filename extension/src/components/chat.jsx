@@ -257,7 +257,7 @@ export function ChatComposer({
                   disabled={busy || running}
                   onChange={(e) => onResponsive(e.target.checked)}
                 />
-                Desktop + mobile width
+                Resize for desktop + mobile checks
               </label>
               <label className="option-check">
                 <input

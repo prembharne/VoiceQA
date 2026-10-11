@@ -59,10 +59,10 @@ func (c *Client) chatStructured(ctx context.Context, key, model, instructions st
 			return nil, nil, errors.New("Choose an OpenRouter model that can generate text plans")
 		}
 		mode = capabilities.outputMode()
-		if capabilities.Top.MaxCompletion > 0 && capabilities.Top.MaxCompletion < budget {
+		if budget > 0 && capabilities.Top.MaxCompletion > 0 && capabilities.Top.MaxCompletion < budget {
 			budget = capabilities.Top.MaxCompletion
 		}
-		if budget < 512 {
+		if (budget > 0 && budget < 512) || (budget == 0 && capabilities.Top.MaxCompletion > 0 && capabilities.Top.MaxCompletion < 512) {
 			return nil, nil, errors.New("The selected model's output budget is too small for a test plan")
 		}
 		if progress != nil && mode != "json-schema" {
@@ -77,8 +77,11 @@ func (c *Client) chatStructured(ctx context.Context, key, model, instructions st
 		instructions += "\nFollow this complete JSON schema exactly. Return one JSON object only, without Markdown fences or commentary: " + string(schemaJSON)
 	}
 	body := map[string]any{
-		"model": model, "max_tokens": budget, "stream": stream,
+		"model": model, "stream": stream,
 		"messages": []map[string]string{{"role": "system", "content": instructions + "\nReturn only JSON matching the supplied response schema."}, {"role": "user", "content": string(inputJSON)}},
+	}
+	if budget > 0 {
+		body["max_tokens"] = budget
 	}
 	switch mode {
 	case "json-schema":
@@ -88,8 +91,16 @@ func (c *Client) chatStructured(ctx context.Context, key, model, instructions st
 	}
 	if c.Router {
 		body["provider"] = map[string]any{"require_parameters": true}
-		if stream && capabilities.supports("reasoning") && capabilities.Reasoning.MaxTokens && budget >= 2048 {
-			body["reasoning"] = map[string]any{"max_tokens": max(1024, min(4096, budget/4))}
+		reasoningAllowance := budget
+		if reasoningAllowance == 0 {
+			reasoningAllowance = capabilities.Top.MaxCompletion
+		}
+		if stream && capabilities.supports("reasoning") && capabilities.Reasoning.MaxTokens && (reasoningAllowance == 0 || reasoningAllowance >= 2048) {
+			cap := 4096
+			if reasoningAllowance > 0 {
+				cap = max(1024, min(4096, reasoningAllowance/4))
+			}
+			body["reasoning"] = map[string]any{"max_tokens": cap}
 		}
 	}
 	if stream && c.NIM {
@@ -131,9 +142,39 @@ func (c *Client) chatStructured(ctx context.Context, key, model, instructions st
 			Detail string `json:"detail"`
 		}
 		_ = json.Unmarshal(raw, &api)
+		// OpenRouter places upstream details inside error.metadata.
+		var nested struct {
+			Error struct {
+				Metadata struct {
+					Raw string `json:"raw"`
+				} `json:"metadata"`
+			} `json:"error"`
+		}
+		_ = json.Unmarshal(raw, &nested)
 		msg := api.Error.Message
 		if msg == "" {
 			msg = api.Detail
+		}
+		if vendor := nested.Error.Metadata.Raw; vendor != "" && len(vendor) < 8192 {
+			var details struct {
+				Error struct {
+					Message string `json:"message"`
+				} `json:"error"`
+				Message string `json:"message"`
+				Detail  string `json:"detail"`
+			}
+			if json.Unmarshal([]byte(vendor), &details) == nil {
+				message := details.Error.Message
+				if message == "" {
+					message = details.Message
+				}
+				if message == "" {
+					message = details.Detail
+				}
+				if message != "" {
+					msg += ": " + message
+				}
+			}
 		}
 		msg = strings.ReplaceAll(msg, key, "[redacted]")
 		if len(msg) > 400 {
@@ -156,7 +197,7 @@ func (c *Client) chatStructured(ctx context.Context, key, model, instructions st
 	if e != nil {
 		var limit *chatLimitError
 		if errors.As(e, &limit) {
-			return nil, nil, fmt.Errorf("Model reached the combined reasoning/answer limit (%d tokens). No plan was saved. Try a more focused suite or another model", budget)
+			return nil, nil, generationLimitMessage(budget)
 		}
 		return nil, nil, e
 	}
@@ -199,7 +240,7 @@ func parseChatStructuredMode(raw []byte, budget int, allowFence bool) (json.RawM
 	}
 	choice := response.Choices[0]
 	if choice.Finish == "length" {
-		return nil, usage, fmt.Errorf("Model reached the combined reasoning/answer limit (%d tokens). No plan was saved", budget)
+		return nil, usage, generationLimitMessage(budget)
 	}
 	if choice.Finish != "stop" || choice.Message.Refusal != "" || len(response.Error) > 0 && string(response.Error) != "null" {
 		return nil, usage, errors.New("AI response incomplete or refused; no tests were run")
@@ -220,6 +261,13 @@ func parseChatStructuredMode(raw []byte, budget int, allowFence bool) (json.RawM
 }
 
 type chatLimitError struct{}
+
+func generationLimitMessage(budget int) error {
+	if budget > 0 {
+		return fmt.Errorf("The provider reached this model's combined reasoning/answer allowance (%d tokens). No plan was saved", budget)
+	}
+	return errors.New("The provider reached this model's output allowance. VoiceQA did not impose an output-token cap. No plan was saved")
+}
 
 func (*chatLimitError) Error() string { return "AI generation reached its output limit" }
 func readChatStream(body io.Reader, progress func(PlanProgress)) ([]byte, error) {

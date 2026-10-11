@@ -898,6 +898,16 @@ async function onNative(message) {
         );
         result = { viewport: p.viewport, mode: 'responsive-width' };
         break;
+      case 'current_viewport': {
+        activeViewport = null;
+        const views = await chrome.scripting.executeScript({
+          target: { tabId: state.target.tabId },
+          func: () => ({ width: innerWidth, height: innerHeight }),
+        });
+        fence.check(token, state);
+        result = { viewport: views[0].result, mode: 'current-width', page: state.currentPage };
+        break;
+      }
       case 'execute':
         await attach(token);
         result = await execute(p.action, token, p.secure === true ? p.secureOrigin : '');

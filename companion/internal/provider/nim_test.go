@@ -31,6 +31,9 @@ func TestNVIDIAChatRoutingStreamingAndStructuredGrounding(t *testing.T) {
 			t.Error("model or structured format missing")
 		}
 		if body["stream"] == true {
+			if body["max_tokens"] != nil {
+				t.Error("VoiceQA imposed a planning token cap on NIM")
+			}
 			w.Header().Set("Content-Type", "text/event-stream")
 			fmt.Fprint(w, `data: {"choices":[{"index":0,"delta":{"content":"{\"target\":"}}]}`+"\n\n")
 			fmt.Fprint(w, `data: {"choices":[{"index":0,"delta":{"reasoning_content":"never publish reasoning","content":"\"#submit\"}"},"finish_reason":"stop"}]}`+"\n\n")

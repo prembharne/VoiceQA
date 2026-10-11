@@ -18,7 +18,7 @@ func TestPlanningStreamOutlivesOrdinaryHTTPTimeout(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var body map[string]any
 		_ = json.NewDecoder(r.Body).Decode(&body)
-		if r.URL.Path != "/responses" || body["stream"] != true || body["model"] != "test/model" || body["max_output_tokens"] != float64(16000) {
+		if r.URL.Path != "/responses" || body["stream"] != true || body["model"] != "test/model" || body["max_output_tokens"] != nil {
 			t.Error("planning changed model, routing, schema budget or streaming")
 		}
 		w.Header().Set("Content-Type", "text/event-stream")

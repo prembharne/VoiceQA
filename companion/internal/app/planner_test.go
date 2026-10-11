@@ -201,6 +201,17 @@ func TestInvalidBooleanPlanRepairedOnce(t *testing.T) {
 		t.Fatal("repair failed, confirmed prematurely, or lost usage", e, calls)
 	}
 }
+func TestDefaultPlanUsesTheObservedViewportWithoutResizing(t *testing.T) {
+	a := newTestApp(t)
+	t.Setenv("OPENAI_API_KEY", "fixture-key")
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { mockStructured(w, draftOutput("true")) }))
+	defer server.Close()
+	a.Provider.BaseURL = server.URL
+	plan, err := a.draftPlan(context.Background(), "Check the workflow", "https://example.test/", "https://example.test", false, map[string]any{"viewport": map[string]any{"width": float64(1111), "height": float64(777)}})
+	if err != nil || !plan.PreserveViewport || len(plan.Viewports) != 1 || plan.Viewports[0].Width != 1111 {
+		t.Fatal(plan.Viewports, err)
+	}
+}
 
 func TestInvalidPlanStopsAfterTwoAttempts(t *testing.T) {
 	a := newTestApp(t)

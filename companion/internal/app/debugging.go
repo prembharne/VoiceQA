@@ -21,6 +21,10 @@ func diagnose(r *core.Run) *core.Diagnosis {
 		}
 		d := &core.Diagnosis{Category: "assertion", Summary: "Observed behavior did not match the reviewed expectation.", NextCheck: "Check the expected business rule and the recorded application state.", StepID: step.ID}
 		switch {
+		case step.Result["actual"] == "target missing" || strings.Contains(step.Error, "target missing"):
+			d.Category = "target_or_evidence"
+			d.Summary = "The expected element was not found, so its value was not measured."
+			d.NextCheck = "Check the action order and selector. A missing review element after submission is not evidence that the order amount is incorrect."
 		case step.Action.Operation == "http_check" && step.Status != "failed":
 			d.Category = "api_context"
 			d.Summary = "The API check could not produce a complete server-response verdict."

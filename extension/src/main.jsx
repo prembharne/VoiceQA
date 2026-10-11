@@ -38,7 +38,7 @@ function App() {
   const [voiceState, setVoiceState] = useState('Idle');
   const [speaking, setSpeaking] = useState(false);
   const [visual, setVisual] = useState(false);
-  const [responsive, setResponsive] = useState(true);
+  const [responsive, setResponsive] = useState(false);
   const [mode, setMode] = useState('qa');
   const [authorized, setAuthorized] = useState(false);
   const [apiWrites, setAPIWrites] = useState(false);
@@ -327,6 +327,17 @@ function App() {
     if (!selected) return;
     follow.current = true;
     await perform(async () => {
+      if (!responsive && !selected.preserveViewport) {
+        const current = await rpc('plan.fork', { id: selected.id, preserveViewport: true });
+        setPlan(current);
+        setRun(null);
+        setMessages((items) => [...items, { id: current.id, kind: 'plan', plan: current }]);
+        return;
+      }
+      if (responsive && selected.preserveViewport)
+        throw new Error(
+          'The width option changed. Propose a new plan to review desktop/mobile replay before running.',
+        );
       const p = await rpc('plan.confirm', { id: selected.id, version: selected.version });
       setPlan(p);
       setMessages((items) =>
@@ -506,8 +517,10 @@ function App() {
                   {plan.dataset?.length || 1} data row(s) ·{' '}
                 </span>
                 {plan.pages?.length > 1 && <span>{plan.pages.length} approved pages · </span>}
-                {plan.viewports.map((v) => `${v.width} × ${v.height}`).join(' / ')} ·{' '}
-                {plan.visual ? 'Visual comparison enabled' : 'Evidence screenshots enabled'}
+                {plan.preserveViewport
+                  ? 'Current browser width · no resizing'
+                  : plan.viewports.map((v) => `${v.width} × ${v.height}`).join(' / ')}{' '}
+                · {plan.visual ? 'Visual comparison enabled' : 'Evidence screenshots enabled'}
               </div>
             </div>
             {plan.dataset?.length > 0 && (

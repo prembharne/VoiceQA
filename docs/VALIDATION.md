@@ -2,6 +2,20 @@
 
 This document records current evidence, not projected reliability.
 
+## Current-width testing and planning checks — 2026-10-11
+
+Version 0.6.0 removes VoiceQA's fixed planning output-token cap. Planning requests omit max_tokens/max_output_tokens rather than imposing 16k/32k or blindly sending a catalog maximum. The provider still has its own allowance. Single-target grounding, time and transport/operation limits remain bounded. All advertised text-model formats continue through native schema, JSON-object or prompt-JSON capability routing.
+
+The supplied report was not evidence that the $120 price was wrong: the generated case clicked the review Next (submission) before checking review-total, then used kind=value on a formatted text element. The table expected five visible rows although RelayDesk shows three per page; five was the total matching count. Ordinary navigation did not reset state, so the second viewport toggled notifications back on. These specific planner errors are now rejected against the trusted local fixture contract, with aggregated correction feedback. Missing-element triage says the value was not measured; non-form value assertions require review rather than treating displayed text as an input value.
+
+Current browser width is the default. preserveViewport records one actual viewport; current_viewport measures it without device-metrics emulation. Responsive replay remains explicit. A saved responsive plan can be copied to an unconfirmed current-width plan for review, without altering its original action/version record; execution cannot silently contradict the reviewed mode.
+
+- A real Chrome-extension/native-host test ran the current-width shop suite twice at **1111×777**. Every step retained that geometry and **zero Emulation.setDeviceMetricsOverride calls** were made.
+- Public/provider tests verify no planning output-cap parameter is sent to OpenAI, NIM or OpenRouter, while ordinary grounding remains bounded. Operation, variable and trusted-fixture validations remain mandatory. Mock tests reject the reported review-after-submit/input-value/page-count/pagination/reset errors and accept the known fixture workflows. Copies preserve the original confirmed plan.
+- Live diagnostics used isolated data and preserved production preferences. Dots 3 with provider-owned output allowance reached generation but did not complete a validated draft within the six-minute deadline. Qwen 3.7 Flash accepted JSON-mode requests and returned drafts, but local variable validation rejected them after the single correction attempt; no plan was accepted or executed. There is no claim that removing a cap makes every model reliable. The Qwen diagnostic explicitly opted into that named paid model; normal helper runs still refuse paid calls without the opt-in flag. Copied encrypted keys were deleted at teardown.
+
+- Final checks: **51 Windows browser tests** and **46 JavaScript checks** pass, along with Go race tests/vet and dependency scans (no npm findings or Go vulnerabilities). CodeRabbit reviewed the source; reported stage-presence and confirmation-mode issues were fixed, and hidden/absent review-element checks remain valid. Current-width behavior was tested twice without emulation. Production records/preferences were unchanged and native registration was restored.
+
 ## Model-compatible OpenRouter planning — 2026-10-11
 
 Version 0.5.1 fixes two independent provider failures. Dots 3's reasoning plus visible JSON can exceed the old 16,000-token limit. Qwen 3.7 Flash advertises JSON-object output without native schema enforcement; Nemotron 3 Nano Omni (free) does not advertise `response_format`. Sending native JSON schema with required-parameter routing excluded their endpoints.

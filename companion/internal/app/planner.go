@@ -182,6 +182,9 @@ func (a *App) draftPlanWithProgress(ctx context.Context, request, url, origin st
 			plan.Viewports = []core.Viewport{{Width: 1440, Height: 900}}
 			if responsive {
 				plan.Viewports = append(plan.Viewports, core.Viewport{Width: 390, Height: 844})
+			} else {
+				plan.PreserveViewport = true
+				plan.Viewports = []core.Viewport{observedViewport(obs)}
 			}
 			for i := range plan.Cases {
 				plan.Cases[i].Source = "agent-proposed; requires confirmation"
@@ -199,6 +202,9 @@ func (a *App) draftPlanWithProgress(ctx context.Context, request, url, origin st
 				plan.Cases = []core.Case{}
 			} else {
 				e = core.ValidatePlan(plan)
+				if e == nil && strings.HasPrefix(fmt.Sprint(obs["fixture"]), "voiceqa-workspace-") && (strings.HasPrefix(origin, "http://127.0.0.1:") || strings.HasPrefix(origin, "http://localhost:")) {
+					e = provider.ValidateWorkspaceDraft(plan)
+				}
 			}
 		}
 		if e == nil {
@@ -214,4 +220,16 @@ func (a *App) draftPlanWithProgress(ctx context.Context, request, url, origin st
 		}
 	}
 	return core.Plan{}, fmt.Errorf("AI plan attempts exhausted")
+}
+func observedViewport(obs map[string]any) core.Viewport {
+	v := core.Viewport{Width: 1440, Height: 900}
+	if view, ok := obs["viewport"].(map[string]any); ok {
+		if width, ok := view["width"].(float64); ok && width > 0 {
+			v.Width = int(width)
+		}
+		if height, ok := view["height"].(float64); ok && height > 0 {
+			v.Height = int(height)
+		}
+	}
+	return v
 }

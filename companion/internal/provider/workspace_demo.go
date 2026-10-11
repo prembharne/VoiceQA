@@ -77,15 +77,16 @@ func WorkspaceSecurityPlan(raw, origin, request string, authorized bool) core.Pl
 // Give AI the business contract and known controls, not a lengthy prerecorded suite.
 func WorkspaceRequirements(raw, origin string) map[string]any {
 	return map[string]any{
-		"application": "RelayDesk synthetic operations workspace",
-		"resetURL":    workspaceReset(origin, "/", raw, false),
-		"sessionRule": "The main resetURL starts an authenticated synthetic Alice session. Only the authentication lab requires a saved credential/TOTP profile. Security lab loginAlice/loginBob buttons establish authorized fixture sessions without that profile.",
-		"navigation":  map[string]string{"orders": "testid:nav-orders", "settings": "testid:nav-settings", "overview": "testid:nav-overview"},
+		"application":   "RelayDesk synthetic operations workspace",
+		"resetURL":      workspaceReset(origin, "/", raw, false),
+		"sessionRule":   "The main resetURL starts an authenticated synthetic Alice session. Only the authentication lab requires a saved credential/TOTP profile. Security lab loginAlice/loginBob buttons establish authorized fixture sessions without that profile.",
+		"caseIsolation": "Every independent case MUST start with reset=1 using the supplied reset URL. Ordinary SPA navigation does not reset server orders or saved preferences. Replaying a checkbox click without a reset flips its state.",
+		"navigation":    map[string]string{"orders": "testid:nav-orders", "settings": "testid:nav-settings", "overview": "testid:nav-overview"},
 		"orderWizard": map[string]any{
 			"open": "testid:new-order", "next": "testid:wizard-next", "error": "testid:wizard-error",
 			"customerStep":       map[string]any{"customer": "testid:customer-name", "email": "testid:customer-email", "shipping": "testid:shipping-method", "shippingValues": []string{"standard", "express"}, "requiredError": "Enter a customer name and valid contact email."},
 			"itemsStep":          map[string]any{"product": "testid:order-product", "quantity": "testid:order-quantity", "coupon": "testid:order-coupon", "products": map[string]int{"studio-display": 120, "usb-dock": 80, "desk-lamp": 45}, "defaultProduct": "studio-display", "quantityBounds": []int{1, 5}, "invalidCouponError": "Coupon not recognized", "discount": "WELCOME10 gives 10 percent off items; empty means no discount", "expressShipping": 15},
-			"reviewStep":         map[string]string{"total": "testid:review-total", "submit": "testid:wizard-next"},
+			"reviewStep":         map[string]string{"total": "testid:review-total", "submit": "testid:wizard-next", "sequence": "Next from customer opens items; Next from items opens review. Assert review-total with kind number BEFORE clicking Next on review, which submits and removes review-total."},
 			"result":             map[string]string{"status": "testid:order-status", "confirmedText": "Order confirmed", "id": "testid:order-id", "total": "testid:order-total"},
 			"serverVerification": map[string]any{"method": "GET", "urlTemplate": origin + "/workspace/api/orders/${order-id}", "expectedStatus": 200, "totalPointer": "/total", "totalType": "number"},
 			"invoice":            map[string]string{"urlTemplate": origin + "/app/invoices/${order-id}", "id": "testid:invoice-id", "total": "testid:invoice-total", "tabRule": "Use an owned tab, return to main, then close only that owned tab"},

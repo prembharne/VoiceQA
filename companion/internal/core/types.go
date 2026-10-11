@@ -71,6 +71,7 @@ type Plan struct {
 	Clarification      string              `json:"clarification"`
 	Cases              []Case              `json:"cases"`
 	Viewports          []Viewport          `json:"viewports"`
+	PreserveViewport   bool                `json:"preserveViewport,omitempty"`
 	Confirmed          bool                `json:"confirmed"`
 	Visual             bool                `json:"visual"`
 	Model              string              `json:"model"`
@@ -151,12 +152,21 @@ func validateResolvedPlan(p Plan) error {
 	if len(p.Viewports) == 0 || len(p.Viewports) > 2 {
 		return errors.New("select one or two viewports")
 	}
+	if p.PreserveViewport && len(p.Viewports) != 1 {
+		return errors.New("current-width plans use one viewport without responsive replay")
+	}
 	if _, e := NewScope(p, "main"); e != nil {
 		return e
 	}
 	n := 0
 	httpCount := 0
 	for _, v := range p.Viewports {
+		if p.PreserveViewport {
+			if v.Width < 1 || v.Width > 16384 || v.Height < 1 || v.Height > 16384 {
+				return errors.New("current viewport is out of bounds")
+			}
+			continue
+		}
 		if v.Width < 320 || v.Width > 1920 || v.Height < 400 || v.Height > 1200 {
 			return errors.New("viewport is out of bounds")
 		}

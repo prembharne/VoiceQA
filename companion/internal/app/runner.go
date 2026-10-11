@@ -13,9 +13,10 @@ import (
 
 func (a *App) start(m native.Message) (any, error) {
 	var p struct {
-		PlanID  string `json:"planId"`
-		Version int    `json:"version"`
-		Key     string `json:"key"`
+		PlanID           string `json:"planId"`
+		Version          int    `json:"version"`
+		Key              string `json:"key"`
+		PreserveViewport bool   `json:"preserveViewport"`
 	}
 	if e := decode(m, &p); e != nil {
 		return nil, e
@@ -38,6 +39,12 @@ func (a *App) start(m native.Message) (any, error) {
 	}
 	if !plan.Confirmed || p.Version != plan.Version {
 		return nil, errors.New("confirm this exact plan version first")
+	}
+	// A compatibility flag cannot silently alter the exact confirmed plan.
+	if p.PreserveViewport {
+		if !plan.PreserveViewport {
+			return nil, errors.New("review and confirm a current-width copy of this saved plan first")
+		}
 	}
 	if e := core.ValidatePlan(plan); e != nil {
 		return nil, e
@@ -170,12 +177,24 @@ func (a *App) execute(ctx context.Context, r *core.Run) {
 			}
 			viewportLabel := fmt.Sprintf("%dx%d", viewport.Width, viewport.Height)
 			viewportAction := core.Action{Operation: "viewport", Label: "Set browser width to " + viewportLabel}
+			viewportOperation := "viewport"
+			if r.Plan.PreserveViewport {
+				viewportOperation = "current_viewport"
+				viewportAction.Operation = viewportOperation
+				viewportAction.Label = "Keep the current browser width"
+			}
 			vi, e := a.beginStep(ctx, r, viewportAction, "Browser layout", viewportLabel)
 			if e != nil {
 				a.setInterrupted(r, e)
 				return
 			}
-			result, e := a.browser(ctx, r.ID, "", map[string]any{"operation": "viewport", "viewport": viewport, "origin": r.Plan.Origin})
+			result, e := a.browser(ctx, r.ID, "", map[string]any{"operation": viewportOperation, "viewport": viewport, "origin": r.Plan.Origin})
+			if r.Plan.PreserveViewport && e == nil {
+				actual := observedViewport(result)
+				viewportLabel = fmt.Sprintf("%dx%d", actual.Width, actual.Height)
+				r.Steps[vi].Viewport = viewportLabel
+				r.Plan.Viewports = []core.Viewport{actual}
+			}
 			r.Steps[vi].CompletedAt = core.Now()
 			r.Steps[vi].Result = result
 			r.Steps[vi].Page, _ = result["page"].(string)

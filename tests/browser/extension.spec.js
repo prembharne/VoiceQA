@@ -479,6 +479,11 @@ test('chat reviews a fixture plan and streams a real run into the conversation',
   await control.getByRole('button', { name: 'New chat', exact: true }).click();
   await target.goto('http://127.0.0.1:4173/fixtures/shop');
   await target.bringToFront();
+  const tabId = await worker.evaluate(
+    async () =>
+      (await chrome.tabs.query({})).find((t) => t.url === 'http://127.0.0.1:4173/fixtures/shop').id,
+  );
+  await invoke('bind', { tabId });
   await control
     .getByRole('button', { name: 'Run the demo test suite', exact: true })
     .evaluate((button) => button.click());
@@ -665,7 +670,11 @@ async function advancedRun() {
     advancedOrigin + '/advanced',
   );
   await invoke('bind', { tabId });
-  const plan = await invoke('plan.propose', { request: 'Run the advanced fixture', demo: true });
+  const plan = await invoke('plan.propose', {
+    request: 'Run the advanced fixture',
+    demo: true,
+    responsive: true,
+  });
   await invoke('plan.confirm', { id: plan.id, version: plan.version });
   const { runId } = await invoke('run.start', {
     planId: plan.id,
@@ -848,7 +857,7 @@ test('mandatory private-field redaction survives an empty custom mask', async ()
   }
 });
 
-async function labSuite(path, mode = 'qa', dataset) {
+async function labSuite(path, mode = 'qa', dataset, responsive = false) {
   const url = advancedOrigin + path;
   await target.goto(url);
   await target.bringToFront();
@@ -860,6 +869,7 @@ async function labSuite(path, mode = 'qa', dataset) {
   const plan = await invoke('plan.propose', {
     request: 'Run the lab fixture',
     demo: true,
+    responsive,
     mode,
     securityAuthorized: mode === 'security',
     dataset,
@@ -1076,7 +1086,7 @@ test('RelayDesk full application suite verifies wizard, captures, server totals,
 });
 
 test('RelayDesk responsive suite verifies populated desktop and mobile views', async () => {
-  const run = await labSuite('/app/layout');
+  const run = await labSuite('/app/layout', 'qa', undefined, true);
   expect(run.status, JSON.stringify(run, null, 2)).toBe('passed');
   expect(
     new Set(run.steps.filter((s) => s.action.operation === 'assert').map((s) => s.viewport)).size,
@@ -1310,5 +1320,58 @@ test('RelayDesk distinguishes submitted orders from unavailable confirmation', a
     );
   } finally {
     await target.unroute(pattern, handler);
+  }
+});
+
+test('current-width plans keep the actual viewport on repeated runs without setting metrics', async () => {
+  test.setTimeout(30000);
+  await target.setViewportSize({ width: 1111, height: 777 });
+  await target.goto('http://127.0.0.1:4173/fixtures/shop');
+  await target.bringToFront();
+  const tabId = await worker.evaluate(
+    async () =>
+      (await chrome.tabs.query({})).find((t) => t.url === 'http://127.0.0.1:4173/fixtures/shop').id,
+  );
+  await invoke('bind', { tabId });
+  await worker.evaluate(() => {
+    globalThis.__originalMetricsCommand = chrome.debugger.sendCommand;
+    globalThis.__metricsWrites = 0;
+    chrome.debugger.sendCommand = (...args) => {
+      if (args[1] === 'Emulation.setDeviceMetricsOverride') globalThis.__metricsWrites++;
+      return globalThis.__originalMetricsCommand.apply(chrome.debugger, args);
+    };
+  });
+  try {
+    const plan = await invoke('plan.propose', {
+      request: 'Run fixture at the current width',
+      demo: true,
+      responsive: false,
+    });
+    expect(plan.preserveViewport).toBe(true);
+    expect(plan.viewports).toEqual([{ width: 1111, height: 777 }]);
+    await invoke('plan.confirm', { id: plan.id, version: plan.version });
+    for (let pass = 0; pass < 2; pass++) {
+      const { runId } = await invoke('run.start', {
+        planId: plan.id,
+        version: plan.version,
+        key: crypto.randomUUID(),
+      });
+      await expect
+        .poll(async () => (await invoke('run.get', { id: runId })).status, { timeout: 12000 })
+        .not.toBe('running');
+      const run = await invoke('run.get', { id: runId });
+      expect(run.status).toBe('passed');
+      expect(run.steps.every((s) => s.viewport === '1111x777')).toBe(true);
+      expect(await target.evaluate(() => ({ width: innerWidth, height: innerHeight }))).toEqual({
+        width: 1111,
+        height: 777,
+      });
+    }
+    expect(await worker.evaluate(() => globalThis.__metricsWrites)).toBe(0);
+  } finally {
+    await worker.evaluate(() => {
+      chrome.debugger.sendCommand = globalThis.__originalMetricsCommand;
+    });
+    await target.setViewportSize({ width: 1440, height: 900 });
   }
 });

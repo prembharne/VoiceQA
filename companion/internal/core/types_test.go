@@ -5,6 +5,18 @@ import "testing"
 func validPlan() Plan {
 	return Plan{URL: "https://example.test/", Origin: "https://example.test", Viewports: []Viewport{{Width: 1440, Height: 900}}, Cases: []Case{{Name: "Cart", Steps: []Action{{Operation: "navigate", Value: "https://example.test/"}, {Operation: "assert", Target: "#total", Assertion: &Assertion{Kind: "number", Expected: "24"}}}}}}
 }
+func TestCurrentViewportDoesNotRequireEmulationBounds(t *testing.T) {
+	p := validPlan()
+	p.PreserveViewport = true
+	p.Viewports = []Viewport{{Width: 2560, Height: 1440}}
+	if err := ValidatePlan(p); err != nil {
+		t.Fatal(err)
+	}
+	p.Viewports = append(p.Viewports, Viewport{Width: 390, Height: 844})
+	if err := ValidatePlan(p); err == nil {
+		t.Fatal("current viewport repeated at a mobile size")
+	}
+}
 func TestRequireIndependentAssertion(t *testing.T) {
 	p := validPlan()
 	p.Cases[0].Steps = []Action{{Operation: "navigate", Value: p.URL}, {Operation: "click", Target: "#submit"}}
