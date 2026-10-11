@@ -477,3 +477,194 @@ test('OpenRouter setup saves the provider and keeps speech credentials separate'
   await control.getByRole('button', { name: 'Save settings', exact: true }).click();
   await expect.poll(async () => (await invoke('settings.get')).aiProvider).toBe('openai');
 });
+
+const advancedOrigin = 'http://127.0.0.1:4174';
+const testSeed = 'GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ';
+async function advancedRun() {
+  await target.goto(advancedOrigin + '/advanced');
+  await target.bringToFront();
+  const tabId = await worker.evaluate(
+    async (url) => (await chrome.tabs.query({})).find((t) => t.url === url)?.id,
+    advancedOrigin + '/advanced',
+  );
+  await invoke('bind', { tabId });
+  const plan = await invoke('plan.propose', { request: 'Run the advanced fixture', demo: true });
+  await invoke('plan.confirm', { id: plan.id, version: plan.version });
+  const { runId } = await invoke('run.start', {
+    planId: plan.id,
+    version: plan.version,
+    key: crypto.randomUUID(),
+  });
+  await expect
+    .poll(
+      async () => {
+        const r = await invoke('run.get', { id: runId });
+        if (r.status !== 'running') throw new Error(JSON.stringify(r, null, 2));
+        return r.handoff ? 'checkpoint' : r.status;
+      },
+      { timeout: 60000, intervals: [250] },
+    )
+    .toBe('checkpoint');
+  return { runId, plan, tabId };
+}
+
+test('test credentials are saved through Settings with no plaintext returned', async () => {
+  await control.bringToFront();
+  await control.getByRole('button', { name: 'Open settings' }).click();
+  await control.getByLabel('Profile alias', { exact: true }).fill('advanced-test');
+  await control.getByLabel('Profile label', { exact: true }).fill('Advanced lab');
+  await control.getByLabel('Credential origin', { exact: true }).fill(advancedOrigin);
+  await control.getByLabel('Test username', { exact: true }).fill('qa@voiceqa.test');
+  await control.getByLabel('Test password', { exact: true }).fill('fixture-only');
+  await control.getByLabel('TOTP seed or otpauth URI', { exact: true }).fill(testSeed);
+  await control.getByRole('button', { name: 'Save test credentials', exact: true }).click();
+  await expect(control.locator('.auth-profile')).toContainText('advanced-test');
+  const profiles = await invoke('auth.list');
+  expect(profiles[0]).toMatchObject({
+    id: 'advanced-test',
+    hasTotp: true,
+    hasPassword: true,
+    hasUsername: true,
+  });
+  expect(JSON.stringify(profiles)).not.toContain(testSeed);
+  expect(JSON.stringify(profiles)).not.toContain('fixture-only');
+  await expect(control.getByLabel('Test password', { exact: true })).toHaveValue('');
+  await control.setViewportSize({ width: 330, height: 950 });
+  expect(await control.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(
+    true,
+  );
+  await control.screenshot({ path: resolve(work, 'auth-settings.png'), fullPage: true });
+  await control.getByRole('button', { name: 'New chat', exact: true }).click();
+});
+
+test('shared-page picker approves an additional tab and unsharing leaves the user tab open', async () => {
+  await target.goto(advancedOrigin + '/advanced');
+  await target.bringToFront();
+  const mainId = await worker.evaluate(
+    async (url) => (await chrome.tabs.query({})).find((t) => t.url === url)?.id,
+    advancedOrigin + '/advanced',
+  );
+  await invoke('bind', { tabId: mainId });
+  const extra = await context.newPage();
+  await extra.goto('http://127.0.0.1:4173/');
+  const extraId = await worker.evaluate(
+    async (url) => (await chrome.tabs.query({})).find((t) => t.url === url)?.id,
+    'http://127.0.0.1:4173/',
+  );
+  await control.bringToFront();
+  await control.getByLabel('Test options', { exact: true }).click();
+  await control.getByRole('button', { name: 'Choose another tab', exact: true }).click();
+  await expect(control.getByLabel('Additional website tab', { exact: true })).toBeVisible({
+    timeout: 10000,
+  });
+  await control.getByLabel('Additional website tab', { exact: true }).selectOption(String(extraId));
+  await control
+    .getByRole('button', { name: 'Share selected tab', exact: true })
+    .evaluate((button) => button.click());
+  await expect.poll(async () => (await invoke('pages.list')).length).toBe(2);
+  await expect(control.locator('.shared-page')).toHaveCount(2);
+  await expect(invoke('pages.share', { tabId: extraId })).rejects.toThrow('already shared');
+  await control.screenshot({ path: resolve(work, 'shared-pages.png'), fullPage: true });
+  await control
+    .getByRole('button', { name: 'Unshare page2', exact: true })
+    .evaluate((button) => button.click());
+  await expect.poll(async () => (await invoke('pages.list')).length).toBe(1);
+  expect(extra.isClosed()).toBe(false);
+  await control.getByLabel('Test options', { exact: true }).evaluate((button) => button.click());
+  await extra.close();
+});
+
+test('advanced real-browser fixture verifies TOTP, tab isolation, readiness and human completion', async () => {
+  const { runId, plan, tabId } = await advancedRun();
+  let run = await invoke('run.get', { id: runId });
+  expect(run.handoff.kind).toBe('captcha');
+  expect(run.steps.filter((s) => s.action.operation === 'assert')).toHaveLength(5);
+  expect(
+    run.steps.filter((s) => s.action.operation === 'assert').every((s) => s.status === 'passed'),
+  ).toBe(true);
+  const wait = run.steps.find((s) => s.action.operation === 'wait_for');
+  expect(Date.parse(wait.completedAt) - Date.parse(wait.startedAt)).toBeGreaterThanOrEqual(800);
+  expect(run.steps.some((s) => s.page === 'child' && s.status === 'passed')).toBe(true);
+  const serialized = JSON.stringify({ plan, run });
+  for (const secret of [testSeed, 'fixture-only', 'qa@voiceqa.test'])
+    expect(serialized).not.toContain(secret);
+  const state = await invoke('state');
+  expect(state.pages.child).toBeUndefined();
+  expect(state.target.tabId).toBe(tabId);
+  await expect(
+    control.getByRole('button', { name: 'I completed the checkpoint', exact: true }),
+  ).toBeVisible();
+  await control.screenshot({ path: resolve(work, 'human-checkpoint.png'), fullPage: true });
+  await target.getByTestId('complete-test-captcha').click();
+  await control
+    .getByRole('button', { name: 'I completed the checkpoint', exact: true })
+    .evaluate((button) => button.click());
+  await expect
+    .poll(async () => (await invoke('run.get', { id: runId })).status, { timeout: 15000 })
+    .toBe('passed');
+  run = await invoke('run.get', { id: runId });
+  expect(run.steps.filter((s) => s.action.operation === 'assert')).toHaveLength(6);
+  expect(run.handoff).toBeUndefined();
+  expect((await invoke('state')).attached).toBe(false);
+  expect(target.isClosed()).toBe(false);
+  expect(
+    run.steps.filter((s) => s.result?.capture).every((s) => s.result.capture.width === 1440),
+  ).toBe(true);
+  await writeFile(resolve(work, 'advanced-run.json'), JSON.stringify(run, null, 2));
+});
+
+test('checkpoint cancellation prevents late completion from resuming the run', async () => {
+  const { runId } = await advancedRun();
+  const gate = (await invoke('run.get', { id: runId })).handoff;
+  await invoke('cancel');
+  await expect.poll(async () => (await invoke('run.get', { id: runId })).status).toBe('cancelled');
+  await expect(invoke('handoff.complete', { id: gate.id })).rejects.toThrow('no longer active');
+  const run = await invoke('run.get', { id: runId });
+  expect(run.steps.filter((s) => s.action.operation === 'assert')).toHaveLength(5);
+  expect(run.handoff).toBeUndefined();
+  expect((await invoke('state')).attached).toBe(false);
+});
+
+test('operator acknowledgment cannot pass an uncompleted challenge', async () => {
+  const { runId } = await advancedRun();
+  const gate = (await invoke('run.get', { id: runId })).handoff;
+  await invoke('handoff.complete', { id: gate.id });
+  await expect
+    .poll(async () => (await invoke('run.get', { id: runId })).status, { timeout: 15000 })
+    .toBe('failed');
+  const run = await invoke('run.get', { id: runId });
+  expect(run.steps.at(-1).status).toBe('failed');
+  expect(run.steps.at(-1).result.expected).toBe('CAPTCHA fixture completed');
+  expect(run.steps.at(-1).result.actual).not.toBe('CAPTCHA fixture completed');
+});
+
+test('mandatory private-field redaction survives an empty custom mask', async () => {
+  await target.goto(advancedOrigin + '/advanced');
+  await target.bringToFront();
+  const tabId = await worker.evaluate(
+    async (url) => (await chrome.tabs.query({})).find((t) => t.url === url)?.id,
+    advancedOrigin + '/advanced',
+  );
+  await invoke('bind', { tabId });
+  const old = (await invoke('settings.get')).maskSelectors;
+  await invoke('settings.save', { maskSelectors: '' });
+  try {
+    await target.getByTestId('auth-password').fill('private-value-for-test');
+    await target.getByTestId('auth-otp').fill('123456');
+    const view = await invoke('observe');
+    expect(view.controls.find((c) => c.target === 'testid:auth-password').value).toBe('[redacted]');
+    expect(view.controls.find((c) => c.target === 'testid:auth-otp').value).toBe('[redacted]');
+    const response = await worker.evaluate(
+      (tabId) =>
+        chrome.tabs.sendMessage(tabId, {
+          type: 'vqa.assert',
+          action: { target: 'testid:auth-otp', assertion: { kind: 'value', expected: '123456' } },
+        }),
+      tabId,
+    );
+    expect(response.error).toContain('redacted fields');
+    expect(response.result).toBeUndefined();
+  } finally {
+    await invoke('settings.save', { maskSelectors: old });
+  }
+});

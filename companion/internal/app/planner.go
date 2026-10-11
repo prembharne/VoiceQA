@@ -12,7 +12,7 @@ import (
 
 // Drafting never dispatches page mutations. A single retry repairs invalid output,
 // using the same model, observations and deadline. Only a validated draft is saved.
-func (a *App) draftPlan(ctx context.Context, request, url, origin string, responsive bool, obs map[string]any) (core.Plan, error) {
+func (a *App) draftPlan(ctx context.Context, request, url, origin string, responsive bool, obs map[string]any, pages ...core.Page) (core.Plan, error) {
 	ctx, cancel := context.WithTimeout(ctx, 100*time.Second)
 	defer cancel()
 	s := a.getSettings()
@@ -22,12 +22,38 @@ func (a *App) draftPlan(ctx context.Context, request, url, origin string, respon
 	if obs["fixture"] == "voiceqa-shop-v1" && (strings.HasPrefix(origin, "http://127.0.0.1:") || strings.HasPrefix(origin, "http://localhost:")) {
 		input["fixtureRequirements"] = provider.DemoPlan(url, origin, "").Cases
 	}
+	profiles, _ := a.authList()
+	allowedProfiles := []AuthProfile{}
+	for _, profile := range profiles {
+		if profile.Origin == origin {
+			allowedProfiles = append(allowedProfiles, profile)
+		} else {
+			for _, page := range pages {
+				if page.Origin == profile.Origin {
+					allowedProfiles = append(allowedProfiles, profile)
+					break
+				}
+			}
+		}
+	}
+	input["sharedPages"] = pages
+	input["authProfiles"] = allowedProfiles
+	if obs["fixture"] == "voiceqa-advanced-v1" && (strings.HasPrefix(origin, "http://127.0.0.1:") || strings.HasPrefix(origin, "http://localhost:")) {
+		profile := ""
+		for _, entry := range allowedProfiles {
+			if entry.Origin == origin && entry.HasUsername && entry.HasPassword && entry.HasTOTP {
+				profile = entry.ID
+				break
+			}
+		}
+		input["fixtureRequirements"] = provider.AdvancedDemoPlan(url, origin, request, profile).Cases
+	}
 	totalUsage := map[string]int{}
 	for attempt := 0; attempt < 2; attempt++ {
 		if e := ctx.Err(); e != nil {
 			return core.Plan{}, e
 		}
-		raw, usage, e := client.Structured(ctx, key, s.Model, provider.PlanInstructions, input, provider.PlanSchema())
+		raw, usage, e := client.Structured(ctx, key, s.Model, provider.PlanInstructions, input, provider.PlanSchema(pages...))
 		for name, tokens := range usage {
 			totalUsage[name] += tokens
 		}
@@ -44,7 +70,7 @@ func (a *App) draftPlan(ctx context.Context, request, url, origin string, respon
 			} `json:"result"`
 		}
 		e = json.Unmarshal(raw, &draft)
-		plan := core.Plan{Summary: draft.Summary, Cases: draft.Result.Cases}
+		plan := core.Plan{Summary: draft.Summary, Cases: draft.Result.Cases, Pages: pages}
 		if e == nil {
 			switch draft.Result.Type {
 			case "plan":
@@ -78,7 +104,7 @@ func (a *App) draftPlan(ctx context.Context, request, url, origin string, respon
 			for i := range plan.Cases {
 				plan.Cases[i].Source = "agent-proposed; requires confirmation"
 				for j := range plan.Cases[i].Steps {
-					if plan.Cases[i].Steps[j].Operation != "assert" {
+					if plan.Cases[i].Steps[j].Operation != "assert" && plan.Cases[i].Steps[j].Operation != "wait_for" {
 						// Only explicit assert operations are checks. Remove unused
 						// assertion metadata that some models attach to clicks/fills.
 						plan.Cases[i].Steps[j].Assertion = nil

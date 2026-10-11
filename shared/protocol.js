@@ -2,6 +2,13 @@ export const VERSION = 1;
 export const HOST_NAME = 'com.voiceqa.companion';
 export const MAX_CHUNK_BYTES = 192 * 1024;
 export const OPERATIONS = new Set([
+  'open_tab',
+  'switch_tab',
+  'close_tab',
+  'wait_for',
+  'fill_secret',
+  'fill_totp',
+  'human_checkpoint',
   'navigate',
   'click',
   'fill',
@@ -15,6 +22,10 @@ export const OPERATIONS = new Set([
   'accessibility',
 ]);
 export const ASSERTIONS = new Set([
+  'text_contains',
+  'value',
+  'hidden',
+  'url_contains',
   'text',
   'visible',
   'count',
@@ -37,7 +48,7 @@ export function validateAction(action) {
     throw new Error('Invalid target');
   if (action.value && (typeof action.value !== 'string' || action.value.length > 4000))
     throw new Error('Invalid action value');
-  if (action.operation === 'assert' && !ASSERTIONS.has(action.assertion?.kind))
+  if (['assert', 'wait_for'].includes(action.operation) && !ASSERTIONS.has(action.assertion?.kind))
     throw new Error('Unsupported assertion');
   if (
     action.operation === 'key' &&
@@ -46,6 +57,11 @@ export function validateAction(action) {
     throw new Error('Unsupported key');
   if (action.operation === 'navigate' && !/^https?:\/\//.test(action.value || ''))
     throw new Error('Only HTTP(S) navigation is allowed');
+  if (
+    action.timeoutMs &&
+    (!Number.isInteger(action.timeoutMs) || action.timeoutMs < 500 || action.timeoutMs > 30000)
+  )
+    throw new Error('Invalid step timeout');
   return action;
 }
 export function isAllowedURL(url, origin) {

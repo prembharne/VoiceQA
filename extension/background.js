@@ -1,3 +1,4 @@
+import { PageRegistry } from './page-registry.js';
 import { NativeClient } from './native-client.js';
 import { envelope, validateAction, isAllowedURL } from '../shared/protocol.js';
 import { ExecutionFence } from '../shared/execution-fence.js';
@@ -8,6 +9,9 @@ const panels = new Set();
 let state = {
   connected: false,
   target: null,
+  pages: {},
+  currentPage: 'main',
+  handoff: null,
   runId: null,
   paused: false,
   cancelled: false,
@@ -22,7 +26,7 @@ let detaching = false;
 const ready = (async () => {
   const saved = await chrome.storage.session.get(['session', 'journal']);
   if (saved.session) {
-    state = { ...state, ...saved.session, connected: false, attached: false };
+    Object.assign(state, saved.session, { connected: false, attached: false });
     if (state.runId) {
       state.cancelled = true;
       state.error = 'Extension restarted. The interrupted run will not be replayed.';
@@ -57,9 +61,22 @@ const native = new NativeClient(onNative, async (error) => {
   state.error = error.message;
   if (state.runId) {
     state.cancelled = true;
+    state.handoff = null;
     await cleanup();
+    await registry.cleanupCreated();
   }
   await save();
+});
+let activeViewport = null;
+const registry = new PageRegistry({
+  state,
+  chrome,
+  fence,
+  detach: cleanup,
+  attach,
+  command,
+  save,
+  viewport: () => activeViewport,
 });
 chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch(() => {});
 chrome.runtime.onConnect.addListener((port) => {
@@ -83,6 +100,7 @@ chrome.runtime.onConnect.addListener((port) => {
 });
 async function handlePanel(method, payload) {
   await ready;
+  registry.ensure();
   if (method === 'state') return state;
   if (method === 'system.info')
     return { extensionId: chrome.runtime.id, version: chrome.runtime.getManifest().version };
@@ -114,6 +132,10 @@ async function handlePanel(method, payload) {
       url: tab.url,
       title: tab.title,
     };
+    state.pages = { main: { ...state.target, alias: 'main', owned: false } };
+    state.currentPage = 'main';
+    state.handoff = null;
+    activeViewport = null;
     state.cancelled = false;
     state.paused = false;
     state.error = '';
@@ -126,9 +148,67 @@ async function handlePanel(method, payload) {
     if (state.runId) throw new Error('Stop the active run before removing its website.');
     await cleanup();
     state.target = null;
+    state.pages = {};
+    state.currentPage = 'main';
+    state.handoff = null;
     state.error = '';
     await save();
     return { unbound: true };
+  }
+  if (method === 'pages.list') return registry.publicPages();
+  if (method === 'pages.share') {
+    if (state.runId) throw new Error('Finish the run before changing shared pages.');
+    const pages = registry.ensure();
+    if (!pages.main) throw new Error('Share a main website first.');
+    const tab = await chrome.tabs.get(payload.tabId);
+    const origin = new URL(tab.url).origin;
+    if (
+      !isAllowedURL(tab.url, origin) ||
+      tab.windowId !== pages.main.windowId ||
+      Object.keys(pages).length >= 5
+    )
+      throw new Error('Share an HTTP(S) tab in the same window, within five pages.');
+    if (!(await chrome.permissions.contains({ origins: [origin + '/*'] })))
+      throw new Error('Allow access to the additional website first.');
+    if (Object.values(pages).some((p) => p.tabId === tab.id))
+      throw new Error('This tab is already shared.');
+    const alias =
+      payload.alias || ['page2', 'page3', 'page4', 'page5'].find((name) => !pages[name]);
+    if (!/^[a-z][a-z0-9_-]{0,31}$/.test(alias) || pages[alias])
+      throw new Error('Use a unique page alias.');
+    pages[alias] = {
+      alias,
+      tabId: tab.id,
+      windowId: tab.windowId,
+      origin,
+      url: tab.url,
+      title: tab.title?.slice(0, 200),
+      owned: false,
+    };
+    await chrome.tabs.update(pages.main.tabId, { active: true });
+    await save();
+    return registry.publicPages();
+  }
+  if (method === 'pages.remove') {
+    if (state.runId || payload.alias === 'main')
+      throw new Error('Only extra shared pages can be removed while idle.');
+    delete registry.ensure()[payload.alias];
+    await save();
+    return registry.publicPages();
+  }
+  if (method === 'handoff.complete') {
+    if (
+      !state.runId ||
+      !state.handoff ||
+      payload.id !== state.handoff.id ||
+      state.handoff.runId !== state.runId ||
+      state.cancelled
+    )
+      throw new Error('This checkpoint is no longer active.');
+    await checkTarget();
+    state.handoff.completed = true;
+    await save();
+    return { completed: true };
   }
   if (method === 'observe') {
     return content({ type: 'vqa.observe', maskSelectors: state.settings?.maskSelectors });
@@ -155,7 +235,21 @@ async function handlePanel(method, payload) {
     state.cancelled = false;
     const tab = await checkTarget();
     state.target.url = tab.url;
-    return native.rpc(method, { ...payload, url: tab.url, origin: state.target.origin });
+    const main = registry.primary();
+    if (state.target.tabId !== main.tabId)
+      throw new Error('Return to the main shared tab to create a plan.');
+    main.url = tab.url;
+    if (main.origin !== state.target.origin) {
+      main.origin = state.target.origin;
+      await native.rpc('project.configure', { origin: main.origin, url: tab.url });
+    }
+    await save();
+    return native.rpc(method, {
+      ...payload,
+      url: tab.url,
+      origin: registry.primary().origin,
+      pages: registry.publicPages(),
+    });
   }
   if (method === 'run.start') {
     if (!state.target) throw new Error('Select a target first');
@@ -164,6 +258,15 @@ async function handlePanel(method, payload) {
     state.paused = false;
     state.error = '';
     diagnostics.length = 0;
+    registry.ensure();
+    const planned = await native.rpc('plan.get', { id: payload.planId });
+    if (planned.origin !== registry.primary()?.origin)
+      throw new Error("Share this plan\'s main website before running it.");
+    for (const page of planned.pages || []) {
+      const shared = state.pages[page.alias];
+      if (!shared || shared.owned || shared.origin !== page.origin)
+        throw new Error('A required page is no longer shared with its approved origin.');
+    }
     await attach();
     try {
       const result = await native.rpc(method, payload);
@@ -183,6 +286,9 @@ async function handlePanel(method, payload) {
   }
   if (
     [
+      'auth.list',
+      'auth.save',
+      'auth.delete',
       'settings.get',
       'plan.confirm',
       'plan.get',
@@ -206,9 +312,11 @@ async function stop() {
   fence.invalidate();
   state.cancelled = true;
   state.paused = false;
+  state.handoff = null;
   await save();
   try {
     await cleanup();
+    await registry.cleanupCreated();
     if (native.port) await native.rpc('run.cancel', {}, state.runId ? { runId: state.runId } : {});
   } catch (e) {
     state.error = e.message;
@@ -220,8 +328,8 @@ async function stop() {
 async function checkTarget() {
   if (!state.target) throw fault('No target is selected', 'blocked');
   const tab = await chrome.tabs.get(state.target.tabId);
-  if (!isAllowedURL(tab.url, state.target.origin))
-    throw fault('Target left the approved origin', 'blocked');
+  if (!registry.allows(tab.url)) throw fault('Target left explicitly approved origins', 'blocked');
+  state.target.origin = new URL(tab.url).origin;
   if (!tab.active) throw fault('Return to the selected tab and say resume', 'paused');
   const win = await chrome.windows.get(tab.windowId);
   if (!win.focused) throw fault('Focus the target browser window and resume', 'paused');
@@ -258,6 +366,8 @@ async function content(message, token) {
     frameId: 0,
   });
   if (response.error) throw fault(response.error, response.code);
+  if (message.type === 'vqa.observe' && !registry.allows(response.result.url))
+    throw fault('Observation left explicitly approved origins.', 'blocked');
   return response.result;
 }
 async function attach(token) {
@@ -272,6 +382,7 @@ async function attach(token) {
     throw error;
   }
   state.attached = true;
+  await command('Page.enable', {}, token);
   await command('Runtime.enable', {}, token);
   await command('Log.enable', {}, token);
   await command('Network.enable', {}, token);
@@ -361,24 +472,35 @@ async function click(target, token) {
   return r;
 }
 async function navigation(url, token) {
-  if (!isAllowedURL(url, state.target.origin))
-    throw fault('Navigation outside approved origin', 'blocked');
-  await command('Page.navigate', { url }, token);
+  if (!registry.allows(url)) throw fault('Navigation outside approved origin', 'blocked');
+  state.target.origin = new URL(url).origin;
+  const navigated = await command('Page.navigate', { url }, token);
+  if (navigated.errorText) throw fault('Navigation failed: ' + navigated.errorText, 'blocked');
   const end = Date.now() + 15000;
   while (Date.now() < end) {
     fence.check(token, state);
     if (state.cancelled) throw fault('Run cancelled', 'cancelled');
     const tab = await chrome.tabs.get(state.target.tabId);
-    if (tab.status === 'complete' && tab.url === url) {
-      await ensureContent(token);
-      return { url: tab.url };
+    if (tab.status === 'complete') {
+      const { frameTree } = await command('Page.getFrameTree', {}, token);
+      const loaded = navigated.loaderId
+        ? frameTree.frame.loaderId === navigated.loaderId
+        : tab.url === url;
+      if (loaded && frameTree.frame.url === tab.url) {
+        if (!registry.allows(tab.url))
+          throw fault('Redirect left explicitly approved origins', 'blocked');
+        state.target.origin = new URL(tab.url).origin;
+        state.target.url = tab.url;
+        await ensureContent(token);
+        return { url: tab.url };
+      }
     }
     await delay(100);
   }
   throw fault('Navigation timed out; outcome is unknown', 'needs_review');
 }
 async function assertion(action, token) {
-  const end = Date.now() + 6000;
+  const end = Date.now() + (action.timeoutMs || 6000);
   let last = {};
   while (Date.now() < end) {
     fence.check(token, state);
@@ -403,20 +525,48 @@ async function assertion(action, token) {
   e.result = last;
   throw e;
 }
-async function execute(action, token) {
+async function execute(action, token, secureOrigin = '') {
+  const secure = Boolean(secureOrigin);
   validateAction(action);
   await waitForTarget(token);
   switch (action.operation) {
+    case 'open_tab':
+      return registry.open(action.target, action.value, token);
+    case 'switch_tab':
+      await registry.activate(action.target, token);
+      return { page: action.target };
+    case 'close_tab':
+      return registry.close(action.target, token);
+    case 'human_checkpoint':
+      state.handoff = {
+        id: crypto.randomUUID(),
+        runId: state.runId,
+        kind: action.value,
+        label: action.label,
+        page: state.currentPage,
+        completed: false,
+      };
+      await save();
+      return { handoff: state.handoff };
+    case 'wait_for':
+      return assertion(action, token);
     case 'navigate':
       return navigation(action.value, token);
     case 'click':
       await click(action.target, token);
       return { dispatched: true };
     case 'fill': {
+      if (secure && new URL((await checkTarget()).url).origin !== secureOrigin)
+        throw fault('Credential origin changed before entry.', 'blocked');
+      if (secure) await content({ type: 'vqa.mark-secret', target: action.target }, token);
       const r = await click(action.target, token);
+      if (r.privateField && !secure)
+        throw fault('Use a saved test credential profile for private fields.', 'blocked');
       if (!['INPUT', 'TEXTAREA'].includes(r.tag))
         throw fault('Fill requires a text input', 'blocked');
       await key('a', 2, token);
+      if (secure && new URL((await checkTarget()).url).origin !== secureOrigin)
+        throw fault('Credential origin changed before entry.', 'blocked');
       await command('Input.insertText', { text: action.value || '' }, token);
       return { dispatched: true };
     }
@@ -475,6 +625,7 @@ async function capture(maskSelectors, token) {
       platform: platform.os,
       maskSelectors,
       diagnostics: [...diagnostics],
+      url: view.url,
     };
   } finally {
     await chrome.tabs
@@ -499,8 +650,9 @@ async function onNative(message) {
   await ready;
   const p = message.payload;
   try {
-    if (!state.target || p.origin !== state.target.origin)
-      throw fault('Browser request does not match selected origin', 'blocked');
+    registry.ensure();
+    if (!state.target || p.origin !== registry.primary()?.origin)
+      throw fault('Browser request does not match approved suite origin', 'blocked');
     if (message.runId) {
       if (state.runId && state.runId !== message.runId)
         throw fault('Run identity changed', 'blocked');
@@ -508,7 +660,26 @@ async function onNative(message) {
     }
     if (p.operation === 'cleanup') {
       await cleanup();
+      state.handoff = null;
+      activeViewport = null;
+      await registry.cleanupCreated();
       native.send(envelope('browser.result', { requestId: message.id, result: { cleaned: true } }));
+      return;
+    }
+    if (p.operation === 'handoff.poll') {
+      const gate = state.handoff;
+      if (!gate || gate.id !== p.id || gate.runId !== message.runId || state.cancelled)
+        throw fault('Checkpoint cancelled or superseded.', 'cancelled');
+      native.send(
+        envelope('browser.result', {
+          requestId: message.id,
+          result: { completed: gate.completed },
+        }),
+      );
+      if (gate.completed) {
+        state.handoff = null;
+        await save();
+      }
       return;
     }
     if (state.cancelled) throw fault('Run cancelled', 'cancelled');
@@ -523,7 +694,15 @@ async function onNative(message) {
         'needs_review',
       );
     }
-    const token = fence.token(message.runId, state.target.tabId);
+    let token = fence.token(message.runId, state.target.tabId);
+    if (p.operation === 'page_scope') {
+      await waitForTarget(token);
+      await cleanup();
+      await registry.cleanupCreated();
+      token = fence.token(message.runId, state.target.tabId);
+      await registry.activate(p.page || 'main', token);
+      token = fence.token(message.runId, state.target.tabId);
+    }
     await waitForTarget(token);
     let result;
     if (message.actionId) {
@@ -540,7 +719,41 @@ async function onNative(message) {
           token,
         );
         break;
+      case 'observe_page': {
+        const page = registry.ensure()[p.page];
+        const tab = page && (await chrome.tabs.get(page.tabId));
+        if (!tab || !registry.allows(tab.url))
+          throw fault('Additional page is no longer in its approved origin.', 'blocked');
+        await chrome.scripting.executeScript({
+          target: { tabId: page.tabId },
+          files: ['content.js'],
+        });
+        fence.check(token, state);
+        const observed = await chrome.tabs.sendMessage(
+          page.tabId,
+          { type: 'vqa.observe', maskSelectors: state.settings?.maskSelectors },
+          { frameId: 0 },
+        );
+        if (observed.error) throw new Error(observed.error);
+        if (!registry.allows(observed.result.url))
+          throw fault('Additional page observation left approved origins.', 'blocked');
+        result = { ...observed.result, page: page.alias, origin: new URL(tab.url).origin };
+        break;
+      }
+      case 'page_scope':
+        result = { page: state.currentPage, origin: state.target.origin, url: state.target.url };
+        break;
+      case 'location': {
+        const tab = await checkTarget();
+        result = {
+          page: state.currentPage,
+          origin: new URL(tab.url).origin,
+          url: tab.url,
+        };
+        break;
+      }
       case 'viewport':
+        activeViewport = p.viewport;
         await attach(token);
         await command(
           'Emulation.setDeviceMetricsOverride',
@@ -556,7 +769,7 @@ async function onNative(message) {
         break;
       case 'execute':
         await attach(token);
-        result = await execute(p.action, token);
+        result = await execute(p.action, token, p.secure === true ? p.secureOrigin : '');
         break;
       case 'capture':
         result = await capture(p.maskSelectors, token);
@@ -572,6 +785,11 @@ async function onNative(message) {
       default:
         throw fault('Unsupported browser request', 'blocked');
     }
+    result = {
+      ...result,
+      page: result.page || state.currentPage,
+      origin: result.origin || state.target.origin,
+    };
     const reply = { result };
     if (message.actionId) {
       journal[message.actionId] = { status: 'completed', reply };
@@ -604,7 +822,7 @@ chrome.debugger.onEvent.addListener((source, method, p) => {
 chrome.debugger.onDetach.addListener((source) => {
   if (source.tabId !== state.target?.tabId) return;
   state.attached = false;
-  if (state.runId && !stopping && !detaching) {
+  if (state.runId && !stopping && !detaching && !registry.switching) {
     fence.invalidate();
     state.cancelled = true;
     state.error = 'Debugger detached. Run stopped without replay.';
@@ -613,13 +831,13 @@ chrome.debugger.onDetach.addListener((source) => {
   void save();
 });
 chrome.tabs.onActivated.addListener(({ tabId }) => {
-  if (state.runId && tabId !== state.target?.tabId) {
+  if (state.runId && !registry.switching && tabId !== state.target?.tabId) {
     state.paused = true;
     void save();
   }
 });
 chrome.tabs.onRemoved.addListener((tabId) => {
-  if (tabId === state.target?.tabId) {
+  if (!registry.switching && tabId === state.target?.tabId) {
     void stop();
     state.target = null;
     void save();

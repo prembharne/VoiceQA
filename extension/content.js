@@ -2,7 +2,10 @@
   if (globalThis.__voiceqaInstalled) return;
   globalThis.__voiceqaInstalled = true;
   const overlays = [];
+  const mandatoryPrivate =
+    'input[type=password],input[autocomplete=one-time-code],[data-voiceqa-secret],[name=cf-turnstile-response],[name=g-recaptcha-response],[name=h-captcha-response]';
   let maskSelectors = 'input[type=password], input[type=email], [data-private]';
+  const privateSelectors = () => (maskSelectors ? maskSelectors + ',' : '') + mandatoryPrivate;
   const normalize = (s) =>
     String(s ?? '')
       .replace(/\s+/g, ' ')
@@ -33,7 +36,7 @@
   }
   function privateElement(el) {
     try {
-      return Boolean(el.matches(maskSelectors) || el.closest(maskSelectors));
+      return Boolean(el.matches(privateSelectors()) || el.closest(privateSelectors()));
     } catch {
       throw new Error('Invalid redaction selector');
     }
@@ -151,6 +154,7 @@
       y,
       target,
       tag: el.tagName,
+      privateField: privateElement(el),
       inputType: el.type,
       options: el.options ? [...el.options].map((o) => ({ value: o.value, label: o.label })) : [],
       selectedIndex: el.selectedIndex,
@@ -190,6 +194,20 @@
       fixture: document.querySelector('meta[name=voiceqa-fixture]')?.content || '',
       controls,
       text,
+      challenges: [
+        ...query('iframe[src],.cf-turnstile,.g-recaptcha,.h-captcha,[data-voiceqa-test-captcha]'),
+      ]
+        .filter(
+          (el) =>
+            /captcha|turnstile/i.test(el.src || el.className || '') ||
+            el.hasAttribute('data-voiceqa-test-captcha'),
+        )
+        .slice(0, 10)
+        .map((el) => ({
+          type: 'captcha',
+          target: selector(el),
+          testMode: el.hasAttribute('data-voiceqa-test-captcha'),
+        })),
       unsupportedFrames,
       viewport: { width: innerWidth, height: innerHeight },
     };
@@ -199,23 +217,27 @@
     let actual;
     let passed = false;
     let el;
-    if (kind === 'url') {
+    if (kind === 'url' || kind === 'url_contains') {
       actual = location.href;
-      passed = actual === expected;
+      passed = kind === 'url' ? actual === expected : actual.includes(expected);
     } else if (kind === 'no_overflow') {
       actual = document.documentElement.scrollWidth <= innerWidth + 1;
       passed = String(actual) === expected;
     } else if (kind === 'count') {
       actual = find(action.target).length;
       passed = actual === Number(expected);
-    } else if (kind === 'visible') {
-      actual = find(action.target).some(visible);
+    } else if (kind === 'visible' || kind === 'hidden') {
+      actual =
+        kind === 'visible' ? find(action.target).some(visible) : !find(action.target).some(visible);
       passed = String(actual) === expected;
     } else {
       el = unique(action.target);
       if (privateElement(el)) throw new Error('Assertions on redacted fields are not supported');
-      if (kind === 'text') {
+      if (kind === 'text' || kind === 'text_contains') {
         actual = normalize(el.textContent);
+        passed = kind === 'text' ? actual === expected : actual.includes(expected);
+      } else if (kind === 'value') {
+        actual = String(el.value ?? '');
         passed = actual === expected;
       } else if (kind === 'number') {
         actual = Number(normalize(el.textContent || el.value).replace(/[^\d.-]/g, ''));
@@ -257,7 +279,9 @@
         return true;
       }
     });
-    const masks = [...new Set([...query(maskSelectors), ...inaccessibleFrames])].filter(visible);
+    const masks = [...new Set([...query(privateSelectors()), ...inaccessibleFrames])].filter(
+      visible,
+    );
     for (const el of masks) {
       const r = el.getBoundingClientRect();
       let x = r.x,
@@ -295,14 +319,18 @@
     if (sender.id !== chrome.runtime.id || !message?.type?.startsWith('vqa.')) return false;
     (async () => {
       try {
-        if (message.maskSelectors) {
-          document.querySelector(message.maskSelectors);
+        if (typeof message.maskSelectors === 'string') {
+          if (message.maskSelectors) document.querySelector(message.maskSelectors);
           maskSelectors = message.maskSelectors;
         }
         let result;
         switch (message.type) {
           case 'vqa.observe':
             result = observe();
+            break;
+          case 'vqa.mark-secret':
+            unique(message.target).setAttribute('data-voiceqa-secret', '');
+            result = { marked: true };
             break;
           case 'vqa.resolve':
             result = resolve(message.target);
@@ -327,22 +355,18 @@
             const scan = await axe.run(document, {
               runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag21aa'] },
             });
-            const violations = scan.violations
-              .slice(0, 20)
-              .map((v) => ({
-                id: v.id,
-                impact: v.impact,
-                description: v.description,
-                help: v.help,
-                helpUrl: v.helpUrl,
-                nodeCount: v.nodes.length,
-                nodes: v.nodes
-                  .slice(0, 5)
-                  .map((n) => ({
-                    target: n.target,
-                    failureSummary: n.failureSummary?.slice(0, 600),
-                  })),
-              }));
+            const violations = scan.violations.slice(0, 20).map((v) => ({
+              id: v.id,
+              impact: v.impact,
+              description: v.description,
+              help: v.help,
+              helpUrl: v.helpUrl,
+              nodeCount: v.nodes.length,
+              nodes: v.nodes.slice(0, 5).map((n) => ({
+                target: n.target,
+                failureSummary: n.failureSummary?.slice(0, 600),
+              })),
+            }));
             result = {
               violations,
               violationCount: scan.violations.length,

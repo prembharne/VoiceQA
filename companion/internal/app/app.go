@@ -224,7 +224,9 @@ func (a *App) dispatch(m native.Message) (any, error) {
 	}
 	switch m.Type {
 	case "hello":
-		return map[string]any{"version": 1, "hostVersion": "0.1.0", "settings": a.getSettings(), "capabilities": []string{"dom", "input", "assertions", "accessibility", "visual", "voice", "reports"}}, nil
+		return map[string]any{"version": 1, "hostVersion": "0.3.0", "settings": a.getSettings(), "capabilities": []string{"dom", "input", "assertions", "accessibility", "visual", "voice", "reports", "multi-tab", "totp", "human-checkpoints", "condition-waits"}}, nil
+	case "auth.list", "auth.save", "auth.delete":
+		return a.authDispatch(m)
 	case "settings.get":
 		return a.getSettings(), nil
 	case "settings.save":
@@ -302,12 +304,13 @@ func (a *App) dispatch(m native.Message) (any, error) {
 		return p, a.Store.Put("project", p.Origin, p)
 	case "plan.propose":
 		var p struct {
-			Request    string `json:"request"`
-			URL        string `json:"url"`
-			Origin     string `json:"origin"`
-			Demo       bool   `json:"demo"`
-			Responsive bool   `json:"responsive"`
-			Visual     bool   `json:"visual"`
+			Pages      []core.Page `json:"pages"`
+			Request    string      `json:"request"`
+			URL        string      `json:"url"`
+			Origin     string      `json:"origin"`
+			Demo       bool        `json:"demo"`
+			Responsive bool        `json:"responsive"`
+			Visual     bool        `json:"visual"`
 		}
 		if e := decode(m, &p); e != nil {
 			return nil, e
@@ -319,6 +322,10 @@ func (a *App) dispatch(m native.Message) (any, error) {
 		if e := a.Store.Get("project", p.Origin, &project); e != nil {
 			return nil, errors.New("configure this target before proposing tests")
 		}
+		scopePlan := core.Plan{URL: p.URL, Origin: p.Origin, Pages: p.Pages}
+		if _, e := core.NewScope(scopePlan, "main"); e != nil {
+			return nil, e
+		}
 		plan := core.Plan{}
 		if p.Demo {
 			u, _ := url.Parse(p.URL)
@@ -329,20 +336,45 @@ func (a *App) dispatch(m native.Message) (any, error) {
 			if e != nil {
 				return nil, e
 			}
-			if obs["fixture"] != "voiceqa-shop-v1" {
+			if obs["fixture"] != "voiceqa-shop-v1" && obs["fixture"] != "voiceqa-advanced-v1" {
 				return nil, errors.New("open the VoiceQA demo shop before using its fixture plan")
 			}
-			plan = provider.DemoPlan(p.URL, p.Origin, p.Request)
+			if obs["fixture"] == "voiceqa-advanced-v1" {
+				profiles, _ := a.authList()
+				profile := ""
+				for _, entry := range profiles {
+					if entry.Origin == p.Origin && entry.HasUsername && entry.HasPassword && entry.HasTOTP {
+						profile = entry.ID
+						break
+					}
+				}
+				plan = provider.AdvancedDemoPlan(p.URL, p.Origin, p.Request, profile)
+			} else {
+				plan = provider.DemoPlan(p.URL, p.Origin, p.Request)
+			}
 		} else {
 			obs, e := a.browser(ctx, "", "", map[string]any{"operation": "observe", "origin": p.Origin})
 			if e != nil {
 				return nil, e
 			}
-			plan, e = a.draftPlan(ctx, p.Request, p.URL, p.Origin, p.Responsive, obs)
+			extra := map[string]any{}
+			for _, page := range p.Pages {
+				if page.Alias == "main" {
+					continue
+				}
+				view, err := a.browser(ctx, "", "", map[string]any{"operation": "observe_page", "page": page.Alias, "origin": p.Origin})
+				if err != nil {
+					return nil, err
+				}
+				extra[page.Alias] = view
+			}
+			obs["additionalPages"] = extra
+			plan, e = a.draftPlan(ctx, p.Request, p.URL, p.Origin, p.Responsive, obs, p.Pages...)
 			if e != nil {
 				return nil, e
 			}
 		}
+		plan.Pages = p.Pages
 		plan.Visual = p.Visual
 		if plan.Clarification == "" {
 			if e := core.ValidatePlan(plan); e != nil {

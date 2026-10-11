@@ -10,6 +10,7 @@ import { ShieldCheck, Sparkles, ScanLine, FileCheck2, History, Activity } from '
 import { ChatWelcome, ChatComposer } from './components/chat.jsx';
 import { ArrowLeft, MessageSquarePlus, LoaderCircle } from 'lucide-react';
 import './chat.css';
+import { AuthSettings } from './components/auth-settings.jsx';
 import { RunProgress } from './components/run-progress.jsx';
 
 const terminal = (status) => !['running', 'paused', 'queued'].includes(status);
@@ -384,6 +385,22 @@ function App() {
       newChat();
     });
   }
+  async function sharePage(tabId) {
+    await perform(async () => {
+      const tab = await chrome.tabs.get(tabId);
+      const origin = new URL(tab.url).origin;
+      const access = { origins: [origin + '/*'] };
+      if (
+        !(await chrome.permissions.contains(access)) &&
+        !(await chrome.permissions.request(access))
+      )
+        throw new Error('Additional site access was not granted.');
+      await rpc('pages.share', { tabId });
+      setPlan(null);
+      setRun(null);
+      setMessages([]);
+    });
+  }
   async function focusTarget() {
     await perform(async () => {
       await chrome.tabs.update(state.target.tabId, { active: true });
@@ -393,13 +410,17 @@ function App() {
   useEffect(() => {
     if (!follow.current || !scroll.current || ['setup', 'history'].includes(page)) return;
     const progress = scroll.current.querySelector('[aria-label="Live test progress"]');
+    const checkpoint = scroll.current.querySelector('.handoff-card');
     const planMessage = scroll.current.querySelector(
       '.assistant-message[data-kind="plan"]:last-child',
     );
     const runMessage = scroll.current.querySelector(
       '.assistant-message[data-kind="run"]:last-child',
     );
-    if (progress) {
+    if (checkpoint) {
+      scroll.current.scrollTop +=
+        checkpoint.getBoundingClientRect().top - scroll.current.getBoundingClientRect().top - 8;
+    } else if (progress) {
       scroll.current.scrollTop +=
         progress.getBoundingClientRect().top - scroll.current.getBoundingClientRect().top - 8;
     } else if (planMessage) {
@@ -436,6 +457,7 @@ function App() {
               </span>
               <p>{plan.summary}</p>
               <div className="meta">
+                {plan.pages?.length > 1 && <span>{plan.pages.length} approved pages · </span>}
                 {plan.viewports.map((v) => `${v.width} × ${v.height}`).join(' / ')} ·{' '}
                 {plan.visual ? 'Visual comparison enabled' : 'Evidence screenshots enabled'}
               </div>
@@ -524,6 +546,22 @@ function App() {
                 {run.durationMs ? `${(run.durationMs / 1000).toFixed(1)} s` : 'In progress'}
               </span>
             </div>
+            {run.handoff && (
+              <div className="handoff-card" role="status">
+                <h3>Complete {run.handoff.kind} to continue</h3>
+                <p>{run.handoff.label}</p>
+                <p className="small">
+                  Complete it on the website, then continue. The next assertion verifies the
+                  outcome.
+                </p>
+                <Button
+                  className="primary full"
+                  onClick={() => perform(() => rpc('handoff.complete', { id: run.handoff.id }))}
+                >
+                  I completed the checkpoint
+                </Button>
+              </div>
+            )}
             <RunProgress run={run} paused={state.paused} />
             <div className="stats">
               <div>
@@ -565,7 +603,7 @@ function App() {
                   <span>
                     <strong>{step.action.label}</strong>
                     <small>
-                      {step.case} · {step.viewport}
+                      {step.case} · {step.page || 'main'} · {step.viewport}
                     </small>
                   </span>
                   <span className="step-status">{pretty(step.status)}</span>
@@ -924,6 +962,13 @@ function App() {
             </Button>
           </fieldset>
         </form>
+        <AuthSettings
+          connected={state.connected}
+          running={Boolean(state.runId) || drafting}
+          origin={state.pages?.main?.origin || state.target?.origin}
+          rpc={rpc}
+          perform={perform}
+        />
         <p className="small">
           A missing or unavailable model produces an explicit error. There is no silent model
           fallback.
@@ -1085,6 +1130,16 @@ function App() {
       </main>
       {chat && (
         <ChatComposer
+          pages={Object.values(state.pages || {}).filter((p) => !p.owned)}
+          onSharePage={sharePage}
+          onRemovePage={(alias) =>
+            perform(async () => {
+              await rpc('pages.remove', { alias });
+              setPlan(null);
+              setRun(null);
+              setMessages([]);
+            })
+          }
           request={request}
           onChange={setRequest}
           onSend={() => commandRef.current(request)}

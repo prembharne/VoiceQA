@@ -8,6 +8,7 @@ await cp('dist/extension', `${root}/extension`, { recursive: true });
 await cp('dist/voiceqa-host.exe', `${root}/voiceqa-host.exe`);
 await cp('LICENSE', `${root}/LICENSE`);
 await cp('README.md', `${root}/PROJECT_README.md`);
+await cp('docs', `${root}/docs`, { recursive: true });
 await mkdir(`${root}/licenses`, { recursive: true });
 for (const name of [
   'react',

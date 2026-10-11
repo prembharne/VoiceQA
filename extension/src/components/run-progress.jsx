@@ -42,7 +42,7 @@ export function RunProgress({ run, paused }) {
       </div>
       <h3 aria-live="polite">{step.action.label}</h3>
       <p>
-        {step.case} · {step.viewport}
+        {step.case} · {step.page || 'main'} · {step.viewport}
       </p>
       <progress
         value={complete}

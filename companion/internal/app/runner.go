@@ -45,6 +45,9 @@ func (a *App) start(m native.Message) (any, error) {
 	totalSteps := len(plan.Viewports)
 	for _, test := range plan.Cases {
 		totalSteps += (len(test.Steps) + 1) * len(plan.Viewports)
+		if plan.UsesPageScopes() {
+			totalSteps += len(plan.Viewports)
+		}
 	}
 	r := core.Run{ID: core.ID(), Plan: plan, Status: "running", StartedAt: core.Now(), Steps: []core.Step{}, Usage: map[string]int{}, StepDelayMS: a.settings.StepDelayMS, TotalSteps: totalSteps}
 	for key, value := range plan.Usage {
@@ -82,6 +85,9 @@ func (a *App) update(r *core.Run) {
 // shares this cancellable gap. The pace is snapshotted when the run starts.
 func (a *App) beginStep(ctx context.Context, r *core.Run, action core.Action, testCase, viewport string) (int, error) {
 	step := core.Step{ID: core.ID(), Case: testCase, Viewport: viewport, Action: action, Status: "queued"}
+	if len(r.Steps) > 0 {
+		step.Page = r.Steps[len(r.Steps)-1].Page
+	}
 	if len(r.Steps) > 0 && r.StepDelayMS > 0 {
 		r.NextStep = &step
 		r.NextStepAt = time.Now().Add(time.Duration(r.StepDelayMS) * time.Millisecond).UTC().Format(time.RFC3339Nano)
@@ -120,6 +126,7 @@ func (a *App) execute(ctx context.Context, r *core.Run) {
 	defer func() {
 		r.NextStep = nil
 		r.NextStepAt = ""
+		r.Handoff = nil
 		cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		_, cleanupErr := a.browser(cleanupCtx, r.ID, "", map[string]any{"operation": "cleanup", "origin": r.Plan.Origin})
 		cancel()
@@ -158,6 +165,7 @@ func (a *App) execute(ctx context.Context, r *core.Run) {
 		result, e := a.browser(ctx, r.ID, "", map[string]any{"operation": "viewport", "viewport": viewport, "origin": r.Plan.Origin})
 		r.Steps[vi].CompletedAt = core.Now()
 		r.Steps[vi].Result = result
+		r.Steps[vi].Page, _ = result["page"].(string)
 		r.Steps[vi].Status = "passed"
 		if e != nil {
 			r.Steps[vi].Status = "error"
@@ -167,6 +175,29 @@ func (a *App) execute(ctx context.Context, r *core.Run) {
 		}
 		a.update(r)
 		for _, test := range r.Plan.Cases {
+			if r.Plan.UsesPageScopes() {
+				page := test.Page
+				if page == "" {
+					page = "main"
+				}
+				idx, err := a.beginStep(ctx, r, core.Action{Operation: "page_scope", Label: "Prepare page scope: " + page}, test.Name, viewportLabel)
+				if err != nil {
+					a.setInterrupted(r, err)
+					return
+				}
+				result, err := a.browser(ctx, r.ID, "", map[string]any{"operation": "page_scope", "page": page, "origin": r.Plan.Origin})
+				r.Steps[idx].Result = result
+				r.Steps[idx].CompletedAt = core.Now()
+				r.Steps[idx].Status = "passed"
+				r.Steps[idx].Page = page
+				if err != nil {
+					r.Steps[idx].Error = err.Error()
+					r.Steps[idx].Status = "error"
+					a.setInterrupted(r, err)
+					return
+				}
+				a.update(r)
+			}
 			caseFailed := false
 			for _, action := range test.Steps {
 				if ctx.Err() != nil {
@@ -178,10 +209,10 @@ func (a *App) execute(ctx context.Context, r *core.Run) {
 					a.setInterrupted(r, e)
 					return
 				}
-				result, e := a.browser(ctx, r.ID, r.Steps[idx].ID, map[string]any{"operation": "execute", "action": action, "origin": r.Plan.Origin})
+				result, e := a.executeAdvanced(ctx, r, idx, action)
 				// Only unresolved targets may be grounded again. Dispatched actions with ambiguous results are never retried.
 				var be *BrowserError
-				if e != nil && errors.As(e, &be) && be.Code == "target_missing" && r.Plan.Model != "fixture-demo" && action.Operation != "navigate" && action.Operation != "assert" {
+				if e != nil && errors.As(e, &be) && be.Code == "target_missing" && r.Plan.Model != "fixture-demo" && canReground(action.Operation) {
 					for attempt := 0; attempt < 2; attempt++ {
 						grounded, ge := a.ground(ctx, r, action)
 						if ge != nil {
@@ -197,6 +228,9 @@ func (a *App) execute(ctx context.Context, r *core.Run) {
 				}
 				r.Steps[idx].CompletedAt = core.Now()
 				r.Steps[idx].Result = result
+				if page, ok := result["page"].(string); ok {
+					r.Steps[idx].Page = page
+				}
 				if e != nil {
 					r.Steps[idx].Error = e.Error()
 					r.Steps[idx].Status = "error"
@@ -261,6 +295,7 @@ func (a *App) execute(ctx context.Context, r *core.Run) {
 				step.CompletedAt = core.Now()
 				step.Status = "passed"
 				step.Result = result
+				step.Page, _ = result["page"].(string)
 				if e != nil {
 					step.Status = "needs_review"
 					step.Error = e.Error()

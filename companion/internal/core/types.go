@@ -44,14 +44,17 @@ type Action struct {
 	Value     string     `json:"value,omitempty"`
 	Assertion *Assertion `json:"assertion,omitempty"`
 	Label     string     `json:"label"`
+	TimeoutMS int        `json:"timeoutMs,omitempty"`
 }
 type Case struct {
+	Page   string   `json:"page,omitempty"`
 	Name   string   `json:"name"`
 	Goal   string   `json:"goal"`
 	Source string   `json:"source"`
 	Steps  []Action `json:"steps"`
 }
 type Plan struct {
+	Pages         []Page         `json:"pages,omitempty"`
 	AIProvider    string         `json:"aiProvider,omitempty"`
 	ID            string         `json:"id"`
 	Version       int            `json:"version"`
@@ -73,6 +76,7 @@ type Viewport struct {
 	Height int `json:"height"`
 }
 type Step struct {
+	Page        string         `json:"page,omitempty"`
 	ID          string         `json:"id"`
 	Case        string         `json:"case"`
 	Viewport    string         `json:"viewport"`
@@ -84,6 +88,7 @@ type Step struct {
 	CompletedAt string         `json:"completedAt,omitempty"`
 }
 type Run struct {
+	Handoff     *Handoff       `json:"handoff,omitempty"`
 	ID          string         `json:"id"`
 	Plan        Plan           `json:"plan"`
 	Status      string         `json:"status"`
@@ -99,8 +104,8 @@ type Run struct {
 	NextStepAt  string         `json:"nextStepAt,omitempty"`
 }
 
-var operations = map[string]bool{"navigate": true, "click": true, "fill": true, "select": true, "scroll": true, "key": true, "assert": true}
-var assertions = map[string]bool{"text": true, "visible": true, "count": true, "enabled": true, "selected": true, "number": true, "url": true, "focus": true, "no_overflow": true}
+var operations = map[string]bool{"navigate": true, "click": true, "fill": true, "select": true, "scroll": true, "key": true, "assert": true, "open_tab": true, "switch_tab": true, "close_tab": true, "wait_for": true, "fill_secret": true, "fill_totp": true, "human_checkpoint": true}
+var assertions = map[string]bool{"text": true, "text_contains": true, "value": true, "visible": true, "hidden": true, "count": true, "enabled": true, "selected": true, "number": true, "url": true, "url_contains": true, "focus": true, "no_overflow": true}
 
 func AllowedURL(raw, origin string) bool {
 	u, err := url.Parse(raw)
@@ -119,6 +124,9 @@ func ValidatePlan(p Plan) error {
 	if len(p.Viewports) == 0 || len(p.Viewports) > 2 {
 		return errors.New("select one or two viewports")
 	}
+	if _, e := NewScope(p, "main"); e != nil {
+		return e
+	}
 	n := 0
 	for _, v := range p.Viewports {
 		if v.Width < 320 || v.Width > 1920 || v.Height < 400 || v.Height > 1200 {
@@ -133,22 +141,28 @@ func ValidatePlan(p Plan) error {
 			return fmt.Errorf("case %d must start by navigating to its starting URL before any clicks or checks; steps must be in execution order", caseIndex+1)
 		}
 		checks := 0
+		scope, e := NewScope(p, c.Page)
+		if e != nil {
+			return e
+		}
 		for stepIndex, a := range c.Steps {
 			n++
 			if !operations[a.Operation] || len(a.Target) > 500 || len(a.Value) > 4000 {
 				return errors.New("invalid test action")
 			}
-			if a.Operation == "navigate" && !AllowedURL(a.Value, p.Origin) {
-				return errors.New("navigation outside approved origin")
+			if e := scope.Advance(a); e != nil {
+				return fmt.Errorf("case %d, step %d: %w", caseIndex+1, stepIndex+1, e)
 			}
 			if a.Operation == "key" && !strings.Contains("|Tab|Enter|Escape|ArrowDown|ArrowUp|Space|", "|"+a.Value+"|") {
 				return errors.New("unsupported key")
 			}
-			if a.Operation == "assert" {
+			if a.Operation == "assert" || a.Operation == "wait_for" {
 				if a.Assertion == nil || !assertions[a.Assertion.Kind] || a.Assertion.Tolerance < 0 {
 					return errors.New("invalid assertion")
 				}
-				checks++
+				if a.Operation == "assert" {
+					checks++
+				}
 				if a.Assertion.Kind == "number" {
 					n, e := strconv.ParseFloat(a.Assertion.Expected, 64)
 					if e != nil || math.IsNaN(n) || math.IsInf(n, 0) {
@@ -161,7 +175,7 @@ func ValidatePlan(p Plan) error {
 						return fmt.Errorf("case %d, step %d (count): expected must be a nonnegative integer string", caseIndex+1, stepIndex+1)
 					}
 				}
-				if (a.Assertion.Kind == "visible" || a.Assertion.Kind == "enabled" || a.Assertion.Kind == "selected" || a.Assertion.Kind == "focus" || a.Assertion.Kind == "no_overflow") && a.Assertion.Expected != "true" && a.Assertion.Expected != "false" {
+				if (a.Assertion.Kind == "visible" || a.Assertion.Kind == "hidden" || a.Assertion.Kind == "enabled" || a.Assertion.Kind == "selected" || a.Assertion.Kind == "focus" || a.Assertion.Kind == "no_overflow") && a.Assertion.Expected != "true" && a.Assertion.Expected != "false" {
 					return fmt.Errorf("case %d, step %d (%s): boolean assertion requires the string true or false", caseIndex+1, stepIndex+1, a.Assertion.Kind)
 				}
 			}

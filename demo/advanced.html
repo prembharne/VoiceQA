@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="voiceqa-fixture" content="voiceqa-advanced-v1"><title>VoiceQA — Advanced QA Lab</title>
+<style>*{box-sizing:border-box}body{margin:0;background:#f4f6fa;color:#182333;font:16px/1.6 system-ui}main{max-width:860px;margin:auto;padding:28px 20px}h1{font-size:32px;line-height:1.2}.card{padding:22px;background:white;border:1px solid #c4cfdf;border-radius:14px;margin:20px 0}label{display:block;margin:12px 0 5px}input{width:100%;min-height:44px;padding:10px;border:1px solid #657b98;border-radius:7px;font:inherit}button{font:inherit;border:0;border-radius:7px;min-height:44px;padding:10px 18px;background:#1e4778;color:white;margin-top:14px}a{color:#17467f}.status{min-height:28px}small{color:#42546b}.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}@media(max-width:500px){.grid{grid-template-columns:1fr}}</style></head>
+<body><main><small>AUTHORIZED SYNTHETIC QA FIXTURE · NO REAL ACCOUNTS</small><h1>Advanced QA Lab</h1>
+<p>Exercise independent MFA, page switching, asynchronous waits and operator checkpoints.</p>
+<section class="card"><h2>Test account + TOTP</h2><p>Configure the <strong>qa-account</strong> test profile using the documented fixture credentials. Verify the signed-in result rather than the private input values.</p>
+<form id="login"><label for="username">Test account email</label><input id="username" data-testid="auth-username" type="email" autocomplete="username" required>
+<label for="password">Test account password</label><input id="password" data-testid="auth-password" type="password" autocomplete="current-password" required>
+<label for="otp">Authenticator code</label><input id="otp" data-testid="auth-otp" inputmode="numeric" autocomplete="one-time-code" maxlength="8" required>
+<button data-testid="verify-login" type="submit">Verify test login</button></form><p class="status" data-testid="auth-result" role="status"></p></section>
+<div class="grid"><section class="card"><h2>Tab isolation</h2><p>Open <code>/advanced/child</code> in a new test-owned tab. Switch back here and verify the counter stays independent.</p><button data-testid="increase-counter">Increase counter</button><p data-testid="counter">0</p></section>
+<section class="card"><h2>Asynchronous readiness</h2><button data-testid="load-result">Load delayed result</button><p data-testid="async-result" role="status">Not loaded</p></section></div>
+<section class="card" data-voiceqa-test-captcha><h2>CAPTCHA test fixture</h2><p>This is a local test-mode challenge, not a production CAPTCHA solver. Complete the fixture while the agent is waiting, then click Continue in VoiceQA.</p><button data-testid="complete-test-captcha">Complete test CAPTCHA</button><p data-testid="captcha-result" role="status">Awaiting operator</p></section>
+<p><a href="/">Demo shop</a> · <a href="/advanced/child">Child page</a></p></main>
+<script>
+let count=0;document.querySelector('[data-testid=increase-counter]').onclick=()=>{document.querySelector('[data-testid=counter]').textContent=String(++count)};
+document.querySelector('[data-testid=load-result]').onclick=()=>{setTimeout(()=>{document.querySelector('[data-testid=async-result]').textContent='Delayed result ready'},1200)};
+document.querySelector('[data-testid=complete-test-captcha]').onclick=()=>{document.querySelector('[data-testid=captcha-result]').textContent='CAPTCHA fixture completed'};
+document.getElementById('login').onsubmit=async(e)=>{e.preventDefault();const body={username:document.getElementById('username').value,password:document.getElementById('password').value,code:document.getElementById('otp').value};const r=await fetch('/advanced/verify-otp',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});const data=await r.json();document.querySelector('[data-testid=auth-result]').textContent=data.ok?'Authenticated test account':'Authentication failed'};
+</script></body></html>

@@ -16,8 +16,14 @@ Settings include `ttsProvider` (`browser` or `openai`), `ttsModel`, `ttsVoice`, 
 
 Uploads contain total size and SHA-256. Chunks are base64, at most 192 KiB raw, sequential, acknowledged individually, and limited to 16 MiB total with at most four pending uploads. Expired uploads are discarded after two minutes. Downloads use bounded offsets. Raw audio is removed after transcription.
 
-Action commands: `navigate`, `click`, `fill`, `select`, `scroll`, `key`, and `assert`. Internal fixed operations: `observe`, `viewport`, `capture`, `accessibility`, `cleanup`. The native host cannot pass arbitrary CDP commands or JavaScript through this boundary.
+Action commands: `navigate`, `click`, `fill`, `select`, `scroll`, `key`, `assert`, `wait_for`, `open_tab`, `switch_tab`, `close_tab`, `fill_secret`, `fill_totp`, and `human_checkpoint`. Internal fixed operations include `observe`, `observe_page`, `location`, `page_scope`, `handoff.poll`, `viewport`, `capture`, `accessibility`, `cleanup`. The native host cannot pass arbitrary CDP commands or JavaScript through this boundary.
 
 Targets are `testid:ID`, `role:ROLE|EXACT NAME`, `label:EXACT LABEL`, `text:EXACT TEXT`, or a bounded CSS selector. Element geometry is recomputed before action. Ambiguous matches require review.
 
-Assertions: `text`, `number`, `visible`, `count`, `enabled`, `selected`, `url`, `focus`, and `no_overflow`. Expected values are strings; numerical tolerance defaults to zero. Every case requires an assertion.
+Assertions: `text`, `text_contains`, `value` (nonprivate inputs), `number`, `visible`, `hidden`, `count`, `enabled`, `selected`, `url`, `url_contains`, `focus`, and `no_overflow`. Expected values are strings; numerical tolerance defaults to zero. `wait_for` uses the same assertion structure and optional `timeoutMs` (0/default or 500–30000). Every case requires a separate `assert`.
+
+Plans may include trusted `pages: [{alias,url,origin,title}]`; browser IDs never enter model context. Each case has a `page` alias, defaulting to `main` for older plans. `open_tab` takes target=unique alias/value=approved URL, `switch_tab` takes target=existing alias, and `close_tab` accepts only a run-created alias. Suite requests keep the main approved origin while their results identify the current `page` and actual `origin`.
+
+Profile RPCs: `auth.list/save/delete`. Save accepts `id`, `origin`, `label`, input-only `username/password/totpSecret`, and `algorithm/digits/period`. Public replies expose `hasUsername/hasPassword/hasTotp`, never stored values. Secure planned entry uses `fill_secret` value=`profile:username|password` or `fill_totp` value=`profile`. The host sends a transient `fill` action with `secureOrigin` only to the trusted worker; original plan/run records retain references.
+
+Panel-to-worker page RPCs are `pages.list/share/remove`. `pages.share` accepts an existing tab ID after a site permission grant. `handoff.complete` accepts the current checkpoint ID. `human_checkpoint` value is `mfa`, `captcha` or `approval`; its run snapshot exposes a fresh handoff ID and instructions. Completion polling never blocks a native request for the duration of operator interaction. Cancellation invalidates the handoff, and cleanup closes only tracked run-created tabs still in an explicitly approved origin.

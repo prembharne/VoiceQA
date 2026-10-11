@@ -19,7 +19,14 @@ import (
 
 func baselineKey(r *core.Run, idx int) string {
 	step := r.Steps[idx]
-	sum := sha256.Sum256([]byte(r.Plan.Origin + "|" + r.Plan.URL + "|" + step.Case + "|" + step.Action.Label + "|" + step.Viewport))
+	key := r.Plan.Origin + "|" + r.Plan.URL + "|" + step.Case + "|" + step.Action.Label + "|" + step.Viewport
+	if r.Plan.UsesPageScopes() {
+		key += "|page:" + step.Page
+		if capture, ok := step.Result["capture"].(map[string]any); ok {
+			key += "|url:" + fmt.Sprint(capture["url"])
+		}
+	}
+	sum := sha256.Sum256([]byte(key))
 	return hex.EncodeToString(sum[:])
 }
 func (a *App) approveBaseline(m native.Message) (any, error) {

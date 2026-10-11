@@ -6,6 +6,8 @@ The side panel is a conversational workspace: share the current website from the
 
 For the proposed hosted product and commercial rollout, see [the micro-SaaS roadmap](docs/MICRO_SAAS.md). Hosted accounts, collaboration and billing are future work.
 
+Version 0.3 adds explicitly shared multi-tab workflows, encrypted test-account profiles, locally generated TOTP codes, condition waits and operator checkpoints. See [advanced browser testing](docs/ADVANCED_TESTING.md) for setup and a reproducible demonstration.
+
 ## Quick start on Windows
 
 Requirements: Node.js 24+, Go 1.26+, Chrome 125+, and PowerShell. No Node runtime is needed by the installed extension or companion after building.
@@ -137,6 +139,6 @@ See [architecture](docs/ARCHITECTURE.md), [protocol](docs/PROTOCOL.md), and [val
 
 One active run, 50 planned actions, and 10 minutes per run. Browser actions are restricted to the selected tab and approved origin. The user’s existing session is used; use a dedicated QA profile and synthetic accounts. Cancelling does not undo completed website changes.
 
-The MVP covers DOM-grounded controls, same-origin frames/open shadow roots for functional observations, and main-document accessibility checks. Cross-origin frames, native dialogs, external authentication popups, canvas-only controls, arbitrary code execution, load testing, and desktop/mobile-native testing are unsupported. Agent-supplied completion claims do not determine results.
+The executor covers DOM-grounded controls, same-origin frames/open shadow roots, main-document accessibility and up to five approved pages. It switches between shared tabs and can open/close its own test tabs. Login redirects may move only between explicitly approved origins. External popups must be shared explicitly; automatic discovery or takeover of authentication popups is unsupported. Cross-origin frame contents, native dialogs, canvas-only controls, arbitrary code execution, load testing and desktop/mobile-native testing remain unsupported. Agent-supplied completion claims do not determine results.
 
 The Go controller and protocol boundary can be reused by a later desktop shell. Native desktop control needs its own executor and acceptance suite.

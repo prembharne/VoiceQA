@@ -552,3 +552,69 @@ body::before {
     max-width: 105px;
   }
 }
+
+.auth-settings {
+  border-top: 1px solid var(--border);
+  margin-top: 28px;
+  padding-top: 22px;
+}
+.auth-profile {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 12px;
+  background: var(--surface);
+  border-radius: 12px;
+  margin: 10px 0;
+}
+.auth-profile > div {
+  flex: 1 1 150px;
+  min-width: 0;
+}
+.auth-profile small {
+  display: block;
+  overflow-wrap: anywhere;
+  color: var(--muted);
+}
+.auth-parameters {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 9px;
+}
+.handoff-card {
+  padding: 18px;
+  border: 1px solid #657ba7;
+  border-radius: 14px;
+  margin: 18px 0;
+  background: #26334a;
+}
+.page-sharing {
+  padding: 12px 0;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 14px;
+}
+.page-sharing > label {
+  display: block;
+}
+.shared-page {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  font-size: 11px;
+  padding: 5px 0;
+}
+.shared-page span {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.shared-page button {
+  color: var(--text);
+  background: transparent;
+  border: 0;
+  font-size: 20px;
+  width: 28px;
+  height: 28px;
+}

@@ -1,9 +1,11 @@
 import React, { useLayoutEffect, useRef } from 'react';
 import { ArrowUp, ChevronDown, Globe2, Mic, Plus, Sparkles, Square, X } from 'lucide-react';
 import { Button } from './ui.jsx';
+import { PageSharing } from './page-sharing.jsx';
 
 export function ChatWelcome({ target, onPrompt, onDemo, busy }) {
-  const demo = /^http:\/\/(127\.0\.0\.1|localhost):4173$/.test(target?.origin || '');
+  const demo = /^http:\/\/(127\.0\.0\.1|localhost):417[34]$/.test(target?.origin || '');
+  const advanced = demo && new URL(target.url).pathname === '/advanced';
   return (
     <section className="chat-welcome">
       <div className="welcome-center">
@@ -18,13 +20,19 @@ export function ChatWelcome({ target, onPrompt, onDemo, busy }) {
           disabled={busy}
           onClick={() =>
             onPrompt(
-              demo
-                ? 'Add one Studio mug and verify the total is $12. Add another and verify the total is $24. Reset the page before the case. Do not place an order or sign in.'
-                : 'Check the main user journey on this page. Ask me for any missing expected results before creating the plan.',
+              advanced
+                ? 'Use my saved test profile to sign in and verify Authenticated test account. In a separate case open /advanced/child in a new tab, verify Child page ready, increment its counter to 1, return to main and close only the created tab. Wait for delayed content before checking Delayed result ready. Pause for me to complete the CAPTCHA fixture, then verify CAPTCHA fixture completed.'
+                : demo
+                  ? 'Add one Studio mug and verify the total is $12. Add another and verify the total is $24. Reset the page before the case. Do not place an order or sign in.'
+                  : 'Check the main user journey on this page. Ask me for any missing expected results before creating the plan.',
             )
           }
         >
-          {demo ? 'Check the cart totals' : 'Test a user journey'}
+          {advanced
+            ? 'Test MFA and browser workflows'
+            : demo
+              ? 'Check the cart totals'
+              : 'Test a user journey'}
         </Button>
         <Button
           disabled={busy}
@@ -47,6 +55,9 @@ export function ChatWelcome({ target, onPrompt, onDemo, busy }) {
 }
 
 export function ChatComposer({
+  pages,
+  onSharePage,
+  onRemovePage,
   request,
   onChange,
   onSend,
@@ -160,6 +171,13 @@ export function ChatComposer({
             </summary>
             <div className="options-popover">
               <strong>Test options</strong>
+              <PageSharing
+                pages={pages}
+                running={running}
+                busy={busy}
+                onShare={onSharePage}
+                onRemove={onRemovePage}
+              />
               <Button
                 className="share-option"
                 disabled={busy || running || !connected}
