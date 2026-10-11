@@ -62,10 +62,14 @@ func (a *App) draftPlanWithProgress(ctx context.Context, request, url, origin st
 	input["actionBudget"] = limit / (rows * views)
 	input["apiCheckBudget"] = 20 / (rows * views)
 	input["coverageRule"] = "Create a concise, reviewable suite within actionBudget and apiCheckBudget. State any deferred or blocked requested coverage in the summary. Never claim full coverage from a partial suite. Missing optional credentials can be deferred explicitly while planning other discoverable workflows."
+	input["scopeRule"] = "Only plan the workflows the user requested. actionBudget is a ceiling, not a target. A single authentication/MFA/CAPTCHA journey normally needs one case, with navigation first, login, readiness wait, identity assertion, operator checkpoint, and completion assertion. Do not add order, settings, security or other unrelated cases just because their controls are present."
 	if obs["fixture"] == "voiceqa-shop-v1" && (strings.HasPrefix(origin, "http://127.0.0.1:") || strings.HasPrefix(origin, "http://localhost:")) {
 		input["fixtureRequirements"] = provider.DemoPlan(url, origin, "").Cases
 	}
-	profiles, _ := a.authList()
+	profiles, profileErr := a.authList()
+	if profileErr != nil {
+		return core.Plan{}, fmt.Errorf("Could not read saved test profiles: %w", profileErr)
+	}
 	allowedProfiles := []AuthProfile{}
 	for _, profile := range profiles {
 		if profile.Origin == origin {
@@ -81,6 +85,9 @@ func (a *App) draftPlanWithProgress(ctx context.Context, request, url, origin st
 	}
 	input["sharedPages"] = pages
 	input["authProfiles"] = allowedProfiles
+	if err := checkRequestedProfile(request, origin, allowedProfiles, pages...); err != nil {
+		return core.Plan{}, err
+	}
 	if strings.HasPrefix(origin, "http://127.0.0.1:") || strings.HasPrefix(origin, "http://localhost:") {
 		if obs["fixture"] == "voiceqa-workspace-v1" {
 			input["fixtureRequirements"] = provider.WorkspaceRequirements(url, origin)
@@ -174,6 +181,7 @@ func (a *App) draftPlanWithProgress(ctx context.Context, request, url, origin st
 			plan.Version = 1
 			plan.URL = url
 			plan.Origin = origin
+			normalizeDraftURLs(&plan)
 			plan.Request = request
 			plan.Model = s.Model
 			plan.AIProvider = s.AIProvider
@@ -221,6 +229,31 @@ func (a *App) draftPlanWithProgress(ctx context.Context, request, url, origin st
 	}
 	return core.Plan{}, fmt.Errorf("AI plan attempts exhausted")
 }
+
+// An explicitly requested saved profile is a local prerequisite, not a problem
+// for the language model to reason about. Never reveal profile secret values.
+func checkRequestedProfile(request, origin string, profiles []AuthProfile, pages ...core.Page) error {
+	text := strings.ToLower(request)
+	if !strings.Contains(text, "saved test profile") && !strings.Contains(text, "saved credential") {
+		return nil
+	}
+	needsMFA := strings.Contains(text, "totp") || strings.Contains(text, "authenticator code")
+	approved := map[string]bool{origin: true}
+	for _, page := range pages {
+		approved[page.Origin] = true
+	}
+	for _, p := range profiles {
+		if approved[p.Origin] && p.HasUsername && p.HasPassword && (!needsMFA || p.HasTOTP) {
+			return nil
+		}
+	}
+	details := "username and password"
+	if needsMFA {
+		details += " and a TOTP seed for authenticator codes"
+	}
+	return fmt.Errorf("No ready saved test profile for %s. Open + → Test options → Test credentials & MFA and save the test account's %s. Then send this request again. No AI request was sent and no tests were run", origin, details)
+}
+
 func observedViewport(obs map[string]any) core.Viewport {
 	v := core.Viewport{Width: 1440, Height: 900}
 	if view, ok := obs["viewport"].(map[string]any); ok {

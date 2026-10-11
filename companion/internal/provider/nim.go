@@ -101,6 +101,11 @@ func (c *Client) chatStructured(ctx context.Context, key, model, instructions st
 				cap = max(1024, min(4096, reasoningAllowance/4))
 			}
 			body["reasoning"] = map[string]any{"max_tokens": cap}
+		} else if stream && capabilities.supports("reasoning") && capabilities.Reasoning.Mandatory != nil && !*capabilities.Reasoning.Mandatory {
+			// Optional thinking without a supported budget can consume the whole
+			// planning deadline. Request direct JSON; never disable mandatory or
+			// unknown reasoning, and never infer support from a model's name.
+			body["reasoning"] = map[string]any{"enabled": false}
 		}
 	}
 	if stream && c.NIM {

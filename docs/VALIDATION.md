@@ -2,6 +2,12 @@
 
 This document records current evidence, not projected reliability.
 
+## Authentication planning preflight — 2026-10-11
+
+Version 0.6.1 checks explicitly requested saved test profiles locally before calling a model. Missing/incomplete profiles produce the setup path immediately; profiles on other explicitly shared origins remain eligible and SMS/manual MFA does not require a TOTP seed. OpenRouter planning disables optional reasoning only when the public catalog explicitly marks it optional and provides no usable reasoning-budget control. Mandatory/unknown reasoning is unchanged; output caps were not reintroduced. Root-relative navigation paths are expanded against the case's approved origin before normal validation; ambiguous post-tab-switch paths and protocol-relative hosts are not guessed.
+
+The reported installation had no saved profile metadata. Unit tests prove that this request makes no provider call in that state. An isolated real-browser authentication fixture passed login, server TOTP verification, the operator checkpoint and independent completion assertion. This is execution evidence for the fixture, not successful live model planning. Live Dots diagnostics returned output without the old six-minute wait but still produced invalid drafts or an upstream failure; no invalid draft executed. The 46 JavaScript checks, Go race tests and vet passed. A standalone checkpoint-cancellation selection depended on an earlier profile-setup test and failed before running; the independent RelayDesk authentication test passed when selected directly.
+
 ## Current-width testing and planning checks — 2026-10-11
 
 Version 0.6.0 removes VoiceQA's fixed planning output-token cap. Planning requests omit max_tokens/max_output_tokens rather than imposing 16k/32k or blindly sending a catalog maximum. The provider still has its own allowance. Single-target grounding, time and transport/operation limits remain bounded. All advertised text-model formats continue through native schema, JSON-object or prompt-JSON capability routing.

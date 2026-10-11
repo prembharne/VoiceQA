@@ -6,7 +6,7 @@ The side panel is a conversational workspace: share the current website from the
 
 For the proposed hosted product and commercial rollout, see [the micro-SaaS roadmap](docs/MICRO_SAAS.md). Hosted accounts, collaboration and billing are future work.
 
-Version 0.6.0 removes VoiceQA's fixed planning output-token cap and preserves the current browser width by default. Responsive resizing is opt-in. RelayDesk drafts are checked for fresh case resets, review-before-submit order, text-versus-input assertion types and pagination semantics before acceptance.
+Version 0.6.1 checks explicitly requested saved test profiles before contacting the AI provider. Configure them under **+ → Test options → Test credentials & MFA** for an approved website origin. Optional OpenRouter reasoning without a supported token-budget control is disabled only when the catalog explicitly says it is optional; mandatory or unknown reasoning is preserved. Models advertising a reasoning budget retain the bounded reasoning setting. Planning output remains uncapped by VoiceQA, current browser width is preserved by default, and responsive resizing is opt-in. Invalid model drafts still cannot execute.
 
 Version 0.5.1 checks OpenRouter model capabilities before planning: native schema, JSON-object mode or a prompted JSON contract, with local validation in every mode. OpenRouter planning allows up to 32,768 combined output tokens, capped to the advertised model limit; supported reasoning budgets are bounded separately. Models and providers are never switched automatically.
 

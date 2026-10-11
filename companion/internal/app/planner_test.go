@@ -293,3 +293,31 @@ func TestNonAssertionActionsDiscardUnusedCheckMetadata(t *testing.T) {
 		t.Fatal("unused checks leaked into review or real check was lost", e)
 	}
 }
+func TestRequestedProfileFailsBeforeProviderCall(t *testing.T) {
+	a := newTestApp(t)
+	a.Provider.HTTP.Transport = routerTestTransport(func(r *http.Request) (*http.Response, error) {
+		t.Fatal("missing profile reached AI provider")
+		return nil, nil
+	})
+	_, err := a.draftPlan(context.Background(), "Verify authentication and MFA using my saved test profile. For CAPTCHA, pause when my interaction is required and independently verify completion afterward.", "https://example.test/", "https://example.test", false, nil)
+	if err == nil || !strings.Contains(err.Error(), "No ready saved test profile") {
+		t.Fatal(err)
+	}
+}
+func TestRequestedProfileReadiness(t *testing.T) {
+	p := AuthProfile{Origin: "https://example.test", HasUsername: true, HasPassword: true}
+	for _, tt := range []struct {
+		request, origin string
+		profiles        []AuthProfile
+		fail            bool
+	}{
+		{"Use my saved test profile for MFA with an SMS checkpoint", p.Origin, []AuthProfile{p}, false},
+		{"Use my saved test profile for TOTP", p.Origin, []AuthProfile{p}, true},
+		{"Use my saved credentials", "https://other.test", []AuthProfile{p}, true},
+		{"Check orders and settings", p.Origin, nil, false},
+	} {
+		if err := checkRequestedProfile(tt.request, tt.origin, tt.profiles); (err != nil) != tt.fail {
+			t.Fatalf("%s: %v", tt.request, err)
+		}
+	}
+}

@@ -17,7 +17,8 @@ type routerModel struct {
 		MaxCompletion int `json:"max_completion_tokens"`
 	} `json:"top_provider"`
 	Reasoning struct {
-		MaxTokens bool `json:"supports_max_tokens"`
+		MaxTokens bool  `json:"supports_max_tokens"`
+		Mandatory *bool `json:"mandatory,omitempty"`
 	} `json:"reasoning"`
 	Architecture struct {
 		Output []string `json:"output_modalities"`

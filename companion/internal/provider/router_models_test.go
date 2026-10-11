@@ -198,3 +198,44 @@ func TestRouterTerminalUsageCanRepeatAnEmptyStop(t *testing.T) {
 		t.Fatal("post-completion text accepted")
 	}
 }
+func TestRouterOptionalReasoningWithoutBudget(t *testing.T) {
+	for _, kind := range []string{"optional", "mandatory", "unknown", "unsupported"} {
+		t.Run(kind, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == "/models" {
+					m := testRouterModel("test/model", []string{"reasoning"}, 32000)
+					if kind != "unknown" {
+						mandatory := kind == "mandatory"
+						m.Reasoning.Mandatory = &mandatory
+					}
+					if kind == "unsupported" {
+						m.Parameters = nil
+					}
+					writeCatalog(w, m)
+					return
+				}
+				var body map[string]any
+				_ = json.NewDecoder(r.Body).Decode(&body)
+				if kind == "optional" {
+					reasoning, ok := body["reasoning"].(map[string]any)
+					if !ok || reasoning["enabled"] != false {
+						t.Error("optional unbounded thinking left enabled")
+					}
+				} else if body["reasoning"] != nil {
+					t.Error("changed unsupported/mandatory/unknown reasoning")
+				}
+				if body["max_tokens"] != nil {
+					t.Error("reintroduced output limit")
+				}
+				fmt.Fprint(w, `{"choices":[{"index":0,"finish_reason":"stop","message":{"content":"{\"summary\":\"draft\"}"}}]}`)
+			}))
+			defer server.Close()
+			c := New().ForProvider("openrouter")
+			c.BaseURL = server.URL
+			_, _, err := c.PlanStructured(context.Background(), "sk-or-fixture", "test/model", "rules", nil, Object(map[string]any{"summary": String()}), nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}

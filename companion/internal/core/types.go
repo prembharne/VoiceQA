@@ -176,7 +176,7 @@ func validateResolvedPlan(p Plan) error {
 			return errors.New("each test needs a name and steps")
 		}
 		if c.Steps[0].Operation != "navigate" {
-			return fmt.Errorf("case %d must start by navigating to its starting URL before any clicks or checks; steps must be in execution order", caseIndex+1)
+			return fmt.Errorf("case %d must start by navigating to its starting URL before any clicks or checks; first operation was %q. Add navigate as steps[0]; steps must be in execution order", caseIndex+1, c.Steps[0].Operation)
 		}
 		checks := 0
 		scope, e := NewScope(p, c.Page)

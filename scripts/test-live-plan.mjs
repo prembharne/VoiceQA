@@ -165,6 +165,21 @@ try {
   });
   if (!settings.hasApiKey) throw new Error('No saved OpenRouter key is available.');
   await rpc('project.configure', { origin, url: page.url() });
+  // Explicit opt-in, isolated synthetic account only. Never edit user profiles.
+  if (workspace && process.argv.includes('--fixture-auth')) {
+    secretFiles.push('auth-relay.dpapi');
+    await rpc('auth.save', {
+      id: 'relay',
+      origin,
+      label: 'Isolated RelayDesk fixture',
+      username: 'qa@voiceqa.test',
+      password: 'fixture-only',
+      totpSecret: 'GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ',
+      algorithm: 'sha1',
+      digits: 6,
+      period: 30,
+    });
+  }
   console.log(
     `Drafting the ${workspace ? 'RelayDesk order workflow' : security ? 'logical security' : 'coupon/cart'} request with OpenRouter ${model}...`,
   );
