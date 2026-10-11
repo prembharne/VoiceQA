@@ -429,6 +429,8 @@ test('chat shows planning phases and elapsed time, restores a failed request and
     await panel.getByRole('button', { name: 'Send test request', exact: true }).click();
     await expect(panel.getByRole('status')).toContainText('Waiting for your AI provider');
     await expect(panel.locator('.planning-elapsed')).toHaveText(/1:0[5-9]/);
+    await panel.evaluate(() => globalThis.__planningFixture.phase('adapting'));
+    await expect(panel.getByRole('status')).toContainText('checked locally');
     await panel.evaluate(() => globalThis.__planningFixture.phase('generating'));
     await expect(panel.getByRole('status')).toContainText('Building your test plan');
     await panel.screenshot({ path: resolve(work, 'planning-progress.png'), fullPage: true });

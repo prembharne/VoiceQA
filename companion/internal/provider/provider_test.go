@@ -45,7 +45,11 @@ func TestOpenRouterStructuredRouting(t *testing.T) {
 		t.Fatal("provider routing mutated speech endpoint")
 	}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/responses" || r.Header.Get("Authorization") != "Bearer sk-or-fixture" {
+		if r.URL.Path == "/models" {
+			writeCatalog(w, testRouterModel("openai/gpt-4o", []string{"response_format", "structured_outputs", "max_tokens"}, 64000))
+			return
+		}
+		if r.URL.Path != "/chat/completions" || r.Header.Get("Authorization") != "Bearer sk-or-fixture" {
 			t.Error("incorrect router request")
 		}
 		var body map[string]any
@@ -53,10 +57,10 @@ func TestOpenRouterStructuredRouting(t *testing.T) {
 		if body["model"] != "openai/gpt-4o" || body["provider"].(map[string]any)["require_parameters"] != true {
 			t.Error("model or strict routing missing")
 		}
-		if body["text"].(map[string]any)["format"].(map[string]any)["strict"] != true {
+		if body["response_format"].(map[string]any)["json_schema"].(map[string]any)["strict"] != true {
 			t.Error("strict schema missing")
 		}
-		_, _ = w.Write([]byte(`{"status":"completed","output":[{"content":[{"type":"output_text","text":"{\"target\":\"#submit\"}"}]}],"usage":{"input_tokens":8,"output_tokens":4,"total_tokens":12}}`))
+		_, _ = w.Write([]byte(`{"choices":[{"index":0,"finish_reason":"stop","message":{"content":"{\"target\":\"#submit\"}"}}],"usage":{"prompt_tokens":8,"completion_tokens":4,"total_tokens":12}}`))
 	}))
 	defer server.Close()
 	c.BaseURL = server.URL

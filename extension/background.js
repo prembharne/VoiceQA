@@ -755,7 +755,11 @@ async function onNative(message) {
   if (message.type === 'plan.progress') {
     const p = message.payload;
     if (state.cancelled || !state.planning || p.requestId !== state.planning.id) return;
-    if (!['waiting', 'analyzing', 'generating', 'validating', 'repairing'].includes(p.phase))
+    if (
+      !['waiting', 'adapting', 'analyzing', 'generating', 'validating', 'repairing'].includes(
+        p.phase,
+      )
+    )
       return;
     state.planning.phase = p.phase;
     broadcast({ type: 'state', state });

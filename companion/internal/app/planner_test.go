@@ -7,12 +7,57 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
 	"voiceqa/companion/internal/core"
 	"voiceqa/companion/internal/native"
 )
+
+type routerTestTransport func(*http.Request) (*http.Response, error)
+
+func (f routerTestTransport) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+func TestPromptJSONStillRejectsUnsafeActionsAndKeepsScope(t *testing.T) {
+	a := newTestApp(t)
+	t.Setenv("OPENROUTER_API_KEY", "sk-or-test-fixture")
+	a.settings.AIProvider = "openrouter"
+	a.settings.Model = "test/prompt-json"
+	calls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/models" {
+			fmt.Fprint(w, `{"data":[{"id":"test/prompt-json","supported_parameters":["max_tokens"],"architecture":{"output_modalities":["text"]},"top_provider":{"max_completion_tokens":65536}}]}`)
+			return
+		}
+		calls++
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		if body["model"] != "test/prompt-json" || body["response_format"] != nil {
+			t.Error("changed model or requested unsupported native format")
+		}
+		draft := draftOutput("true")
+		steps := draft["result"].(map[string]any)["cases"].([]any)[0].(map[string]any)["steps"].([]any)
+		steps[0].(map[string]any)["operation"] = "evaluate"
+		raw, _ := json.Marshal(draft)
+		_ = json.NewEncoder(w).Encode(map[string]any{"choices": []any{map[string]any{"index": 0, "finish_reason": "stop", "message": map[string]string{"content": string(raw)}}}})
+	}))
+	defer server.Close()
+	base, _ := url.Parse(server.URL)
+	a.Provider.HTTP.Transport = routerTestTransport(func(r *http.Request) (*http.Response, error) {
+		copy := r.Clone(r.Context())
+		copy.URL.Scheme, copy.URL.Host = base.Scheme, base.Host
+		copy.URL.Path = strings.TrimPrefix(copy.URL.Path, "/api/v1")
+		return http.DefaultTransport.RoundTrip(copy)
+	})
+	_, err := a.draftPlan(context.Background(), "Check the workflow", "https://example.test/", "https://example.test", false, nil)
+	if err == nil || calls != 2 {
+		t.Fatal("unvalidated JSON accepted or repair budget changed", err, calls)
+	}
+	plans, _ := a.Store.List("plan")
+	if len(plans) != 0 {
+		t.Fatal("unsafe JSON plan persisted")
+	}
+}
 
 func TestPlannerDeadlineIsFriendlyAndPreservesIdentity(t *testing.T) {
 	a := newTestApp(t)

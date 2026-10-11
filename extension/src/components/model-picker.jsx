@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { ChevronDown } from 'lucide-react';
 import { Button } from './ui.jsx';
+import { AI_PROVIDERS } from '../../../shared/ai-providers.js';
 
 export function ModelPicker({ settings, disabled, onSave }) {
   const details = useRef(null);
@@ -37,7 +38,8 @@ export function ModelPicker({ settings, disabled, onSave }) {
           />
         </label>
         <p className="small">
-          Use a model ID supported by your saved provider. Changes apply to new plans.
+          Using {AI_PROVIDERS[settings.aiProvider]?.label || 'your saved provider'}. A model’s brand
+          does not change the API key provider. Changes apply to new plans.
         </p>
         <Button
           type="button"

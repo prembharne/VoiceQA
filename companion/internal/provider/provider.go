@@ -20,10 +20,11 @@ type Client struct {
 	BaseURL string
 	Router  bool
 	NIM     bool
+	models  *modelCache
 }
 
 func New() *Client {
-	return &Client{HTTP: &http.Client{Timeout: 90 * time.Second}, BaseURL: "https://api.openai.com/v1"}
+	return &Client{HTTP: &http.Client{Timeout: 90 * time.Second}, BaseURL: "https://api.openai.com/v1", models: &modelCache{}}
 }
 
 // ForProvider returns a copy so speech always keeps the OpenAI endpoint.
@@ -91,7 +92,7 @@ func (c *Client) StructuredWithBudget(ctx context.Context, key, model, instructi
 	if budget < 512 || budget > 16000 {
 		return nil, nil, errors.New("structured output budget must be 512–16000 tokens")
 	}
-	if c.NIM {
+	if c.NIM || c.Router {
 		return c.chatStructured(ctx, key, model, instructions, input, schema, budget, false, nil)
 	}
 	inputJSON, e := json.Marshal(input)
@@ -99,9 +100,6 @@ func (c *Client) StructuredWithBudget(ctx context.Context, key, model, instructi
 		return nil, nil, e
 	}
 	body := map[string]any{"model": model, "instructions": instructions, "input": string(inputJSON), "max_output_tokens": budget, "text": map[string]any{"format": map[string]any{"type": "json_schema", "name": "qa_result", "strict": true, "schema": schema}}}
-	if c.Router {
-		body["provider"] = map[string]any{"require_parameters": true}
-	}
 	b, _ := json.Marshal(body)
 	data, e := c.post(ctx, "/responses", key, "application/json", bytes.NewReader(b))
 	if e != nil {

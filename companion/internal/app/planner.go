@@ -20,7 +20,7 @@ func (a *App) draftConfiguredPlan(ctx context.Context, request, url, origin stri
 }
 func planningError(err error) error {
 	if errors.Is(err, context.DeadlineExceeded) {
-		return &planningFailure{err, "The AI provider did not finish building the plan within 4 minutes. No tests were run. Try again, or choose another model from the chat composer."}
+		return &planningFailure{err, fmt.Sprintf("The AI provider did not finish building the plan within %d minutes. No tests were run. Try again, or choose another model from the chat composer.", int(provider.PlanningTimeout.Minutes()))}
 	}
 	if errors.Is(err, context.Canceled) {
 		return &planningFailure{err, "Planning stopped. No tests were run."}

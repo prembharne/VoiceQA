@@ -12,6 +12,13 @@ if (process.platform !== 'win32')
 const source = join(process.env.LOCALAPPDATA, 'VoiceQA');
 const security = process.argv.includes('--security');
 const workspace = process.argv.includes('--workspace');
+const modelOverride = process.argv
+  .find((arg) => arg.startsWith('--model='))
+  ?.slice('--model='.length);
+const hostPath = resolve(
+  process.argv.find((arg) => arg.startsWith('--host='))?.slice('--host='.length) ||
+    'dist/voiceqa-host.exe',
+);
 const origin = workspace
   ? 'http://127.0.0.1:4176'
   : security
@@ -49,6 +56,7 @@ try {
   } finally {
     db.close();
   }
+  if (modelOverride) model = modelOverride;
   if ((security || workspace) && !model.endsWith(':free'))
     throw new Error(
       'The live security check requires your selected OpenRouter :free model. It will not switch models or spend paid credits.',
@@ -81,7 +89,7 @@ try {
   );
   if (!observation) throw new Error('Demo observation failed.');
 
-  host = spawn(resolve('dist/voiceqa-host.exe'), ['--stdio'], {
+  host = spawn(hostPath, ['--stdio'], {
     windowsHide: true,
     stdio: ['pipe', 'pipe', 'ignore'],
     env: { ...process.env, VOICEQA_DATA_DIR: dataDir, OPENAI_API_KEY: '', VOICEQA_TTS_API_KEY: '' },
@@ -102,7 +110,7 @@ try {
           tasks.delete(id);
           fail(new Error('Native request timed out.'));
         },
-        type === 'plan.propose' ? 360000 : 130000,
+        type === 'plan.propose' ? 480000 : 130000,
       );
       tasks.set(id, { done, fail, timer });
       send(type, payload, { id });

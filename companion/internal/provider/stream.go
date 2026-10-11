@@ -13,8 +13,9 @@ import (
 	"time"
 )
 
-const PlanningTimeout = 4 * time.Minute
+const PlanningTimeout = 6 * time.Minute
 const planningOutputBudget = 16000
+const routerPlanningBudget = 32768
 
 type PlanProgress struct {
 	Phase         string
@@ -26,6 +27,9 @@ type PlanProgress struct {
 func (c *Client) PlanStructured(ctx context.Context, key, model, instructions string, input, schema any, progress func(PlanProgress)) (json.RawMessage, map[string]int, error) {
 	ctx, cancel := context.WithTimeout(ctx, PlanningTimeout)
 	defer cancel()
+	if c.Router {
+		return c.chatStructured(ctx, key, model, instructions, input, schema, routerPlanningBudget, true, progress)
+	}
 	if c.NIM {
 		return c.chatStructured(ctx, key, model, instructions, input, schema, planningOutputBudget, true, progress)
 	}
@@ -37,9 +41,6 @@ func (c *Client) PlanStructured(ctx context.Context, key, model, instructions st
 		return nil, nil, e
 	}
 	body := map[string]any{"model": model, "instructions": instructions, "input": string(inputJSON), "max_output_tokens": planningOutputBudget, "stream": true, "text": map[string]any{"format": map[string]any{"type": "json_schema", "name": "qa_result", "strict": true, "schema": schema}}}
-	if c.Router {
-		body["provider"] = map[string]any{"require_parameters": true}
-	}
 	encoded, e := json.Marshal(body)
 	if e != nil {
 		return nil, nil, e

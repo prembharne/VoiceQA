@@ -77,7 +77,7 @@ test('disconnected mutating requests are rejected and never replayed', async () 
   await hello;
 });
 test('planning deadlines outlive the companion while ordinary methods keep their limits', () => {
-  assert.ok(nativeTimeout('plan.propose') > 300000);
+  assert.ok(nativeTimeout('plan.propose') > 420000);
   assert.ok(panelTimeout('plan.propose') > nativeTimeout('plan.propose'));
   for (const method of ['hello', 'audio.complete', 'run.start', 'speech.synthesize']) {
     assert.equal(nativeTimeout(method), 120000);

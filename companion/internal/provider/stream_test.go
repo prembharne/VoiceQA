@@ -18,7 +18,7 @@ func TestPlanningStreamOutlivesOrdinaryHTTPTimeout(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var body map[string]any
 		_ = json.NewDecoder(r.Body).Decode(&body)
-		if r.URL.Path != "/responses" || body["stream"] != true || body["model"] != "test/model" || body["max_output_tokens"] != float64(16000) || body["provider"].(map[string]any)["require_parameters"] != true {
+		if r.URL.Path != "/responses" || body["stream"] != true || body["model"] != "test/model" || body["max_output_tokens"] != float64(16000) {
 			t.Error("planning changed model, routing, schema budget or streaming")
 		}
 		w.Header().Set("Content-Type", "text/event-stream")
@@ -35,11 +35,10 @@ func TestPlanningStreamOutlivesOrdinaryHTTPTimeout(t *testing.T) {
 	}))
 	defer server.Close()
 	c := New()
-	c.Router = true
 	c.BaseURL = server.URL
 	c.HTTP.Timeout = 20 * time.Millisecond
 	var phases []PlanProgress
-	raw, usage, err := c.PlanStructured(context.Background(), "sk-or-fixture", "test/model", "rules", nil, Object(map[string]any{"summary": String()}), func(p PlanProgress) { phases = append(phases, p) })
+	raw, usage, err := c.PlanStructured(context.Background(), "secret", "test/model", "rules", nil, Object(map[string]any{"summary": String()}), func(p PlanProgress) { phases = append(phases, p) })
 	if err != nil || string(raw) != `{"summary":"safe draft"}` || usage["total_tokens"] != 16 {
 		t.Fatal(string(raw), usage, err)
 	}

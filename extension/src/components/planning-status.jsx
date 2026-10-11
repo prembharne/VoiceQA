@@ -4,6 +4,7 @@ import { LoaderCircle } from 'lucide-react';
 const labels = {
   reading: 'Reading the shared page…',
   waiting: 'Waiting for your AI provider…',
+  adapting: 'Using compatible JSON output; the plan will be checked locally…',
   analyzing: 'Your AI is analyzing the workflow…',
   generating: 'Building your test plan…',
   validating: 'Checking the plan before review…',
@@ -25,7 +26,7 @@ export function PlanningStatus({ planning }) {
       <LoaderCircle className="spinner" size={16} aria-hidden="true" />
       <div>
         <span role="status">{labels[planning?.phase] || labels.reading}</span>
-        <small>AI planning can take up to 4 minutes. Stop cancels it.</small>
+        <small>AI planning can take up to 6 minutes. Stop cancels it.</small>
       </div>
       <span className="planning-elapsed" aria-hidden="true">
         {Math.floor(elapsed / 60)}:{String(elapsed % 60).padStart(2, '0')}
