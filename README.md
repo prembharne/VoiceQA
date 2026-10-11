@@ -6,6 +6,8 @@ The side panel is a conversational workspace: share the current website from the
 
 For the proposed hosted product and commercial rollout, see [the micro-SaaS roadmap](docs/MICRO_SAAS.md). Hosted accounts, collaboration and billing are future work.
 
+Version 0.4.1 replaces the default shop with RelayDesk: server-backed order tables, a validated wizard, persistent settings, invoices, TOTP and scoped security scenarios. Four fixture suites and a coverage guide separate supported checks from manual limitations.
+
 Version 0.4 adds data-driven workflows, captured values, session-aware API checks, logical security mode, network evidence, failure triage, run comparisons and reusable workflow drafts. See [workflow and security testing](docs/TESTING_WORKFLOWS.md). Version 0.3's multi-tab, encrypted profile, TOTP and operator-checkpoint features remain available in [advanced browser testing](docs/ADVANCED_TESTING.md).
 
 ## Quick start on Windows
@@ -25,7 +27,7 @@ npm run demo
    powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\install-host.ps1 -ExtensionId YOUR_EXTENSION_ID
    ```
 
-3. Open <http://127.0.0.1:4173/> in a dedicated QA Chrome profile.
+3. Open <http://127.0.0.1:4173/> in a dedicated QA Chrome profile. The default website is now **RelayDesk**, a complex operations workspace. See [compatibility suites](docs/COMPATIBILITY_LAB.md). Restart an older running demo server before refreshing the page.
 4. Click the extension icon to open its side panel. If offline, choose **Retry connection**; the screen displays your extension ID and a copyable setup command. Once connected, click **Share current tab** and grant access to that site's origin.
 5. Click **Run the demo test suite**, review its expected outcomes, and choose **Confirm and run tests**.
 6. Inspect evidence and export an HTML, JSON, or JUnit report.

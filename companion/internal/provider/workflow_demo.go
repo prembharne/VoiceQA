@@ -16,7 +16,7 @@ func labHTTP(method, url, body string, status int, pointer, expected, save, key,
 	if pointer == "/id" || pointer == "/owner" {
 		check.ExpectedType = "string"
 	}
-	if pointer == "/accepted" {
+	if pointer == "/accepted" || pointer == "/allowed" {
 		check.ExpectedType = "boolean"
 	}
 	return core.Action{Operation: "http_check", Label: label, HTTP: check}

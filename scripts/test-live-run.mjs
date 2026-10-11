@@ -1,5 +1,6 @@
 // Replay a generated cart or security draft against its lab in an isolated extension
 // profile, with a real four-second gap. No model calls or production data writes.
+import { allowedDemoAPI } from './live-demo-scope.mjs';
 import { chromium } from '@playwright/test';
 import { cp, mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { resolve, join } from 'node:path';
@@ -8,8 +9,13 @@ import { execFileSync } from 'node:child_process';
 
 const plan = JSON.parse(await readFile(resolve(process.argv[2]), 'utf8'));
 const security = plan.mode === 'security';
-const origin = security ? 'http://127.0.0.1:4175' : 'http://127.0.0.1:4173';
-const url = security ? `${origin}/security` : `${origin}/`;
+const workspace = plan.origin === 'http://127.0.0.1:4176';
+const origin = workspace
+  ? 'http://127.0.0.1:4176'
+  : security
+    ? 'http://127.0.0.1:4175'
+    : 'http://127.0.0.1:4173';
+const url = workspace ? `${origin}/` : security ? `${origin}/security` : `${origin}/fixtures/shop`;
 if (plan.origin !== origin || plan.url !== url || plan.clarification || !plan.cases?.length)
   throw new Error('This check requires a runnable local-demo plan.');
 const targets = new Set([
@@ -18,6 +24,25 @@ const targets = new Set([
   'testid:coupon',
   'testid:apply-coupon',
   'testid:coupon-error',
+  ...(workspace
+    ? [
+        'testid:new-order',
+        'testid:wizard-next',
+        'testid:wizard-error',
+        'testid:customer-name',
+        'testid:customer-email',
+        'testid:shipping-method',
+        'testid:order-product',
+        'testid:order-quantity',
+        'testid:order-coupon',
+        'testid:review-total',
+        'testid:order-status',
+        'testid:order-id',
+        'testid:order-total',
+        'testid:invoice-id',
+        'testid:invoice-total',
+      ]
+    : []),
   ...(security
     ? [
         'testid:login-alice',
@@ -42,22 +67,46 @@ for (const c of plan.cases)
         'click',
         'fill',
         'assert',
+        ...(workspace
+          ? [
+              'select',
+              'wait_for',
+              'capture_value',
+              'http_check',
+              'open_tab',
+              'switch_tab',
+              'close_tab',
+              'key',
+            ]
+          : []),
         ...(security ? ['http_check', 'security_audit', 'capture_value', 'wait_for'] : []),
       ].includes(a.operation) ||
       (a.operation === 'navigate'
-        ? a.value !== url
-        : a.operation === 'http_check'
-          ? !a.http?.url.startsWith(`${origin}/security/api/`)
-          : a.operation === 'security_audit'
-            ? false
-            : !targets.has(a.target))
+        ? a.value !== url && !(workspace && a.value === `${origin}/?reset=1`)
+        : workspace && a.operation === 'open_tab'
+          ? !(
+              a.target === 'invoice' &&
+              a.value.startsWith(origin + '/app/invoices/') &&
+              /^\$\{[a-z][a-z0-9_-]{0,31}\}$/.test(
+                a.value.slice((origin + '/app/invoices/').length),
+              )
+            )
+          : workspace && ['switch_tab', 'close_tab'].includes(a.operation)
+            ? !['main', 'invoice'].includes(a.target)
+            : workspace && a.operation === 'key'
+              ? a.value !== 'Escape'
+              : a.operation === 'http_check'
+                ? !allowedDemoAPI(a.http?.url, origin, workspace ? 'workspace' : 'security')
+                : a.operation === 'security_audit'
+                  ? false
+                  : !targets.has(a.target))
     )
       throw new Error(
         'This smoke check permits only known actions and API routes in the selected synthetic lab.',
       );
   }
-await mkdir(resolve('test-results'), { recursive: true });
-const work = await mkdtemp(resolve('test-results/paced-live-run-'));
+await mkdir(resolve('.tools/live-checks'), { recursive: true });
+const work = await mkdtemp(resolve('.tools/live-checks/paced-live-run-'));
 const data = join(work, 'data');
 await mkdir(data);
 const db = new DatabaseSync(join(data, 'voiceqa.db'));

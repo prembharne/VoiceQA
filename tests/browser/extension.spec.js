@@ -159,14 +159,16 @@ test('website URL is readable before site access and Test this tab selects the a
   expect(selection.access).toBe(false);
   expect(selection.tab.url).toBe('http://localhost:4173/');
 
-  await target.goto('http://127.0.0.1:4173/');
+  await target.goto('http://127.0.0.1:4173/fixtures/shop');
   await target.bringToFront();
   // A side panel click leaves the website active. Evaluate the actual DOM click
   // because this test renders the panel in a tab, which Playwright would activate.
   await control
     .getByRole('button', { name: 'Share current tab' })
     .evaluate((button) => button.click());
-  await expect.poll(async () => (await invoke('state')).target?.url).toBe('http://127.0.0.1:4173/');
+  await expect
+    .poll(async () => (await invoke('state')).target?.url)
+    .toBe('http://127.0.0.1:4173/fixtures/shop');
   await expect(control.locator('.sharing-chip')).toContainText('Sharing');
   await expect(control.getByRole('alert')).toHaveCount(0);
 
@@ -188,7 +190,7 @@ test('paced execution shows each action and Stop interrupts the gap', async () =
   await control.getByLabel('Gap between steps').selectOption('3000');
   await control.getByLabel('Test options', { exact: true }).click();
   await expect.poll(async () => (await invoke('settings.get')).stepDelayMs).toBe(3000);
-  await target.goto('http://127.0.0.1:4173/');
+  await target.goto('http://127.0.0.1:4173/fixtures/shop');
   await target.bringToFront();
   const plan = await invoke('plan.propose', { request: 'Run fixture', demo: true });
   await invoke('plan.confirm', { id: plan.id, version: plan.version });
@@ -241,7 +243,7 @@ test('paced execution shows each action and Stop interrupts the gap', async () =
 });
 
 test('healthy desktop/mobile fixture performs real browser actions and passes', async () => {
-  const run = await suite('http://127.0.0.1:4173/');
+  const run = await suite('http://127.0.0.1:4173/fixtures/shop');
   expect(run.status, JSON.stringify(run, null, 2)).toBe('passed');
   expect(run.plan.model).toBe('fixture-demo');
   expect(
@@ -256,7 +258,7 @@ test('healthy desktop/mobile fixture performs real browser actions and passes', 
   expect(Buffer.from(data.data, 'base64').toString()).toContain('failures="0"');
 });
 test('wrong business total is failed rather than agent-complete passed', async () => {
-  const run = await suite('http://127.0.0.1:4173/?bug=total');
+  const run = await suite('http://127.0.0.1:4173/fixtures/shop?bug=total');
   expect(run.status).toBe('failed');
   expect(
     run.steps.some(
@@ -266,35 +268,35 @@ test('wrong business total is failed rather than agent-complete passed', async (
   ).toBe(true);
 });
 test('missing coupon feedback is failed with explicit expected/actual evidence', async () => {
-  const run = await suite('http://127.0.0.1:4173/?bug=coupon');
+  const run = await suite('http://127.0.0.1:4173/fixtures/shop?bug=coupon');
   expect(run.status).toBe('failed');
   expect(
     run.steps.some((s) => s.status === 'failed' && s.result?.expected === 'Coupon is not valid'),
   ).toBe(true);
 });
 test('visual baselines require explicit approval and rerun', async () => {
-  let run = await suite('http://127.0.0.1:4173/', true);
+  let run = await suite('http://127.0.0.1:4173/fixtures/shop', true);
   expect(run.status).toBe('needs_review');
   for (const step of run.steps.filter((s) => s.result?.capture))
     await invoke('baseline.approve', { runId: run.id, stepId: step.id });
-  run = await suite('http://127.0.0.1:4173/', true);
+  run = await suite('http://127.0.0.1:4173/fixtures/shop', true);
   expect(run.status, JSON.stringify(run, null, 2)).toBe('passed');
   expect(run.steps.some((s) => s.result?.visual?.status === 'passed')).toBe(true);
 });
 test('accessibility and mobile overflow defects are detected', async () => {
-  const access = await suite('http://127.0.0.1:4173/?bug=accessibility');
+  const access = await suite('http://127.0.0.1:4173/fixtures/shop?bug=accessibility');
   expect(access.status).toBe('failed');
   expect(
     access.steps.some((s) => s.action.operation === 'accessibility' && s.result.seriousCount > 0),
   ).toBe(true);
-  const overflow = await suite('http://127.0.0.1:4173/?bug=overflow');
+  const overflow = await suite('http://127.0.0.1:4173/fixtures/shop?bug=overflow');
   expect(overflow.status).toBe('failed');
   expect(
     overflow.steps.some((s) => s.action.assertion?.kind === 'no_overflow' && s.status === 'failed'),
   ).toBe(true);
 });
 test('cancellation stops new actions and detaches the debugger', async () => {
-  const url = 'http://127.0.0.1:4173/?bug=order';
+  const url = 'http://127.0.0.1:4173/fixtures/shop?bug=order';
   await target.goto(url);
   await target.bringToFront();
   const tabId = await worker.evaluate(
@@ -330,10 +332,12 @@ test('cancellation stops new actions and detaches the debugger', async () => {
   expect(ownSession).toBe('detached');
 });
 test('planning without credentials fails explicitly rather than falling back', async () => {
-  await target.goto('http://127.0.0.1:4173/');
+  await target.goto('http://127.0.0.1:4173/fixtures/shop');
   await target.bringToFront();
   const tabId = await worker.evaluate(
-    async () => (await chrome.tabs.query({})).find((t) => t.url === 'http://127.0.0.1:4173/')?.id,
+    async () =>
+      (await chrome.tabs.query({})).find((t) => t.url === 'http://127.0.0.1:4173/fixtures/shop')
+        ?.id,
   );
   await invoke('bind', { tabId });
   await expect(
@@ -341,11 +345,13 @@ test('planning without credentials fails explicitly rather than falling back', a
   ).rejects.toThrow('Configure an API key');
 });
 test('paused asynchronous actions cannot revive after cancellation', async () => {
-  const url = 'http://127.0.0.1:4173/';
+  const url = 'http://127.0.0.1:4173/fixtures/shop';
   await target.goto(url);
   await target.bringToFront();
   const tabId = await worker.evaluate(
-    async () => (await chrome.tabs.query({})).find((t) => t.url === 'http://127.0.0.1:4173/')?.id,
+    async () =>
+      (await chrome.tabs.query({})).find((t) => t.url === 'http://127.0.0.1:4173/fixtures/shop')
+        ?.id,
   );
   await invoke('bind', { tabId });
   const plan = await invoke('plan.propose', { request: 'Run fixture', demo: true });
@@ -367,7 +373,7 @@ test('paused asynchronous actions cannot revive after cancellation', async () =>
 });
 test('chat reviews a fixture plan and streams a real run into the conversation', async () => {
   await control.getByRole('button', { name: 'New chat', exact: true }).click();
-  await target.goto('http://127.0.0.1:4173/');
+  await target.goto('http://127.0.0.1:4173/fixtures/shop');
   await target.bringToFront();
   await control
     .getByRole('button', { name: 'Run the demo test suite', exact: true })
@@ -546,10 +552,10 @@ test('shared-page picker approves an additional tab and unsharing leaves the use
   );
   await invoke('bind', { tabId: mainId });
   const extra = await context.newPage();
-  await extra.goto('http://127.0.0.1:4173/');
+  await extra.goto('http://127.0.0.1:4173/fixtures/shop');
   const extraId = await worker.evaluate(
     async (url) => (await chrome.tabs.query({})).find((t) => t.url === url)?.id,
-    'http://127.0.0.1:4173/',
+    'http://127.0.0.1:4173/fixtures/shop',
   );
   await control.bringToFront();
   await control.getByLabel('Test options', { exact: true }).click();
@@ -692,7 +698,7 @@ async function labSuite(path, mode = 'qa', dataset) {
     key: crypto.randomUUID(),
   });
   await expect
-    .poll(async () => (await invoke('run.get', { id: runId })).status, { timeout: 30000 })
+    .poll(async () => (await invoke('run.get', { id: runId })).status, { timeout: 90000 })
     .not.toBe('running');
   return invoke('run.get', { id: runId });
 }
@@ -863,4 +869,273 @@ test('an embedded document cannot replace top-level security policy evidence', a
   expect(run.securityFindings || []).toEqual([]);
   const audit = run.steps.find((s) => s.action.operation === 'security_audit');
   expect(audit.result.incompleteEvidence).toBe(false);
+});
+
+test('RelayDesk replaces the shop at the default URL and fits desktop and mobile', async () => {
+  await target.goto(advancedOrigin + '/');
+  await expect(
+    target.getByRole('heading', { name: 'Good morning, Alice', exact: true }),
+  ).toBeVisible();
+  await expect(target.locator('meta[name=voiceqa-fixture]')).toHaveAttribute(
+    'content',
+    'voiceqa-workspace-v1',
+  );
+  await target.emulateMedia({ reducedMotion: 'reduce' });
+  for (const width of [1440, 390]) {
+    await target.setViewportSize({ width, height: 900 });
+    expect(await target.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(
+      true,
+    );
+    await target.screenshot({ path: resolve(work, `relaydesk-${width}.png`), fullPage: true });
+  }
+  await target.setViewportSize({ width: 1440, height: 900 });
+  await target.emulateMedia({ reducedMotion: 'no-preference' });
+});
+
+test('RelayDesk full application suite verifies wizard, captures, server totals, tabs and persistence', async () => {
+  const run = await labSuite('/');
+  expect(run.status, JSON.stringify(run, null, 2)).toBe('passed');
+  const capture = run.steps.find((s) => s.action.operation === 'capture_value');
+  expect(capture.result.value).toMatch(/^ORD-[a-f0-9]{8}$/);
+  expect(run.steps.some((s) => s.page === 'invoice' && s.status === 'passed')).toBe(true);
+  expect((await invoke('state')).pages.invoice).toBeUndefined();
+  await writeFile(resolve(work, 'relaydesk-run.json'), JSON.stringify(run, null, 2));
+});
+
+test('RelayDesk responsive suite verifies populated desktop and mobile views', async () => {
+  const run = await labSuite('/app/layout');
+  expect(run.status, JSON.stringify(run, null, 2)).toBe('passed');
+  expect(
+    new Set(run.steps.filter((s) => s.action.operation === 'assert').map((s) => s.viewport)).size,
+  ).toBe(2);
+});
+
+test('RelayDesk authentication requires real TOTP and an operator-completed challenge', async () => {
+  const url = advancedOrigin + '/app/auth';
+  await invoke('auth.save', {
+    id: 'relay',
+    origin: advancedOrigin,
+    label: 'RelayDesk synthetic account',
+    username: 'qa@voiceqa.test',
+    password: 'fixture-only',
+    totpSecret: testSeed,
+    algorithm: 'sha1',
+    digits: 6,
+    period: 30,
+  });
+  await target.goto(url);
+  await target.bringToFront();
+  const tabId = await worker.evaluate(
+    async (url) => (await chrome.tabs.query({})).find((t) => t.url === url)?.id,
+    url,
+  );
+  await invoke('bind', { tabId });
+  const plan = await invoke('plan.propose', {
+    demo: true,
+    request: 'Run the RelayDesk authentication fixture',
+  });
+  await invoke('plan.confirm', { id: plan.id, version: plan.version });
+  const { runId } = await invoke('run.start', {
+    planId: plan.id,
+    version: plan.version,
+    key: crypto.randomUUID(),
+  });
+  await expect
+    .poll(async () => (await invoke('run.get', { id: runId })).handoff?.kind, { timeout: 20000 })
+    .toBe('captcha');
+  await expect(target.getByTestId('auth-result')).toHaveText('Authenticated as Alice Morgan');
+  await target.getByTestId('challenge').check();
+  await expect(target.getByTestId('challenge-result')).toHaveText('Challenge completed');
+  const run = await invoke('run.get', { id: runId });
+  await invoke('handoff.complete', { id: run.handoff.id });
+  await expect
+    .poll(async () => (await invoke('run.get', { id: runId })).status, { timeout: 15000 })
+    .toBe('passed');
+  const complete = await invoke('run.get', { id: runId });
+  expect(JSON.stringify(complete)).not.toContain(testSeed);
+  expect(JSON.stringify(complete)).not.toContain('fixture-only');
+  await writeFile(resolve(work, 'relaydesk-auth-run.json'), JSON.stringify(complete, null, 2));
+});
+
+test('RelayDesk logical security verifies actual server controls', async () => {
+  const run = await labSuite('/app/security', 'security');
+  expect(run.status, JSON.stringify(run, null, 2)).toBe('passed');
+  expect(run.securityFindings || []).toEqual([]);
+  expect(run.steps.filter((s) => s.action.operation === 'http_check')).toHaveLength(10);
+  await writeFile(resolve(work, 'relaydesk-security-run.json'), JSON.stringify(run, null, 2));
+});
+for (const [bug, label] of [
+  ['ownership', 'cross-account denial'],
+  ['role', 'server admin denial'],
+  ['csrf', 'tokenless write denial'],
+  ['price', 'server price integrity'],
+  ['duplicate', 'duplicate submission'],
+]) {
+  test(`RelayDesk detects the seeded ${bug} server defect`, async () => {
+    const run = await labSuite('/app/security?bug=' + bug, 'security');
+    expect(run.status, JSON.stringify(run, null, 2)).toBe('failed');
+    expect(run.steps.some((s) => s.status === 'failed' && s.action.label.includes(label))).toBe(
+      true,
+    );
+  });
+}
+
+test('RelayDesk fences genuinely stale searches and renders a real empty state', async () => {
+  let firstStarted, releaseFirst, firstFinished;
+  const started = new Promise((resolve) => (firstStarted = resolve));
+  const release = new Promise((resolve) => (releaseFirst = resolve));
+  const finished = new Promise((resolve) => (firstFinished = resolve));
+  let hold = true;
+  const pattern = '**/workspace/api/orders?*';
+  const handler = async (route) => {
+    if (hold && new URL(route.request().url()).searchParams.get('q') === 'Northstar') {
+      hold = false;
+      firstStarted();
+      try {
+        const response = await route.fetch();
+        await release;
+        await route.fulfill({ response });
+      } finally {
+        firstFinished();
+      }
+    } else await route.continue();
+  };
+  await target.route(pattern, handler);
+  try {
+    await target.goto(advancedOrigin + '/app/orders?reset=1');
+    await expect(target.getByTestId('orders-summary')).toHaveText('5 matching orders');
+    await target.getByTestId('order-search').fill('Northstar');
+    await started;
+    await target.getByTestId('order-search').fill('No such customer');
+    await expect(target.getByTestId('empty-orders')).toHaveText('No orders found');
+    releaseFirst();
+    await finished;
+    await target.waitForTimeout(200);
+    await expect(target.getByTestId('empty-orders')).toHaveText('No orders found');
+  } finally {
+    releaseFirst();
+    await target.unroute(pattern, handler);
+  }
+  await target.getByRole('button', { name: 'Clear filters', exact: true }).click();
+  await expect(target.getByTestId('orders-summary')).toHaveText('5 matching orders');
+  await target.getByTestId('order-filter').selectOption('Draft');
+  await expect(target.getByTestId('orders-summary')).toHaveText('2 matching orders');
+  const pending = target.waitForRequest(
+    (r) =>
+      new URL(r.url()).pathname === '/workspace/api/orders' &&
+      new URL(r.url()).searchParams.get('q') === 'Northstar',
+  );
+  await target.getByTestId('order-search').fill('Northstar');
+  await pending;
+  await target.getByTestId('nav-projects').click();
+  await target.waitForTimeout(500);
+  await expect(target.getByRole('heading', { name: 'Projects', exact: true })).toBeVisible();
+  await expect(target.getByTestId('orders-summary')).toHaveCount(0);
+});
+
+test('RelayDesk data rows isolate complete workflows and invoice identities', async () => {
+  const run = await labSuite('/', 'qa', [
+    { quantity: '1', total: '135' },
+    { quantity: '3', total: '375' },
+  ]);
+  expect(run.status, JSON.stringify(run, null, 2)).toBe('passed');
+  const captures = run.steps.filter((s) => s.action.operation === 'capture_value');
+  expect(captures).toHaveLength(2);
+  expect(captures[0].result.value).not.toBe(captures[1].result.value);
+  const checks = run.steps.filter((s) => s.action.operation === 'http_check');
+  expect(checks.map((s) => s.result.actual)).toEqual(
+    expect.arrayContaining([
+      expect.stringContaining('/total=135'),
+      expect.stringContaining('/total=375'),
+    ]),
+  );
+});
+
+test('RelayDesk can be proposed and run from the VoiceQA chat', async () => {
+  await control.getByRole('button', { name: 'New chat', exact: true }).click();
+  await target.goto(advancedOrigin + '/');
+  await target.bringToFront();
+  const tabId = await worker.evaluate(
+    async (url) => (await chrome.tabs.query({})).find((t) => t.url === url)?.id,
+    advancedOrigin + '/',
+  );
+  await invoke('bind', { tabId });
+  await control.bringToFront();
+  await control.getByLabel('Test options', { exact: true }).click();
+  await control.getByLabel('Testing mode', { exact: true }).selectOption('qa');
+  await control.getByLabel('Test options', { exact: true }).click();
+  await target.bringToFront();
+  await control
+    .getByRole('button', { name: 'Run the demo test suite', exact: true })
+    .evaluate((b) => b.click());
+  await expect(control.getByRole('heading', { name: 'Test plan', exact: true })).toBeVisible();
+  await expect(control.locator('.case-card')).toHaveCount(3);
+  await control
+    .getByRole('button', { name: 'Confirm and run tests', exact: true })
+    .evaluate((b) => b.click());
+  await expect(control.locator('.result-banner .status')).toHaveText('passed', { timeout: 90000 });
+  await expect.poll(async () => (await invoke('state')).runId, { timeout: 30000 }).toBe(null);
+  await control.screenshot({ path: resolve(work, 'relaydesk-chat-results.png'), fullPage: true });
+});
+
+test('RelayDesk authentication navigation works before initial bootstrap completes', async () => {
+  let releaseFirst, started, firstFinished;
+  const release = new Promise((r) => (releaseFirst = r)),
+    first = new Promise((r) => (started = r)),
+    finished = new Promise((r) => (firstFinished = r));
+  let hold = true;
+  const pattern = '**/workspace/api/bootstrap';
+  const handler = async (route) => {
+    if (hold) {
+      hold = false;
+      started();
+      try {
+        const response = await route.fetch();
+        await release;
+        if (!route.request().failure()) await route.fulfill({ response });
+      } finally {
+        firstFinished();
+      }
+    } else await route.continue();
+  };
+  await target.route(pattern, handler);
+  try {
+    await target.goto(advancedOrigin + '/?reset=1', { waitUntil: 'domcontentloaded' });
+    await first;
+    await target.getByTestId('nav-auth').click();
+    await expect(
+      target.getByRole('heading', { name: 'Sign in to Northstar', exact: true }),
+    ).toBeVisible();
+    await expect(target.getByTestId('identity')).toHaveText('Guest account');
+  } finally {
+    releaseFirst();
+    await finished;
+    await target.unroute(pattern, handler);
+  }
+});
+
+test('RelayDesk distinguishes submitted orders from unavailable confirmation', async () => {
+  const pattern = '**/workspace/api/orders/ORD-*';
+  const handler = (route) =>
+    route.fulfill({
+      status: 503,
+      contentType: 'application/json',
+      body: '{"error":"Temporary confirmation failure"}',
+    });
+  await target.route(pattern, handler);
+  try {
+    await target.goto(advancedOrigin + '/?reset=1');
+    await target.getByTestId('new-order').click();
+    await target.getByTestId('customer-name').fill('Northstar Studio');
+    await target.getByTestId('customer-email').fill('qa@relay.test');
+    await target.getByTestId('wizard-next').click();
+    await target.getByTestId('wizard-next').click();
+    await target.getByTestId('wizard-next').click();
+    await expect(target.getByTestId('order-result')).toHaveText('Order submitted');
+    await expect(target.getByTestId('order-status')).toHaveText(
+      'Confirmation unavailable. Review orders before retrying.',
+    );
+  } finally {
+    await target.unroute(pattern, handler);
+  }
 });

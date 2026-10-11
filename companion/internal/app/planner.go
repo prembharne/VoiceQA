@@ -60,6 +60,26 @@ func (a *App) draftConfiguredPlan(ctx context.Context, request, url, origin stri
 	input["sharedPages"] = pages
 	input["authProfiles"] = allowedProfiles
 	if strings.HasPrefix(origin, "http://127.0.0.1:") || strings.HasPrefix(origin, "http://localhost:") {
+		if obs["fixture"] == "voiceqa-workspace-v1" {
+			if config.Mode == "security" {
+				input["fixtureRequirements"] = provider.WorkspaceSecurityPlan(url, origin, request, config.SecurityAuthorized).Cases
+			} else {
+				input["fixtureRequirements"] = provider.WorkspaceRequirements(url, origin)
+			}
+		}
+		if obs["fixture"] == "voiceqa-workspace-layout-v1" {
+			input["fixtureRequirements"] = provider.WorkspaceLayoutPlan(url, origin, request).Cases
+		}
+		if obs["fixture"] == "voiceqa-workspace-auth-v1" {
+			profile := ""
+			for _, entry := range allowedProfiles {
+				if entry.Origin == origin && entry.HasUsername && entry.HasPassword && entry.HasTOTP {
+					profile = entry.ID
+					break
+				}
+			}
+			input["fixtureRequirements"] = provider.WorkspaceAuthPlan(url, origin, request, profile).Cases
+		}
 		if obs["fixture"] == "voiceqa-security-v1" {
 			input["fixtureRequirements"] = provider.SecurityDemoPlan(url, origin, request, config.SecurityAuthorized && config.Mode == "security").Cases
 		}
@@ -100,6 +120,7 @@ func (a *App) draftConfiguredPlan(ctx context.Context, request, url, origin stri
 		}
 		e = json.Unmarshal(raw, &draft)
 		plan := core.Plan{Summary: draft.Summary, Cases: draft.Result.Cases, Pages: pages}
+		normalizeDraftLabels(plan.Cases)
 		plan.Mode = config.Mode
 		plan.APIWritesAllowed = config.APIWritesAllowed
 		plan.SecurityAuthorized = config.SecurityAuthorized

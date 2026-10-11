@@ -13,6 +13,7 @@ await cp('dist/voiceqa-host.exe', `${root}/voiceqa-host.exe`);
 await cp('LICENSE', `${root}/LICENSE`);
 await cp('README.md', `${root}/PROJECT_README.md`);
 await cp('docs', `${root}/docs`, { recursive: true });
+await cp('demo', `${root}/demo`, { recursive: true });
 await mkdir(`${root}/licenses`, { recursive: true });
 for (const name of [
   'react',
@@ -61,7 +62,7 @@ for (const entry of modules) {
   }
 }
 await writeFile(`${root}/THIRD-PARTY-NOTICES.txt`, notices.join('\n'));
-for (const name of ['install-host.ps1', 'uninstall-host.ps1', 'check-host.ps1']) {
+for (const name of ['install-host.ps1', 'uninstall-host.ps1', 'check-host.ps1', 'run-demo.ps1']) {
   let source = await readFile(`scripts/${name}`, 'utf8');
   source = source
     .replace(
@@ -74,7 +75,7 @@ for (const name of ['install-host.ps1', 'uninstall-host.ps1', 'check-host.ps1'])
 }
 await writeFile(
   `${root}/INSTALL.txt`,
-  `VoiceQA ${version}\r\n\r\n1. Chrome > chrome://extensions > Developer mode > Load unpacked > extension folder.\r\n2. Run: powershell -NoProfile -ExecutionPolicy Bypass -File .\\install-host.ps1 -ExtensionId YOUR_ID\r\n3. Open the side panel. The connection screen shows your extension ID and a setup command. Choose Retry connection.\r\n4. On a website, choose Share current tab in the bottom composer and configure your API key using the top-right settings gear.\r\n5. Review the plan before running. Use a dedicated QA profile and synthetic data.\r\n\r\nDiagnostic: powershell -NoProfile -File .\\check-host.ps1 -ExtensionId YOUR_ID\r\nKeep this folder in place: Chrome starts the executable at its installed path.\r\n`,
+  `VoiceQA ${version}\r\n\r\n1. Chrome > chrome://extensions > Developer mode > Load unpacked > extension folder.\r\n2. Run: powershell -NoProfile -ExecutionPolicy Bypass -File .\\install-host.ps1 -ExtensionId YOUR_ID\r\n3. Open the side panel. The connection screen shows your extension ID and a setup command. Choose Retry connection.\r\n4. On a website, choose Share current tab in the bottom composer and configure your API key using the top-right settings gear.\r\n5. Optional RelayDesk benchmark: install Node.js 24+, then run powershell -NoProfile -File .\\run-demo.ps1 and open http://127.0.0.1:4173/.\r\n6. Review the plan before running. Use a dedicated QA profile and synthetic data.\r\n\r\nDiagnostic: powershell -NoProfile -File .\\check-host.ps1 -ExtensionId YOUR_ID\r\nKeep this folder in place: Chrome starts the executable at its installed path.\r\n`,
 );
 await cp('docs/VALIDATION.md', `${root}/VALIDATION.md`);
 if (process.platform === 'win32')

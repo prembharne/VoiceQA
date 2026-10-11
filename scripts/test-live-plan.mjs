@@ -11,10 +11,19 @@ if (process.platform !== 'win32')
   throw new Error('Saved-key smoke check currently requires Windows.');
 const source = join(process.env.LOCALAPPDATA, 'VoiceQA');
 const security = process.argv.includes('--security');
-const origin = security ? 'http://127.0.0.1:4175' : 'http://127.0.0.1:4173';
-const targetURL = security ? `${origin}/security` : `${origin}/`;
+const workspace = process.argv.includes('--workspace');
+const origin = workspace
+  ? 'http://127.0.0.1:4176'
+  : security
+    ? 'http://127.0.0.1:4175'
+    : 'http://127.0.0.1:4173';
+const targetURL = workspace
+  ? `${origin}/`
+  : security
+    ? `${origin}/security`
+    : `${origin}/fixtures/shop`;
 const requestFile = process.argv.slice(2).find((arg) => !arg.startsWith('--'));
-const results = resolve('test-results');
+const results = resolve('.tools/live-checks');
 await mkdir(results, { recursive: true });
 const folder = await mkdtemp(join(results, 'live-plan-'));
 const dataDir = join(folder, 'data');
@@ -39,7 +48,7 @@ try {
   } finally {
     db.close();
   }
-  if (security && !model.endsWith(':free'))
+  if ((security || workspace) && !model.endsWith(':free'))
     throw new Error(
       'The live security check requires your selected OpenRouter :free model. It will not switch models or spend paid credits.',
     );
@@ -59,7 +68,8 @@ try {
       },
     };
   });
-  await page.addScriptTag({ path: resolve('extension/content.js') });
+  // Test instrumentation uses the trusted bundled observer; do not weaken the app's CSP.
+  await page.evaluate(await readFile(resolve('extension/content.js'), 'utf8'));
   const observation = await page.evaluate(
     () =>
       new Promise((done) => {
@@ -135,17 +145,19 @@ try {
   if (!settings.hasApiKey) throw new Error('No saved OpenRouter key is available.');
   await rpc('project.configure', { origin, url: page.url() });
   console.log(
-    `Drafting the ${security ? 'logical security' : 'coupon/cart'} request with OpenRouter ${model}...`,
+    `Drafting the ${workspace ? 'RelayDesk order workflow' : security ? 'logical security' : 'coupon/cart'} request with OpenRouter ${model}...`,
   );
   const plan = await rpc('plan.propose', {
     request: requestFile
       ? await readFile(resolve(requestFile), 'utf8')
-      : security
-        ? 'On this synthetic lab, verify anonymous and cross-user order access are denied with positive authorized controls. Verify a client price of 0.01 cannot change the server mug price of 12. Verify a client admin claim cannot grant server admin access. Verify missing CSRF is denied and the legitimate protected API works using its named CSRF source. Verify a repeated idempotency key returns the same order ID. Verify the bearer session uses the provided named browser source and enforces ownership. Reset before each case. Use the exact fixture contract and never capture credentials or tokens.'
-        : 'Check that invalid coupon is rejected and cart total is updated correctly. The value for a mug is $12.',
+      : workspace
+        ? 'Create only one case for the RelayDesk order workflow. Reset the sandbox first. Open New order, attempt Next with missing fields and verify the validation message. Fill Northstar Studio, qa@relay.test, express delivery, and quantity 2 of Studio display. Verify INVALID coupon is rejected, clear it, then review the exact total 255. Submit the synthetic order, wait for Order confirmed, capture its actual order ID, independently verify the server total at the provided order API, open the known invoice route in an owned tab, verify its ID and total, return to main and close only the created invoice tab. Do not add the other suite cases or duplicate viewports. Use the trusted fixture contract.'
+        : security
+          ? 'On this synthetic lab, verify anonymous and cross-user order access are denied with positive authorized controls. Verify a client price of 0.01 cannot change the server mug price of 12. Verify a client admin claim cannot grant server admin access. Verify missing CSRF is denied and the legitimate protected API works using its named CSRF source. Verify a repeated idempotency key returns the same order ID. Verify the bearer session uses the provided named browser source and enforces ownership. Reset before each case. Use the exact fixture contract and never capture credentials or tokens.'
+          : 'Check that invalid coupon is rejected and cart total is updated correctly. The value for a mug is $12.',
     url: page.url(),
     origin,
-    responsive: !security,
+    responsive: !security && !workspace,
     mode: security ? 'security' : 'qa',
     securityAuthorized: security,
     visual: false,

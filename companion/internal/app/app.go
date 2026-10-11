@@ -224,7 +224,7 @@ func (a *App) dispatch(m native.Message) (any, error) {
 	}
 	switch m.Type {
 	case "hello":
-		return map[string]any{"version": 1, "hostVersion": "0.4.0", "settings": a.getSettings(), "capabilities": []string{"dom", "input", "assertions", "accessibility", "visual", "voice", "reports", "multi-tab", "totp", "human-checkpoints", "condition-waits", "test-data", "workflow-variables", "http-checks", "logical-security", "network-evidence", "triage", "run-comparison"}}, nil
+		return map[string]any{"version": 1, "hostVersion": "0.4.1", "settings": a.getSettings(), "capabilities": []string{"dom", "input", "assertions", "accessibility", "visual", "voice", "reports", "multi-tab", "totp", "human-checkpoints", "condition-waits", "test-data", "workflow-variables", "http-checks", "logical-security", "network-evidence", "triage", "run-comparison"}}, nil
 	case "auth.list", "auth.save", "auth.delete":
 		return a.authDispatch(m)
 	case "settings.get":
@@ -343,16 +343,34 @@ func (a *App) dispatch(m native.Message) (any, error) {
 		if p.Demo {
 			u, _ := url.Parse(p.URL)
 			if u.Hostname() != "127.0.0.1" && u.Hostname() != "localhost" {
-				return nil, errors.New("fixture demo is restricted to the local demo shop")
+				return nil, errors.New("fixture suites are restricted to local VoiceQA test applications")
 			}
 			obs, e := a.browser(ctx, "", "", map[string]any{"operation": "observe", "origin": p.Origin})
 			if e != nil {
 				return nil, e
 			}
-			if obs["fixture"] != "voiceqa-shop-v1" && obs["fixture"] != "voiceqa-advanced-v1" && obs["fixture"] != "voiceqa-security-v1" && obs["fixture"] != "voiceqa-workflow-v1" {
-				return nil, errors.New("open the VoiceQA demo shop before using its fixture plan")
+			if obs["fixture"] != "voiceqa-shop-v1" && obs["fixture"] != "voiceqa-advanced-v1" && obs["fixture"] != "voiceqa-security-v1" && obs["fixture"] != "voiceqa-workflow-v1" && obs["fixture"] != "voiceqa-workspace-v1" && obs["fixture"] != "voiceqa-workspace-auth-v1" && obs["fixture"] != "voiceqa-workspace-layout-v1" {
+				return nil, errors.New("open a VoiceQA test application before using its fixture suite")
 			}
-			if obs["fixture"] == "voiceqa-security-v1" {
+			if obs["fixture"] == "voiceqa-workspace-v1" {
+				if p.Mode == "security" {
+					plan = provider.WorkspaceSecurityPlan(p.URL, p.Origin, p.Request, p.SecurityAuthorized)
+				} else {
+					plan = provider.WorkspaceDemoPlan(p.URL, p.Origin, p.Request)
+				}
+			} else if obs["fixture"] == "voiceqa-workspace-layout-v1" {
+				plan = provider.WorkspaceLayoutPlan(p.URL, p.Origin, p.Request)
+			} else if obs["fixture"] == "voiceqa-workspace-auth-v1" {
+				profiles, _ := a.authList()
+				profile := ""
+				for _, entry := range profiles {
+					if entry.Origin == p.Origin && entry.HasUsername && entry.HasPassword && entry.HasTOTP {
+						profile = entry.ID
+						break
+					}
+				}
+				plan = provider.WorkspaceAuthPlan(p.URL, p.Origin, p.Request, profile)
+			} else if obs["fixture"] == "voiceqa-security-v1" {
 				plan = provider.SecurityDemoPlan(p.URL, p.Origin, p.Request, p.Mode == "security" && p.SecurityAuthorized)
 			} else if obs["fixture"] == "voiceqa-workflow-v1" {
 				plan = provider.WorkflowDemoPlan(p.URL, p.Origin, p.Request)

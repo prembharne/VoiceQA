@@ -1,20 +1,15 @@
 import http from 'node:http';
 import { readFile } from 'node:fs/promises';
-import { createHmac, timingSafeEqual } from 'node:crypto';
+import { validCode } from './totp.mjs';
+import { workspaceRequest } from './workspace-server.mjs';
 import { labRequest } from './lab-server.mjs';
 const [shop, advanced, child] = await Promise.all(
   ['shop.html', 'advanced.html', 'child.html'].map((name) =>
     readFile(new URL(name, import.meta.url)),
   ),
 );
-function codeAt(seconds) {
-  const counter = Buffer.alloc(8);
-  counter.writeBigUInt64BE(BigInt(Math.floor(seconds / 30)));
-  const digest = createHmac('sha1', Buffer.from('12345678901234567890')).update(counter).digest();
-  const offset = digest[digest.length - 1] & 15;
-  return String((digest.readUInt32BE(offset) & 0x7fffffff) % 1000000).padStart(6, '0');
-}
 const server = http.createServer(async (req, res) => {
+  if (await workspaceRequest(req, res)) return;
   if (await labRequest(req, res)) return;
   const path = new URL(req.url, 'http://127.0.0.1').pathname;
   if (path === '/health') {
@@ -31,11 +26,7 @@ const server = http.createServer(async (req, res) => {
       }
       const p = JSON.parse(body);
       const now = Math.floor(Date.now() / 1000);
-      const candidate = Buffer.from(String(p.code || ''));
-      const valid = [now - 30, now, now + 30].some((t) => {
-        const expected = Buffer.from(codeAt(t));
-        return candidate.length === expected.length && timingSafeEqual(candidate, expected);
-      });
+      const valid = validCode(p.code, now);
       res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
       res.end(
         JSON.stringify({
@@ -46,6 +37,11 @@ const server = http.createServer(async (req, res) => {
       res.writeHead(400, { 'Content-Type': 'application/json' });
       res.end('{"ok":false}');
     }
+    return;
+  }
+  if (path !== '/advanced' && path !== '/advanced/child' && path !== '/fixtures/shop') {
+    res.writeHead(404, { 'Content-Type': 'text/plain' });
+    res.end('Unknown demo route');
     return;
   }
   res.writeHead(200, { 'Content-Type': 'text/html', 'Cache-Control': 'no-store' });

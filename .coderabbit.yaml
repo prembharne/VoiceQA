@@ -21,6 +21,8 @@ reviews:
       instructions: "Check origin authorization, exact plan confirmation, cancellation, goroutine ownership, JSON bounds, privacy, variable interpolation and report accuracy. Security mode must verify real server status/data; expected 401/403 denials must count as successful checks. Never retry an ambiguous mutation. Credential values belong only in encrypted profiles and transient secure-entry messages."
     - path: "extension/**"
       instructions: "Check generation fences before and after awaits, approved-origin and active-tab checks, owned-tab cleanup, fixed operation dispatch, HTTP redirect blocking, secret redaction, bounded network evidence and accessible controls. No model-generated eval, arbitrary scripts, exploit payload engines or CAPTCHA bypass."
+    - path: "demo/**"
+      instructions: "Check the synthetic server authorization, CSRF, idempotency payload binding, bounded session/data storage, safe HTML rendering, stale asynchronous updates and cleanup. Fixture login/reset routes are deliberately available only in a loopback sandbox and must be clearly disclosed, never mistaken for production authentication. Test defects are deliberate only when explicitly selected."
     - path: "tests/**"
       instructions: "Verify positive and negative controls, seeded server-side defects, cancellation, variable/data-row isolation and actual Chrome/native-host behavior. Mocked tests do not prove live model or third-party authentication behavior."
   auto_review:
