@@ -1,4 +1,4 @@
-// Replay a generated coupon/cart draft against the demo in an isolated extension
+// Replay a generated cart or security draft against its lab in an isolated extension
 // profile, with a real four-second gap. No model calls or production data writes.
 import { chromium } from '@playwright/test';
 import { cp, mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
@@ -7,13 +7,10 @@ import { DatabaseSync } from 'node:sqlite';
 import { execFileSync } from 'node:child_process';
 
 const plan = JSON.parse(await readFile(resolve(process.argv[2]), 'utf8'));
-const origin = 'http://127.0.0.1:4173';
-if (
-  plan.origin !== origin ||
-  plan.url !== `${origin}/` ||
-  plan.clarification ||
-  !plan.cases?.length
-)
+const security = plan.mode === 'security';
+const origin = security ? 'http://127.0.0.1:4175' : 'http://127.0.0.1:4173';
+const url = security ? `${origin}/security` : `${origin}/`;
+if (plan.origin !== origin || plan.url !== url || plan.clarification || !plan.cases?.length)
   throw new Error('This check requires a runnable local-demo plan.');
 const targets = new Set([
   'testid:add-mug',
@@ -21,14 +18,43 @@ const targets = new Set([
   'testid:coupon',
   'testid:apply-coupon',
   'testid:coupon-error',
+  ...(security
+    ? [
+        'testid:login-alice',
+        'testid:login-bob',
+        'testid:identity',
+        'testid:client-admin',
+        'testid:client-role',
+        'testid:genuine-transfer',
+        'testid:transfer-result',
+        'testid:order-id',
+        'testid:order-total',
+        'testid:order-quantity',
+        'testid:create-order',
+      ]
+    : []),
 ]);
 for (const c of plan.cases)
   for (const a of c.steps) {
     if (
-      !['navigate', 'click', 'fill', 'assert'].includes(a.operation) ||
-      (a.operation === 'navigate' ? a.value !== `${origin}/` : !targets.has(a.target))
+      ![
+        'navigate',
+        'click',
+        'fill',
+        'assert',
+        ...(security ? ['http_check', 'security_audit', 'capture_value', 'wait_for'] : []),
+      ].includes(a.operation) ||
+      (a.operation === 'navigate'
+        ? a.value !== url
+        : a.operation === 'http_check'
+          ? !a.http?.url.startsWith(`${origin}/security/api/`)
+          : a.operation === 'security_audit'
+            ? false
+            : !targets.has(a.target))
     )
-      throw new Error('This smoke check is scoped to mug and coupon actions only.');
+      throw new Error(
+        'This smoke check permits only known actions and API routes in the selected synthetic lab.',
+      );
   }
 await mkdir(resolve('test-results'), { recursive: true });
 const work = await mkdtemp(resolve('test-results/paced-live-run-'));
@@ -126,11 +152,11 @@ try {
   const rpc = (method, payload = {}) =>
     panel.evaluate(({ method, payload }) => globalThis.__rpc(method, payload), { method, payload });
   const target = await context.newPage();
-  await target.goto(`${origin}/`);
+  await target.goto(url);
   await target.bringToFront();
   const tabId = await worker.evaluate(
     async (url) => (await chrome.tabs.query({})).find((t) => t.url === url)?.id,
-    `${origin}/`,
+    url,
   );
   await rpc('bind', { tabId });
   await rpc('plan.confirm', { id: plan.id, version: plan.version });
@@ -159,7 +185,7 @@ try {
   }
   await writeFile(join(work, 'run.json'), JSON.stringify(run, null, 2));
   await panel.screenshot({ path: join(work, 'results.png'), fullPage: true });
-  const assertions = run.steps.filter((s) => s.action.operation === 'assert');
+  const assertions = run.steps.filter((s) => ['assert', 'http_check'].includes(s.action.operation));
   const gaps = run.steps
     .slice(1)
     .map((s, i) => Date.parse(s.startedAt) - Date.parse(run.steps[i].completedAt));

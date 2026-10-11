@@ -8,7 +8,7 @@ Chrome Native Messaging uses a 4-byte little-endian UTF-8 byte length followed b
 
 Replies use `rpc.result` with `payload.requestId`, `result`, and optional `error`. Host-to-browser operations use `browser.request`; responses use `browser.result` with `requestId`, `result`, `error`, and `code`. `runId` and `actionId` bind execution and journals. Run events contain a persisted sequence number and a run snapshot.
 
-Supported RPCs: `hello`, `settings.get/save`, `project.configure`, `plan.propose/confirm/get/list`, `run.start/cancel/get/list`, `upload.begin/chunk/complete`, `artifact.get`, `audio.complete`, `baseline.approve`, and `report.export`.
+Supported RPCs: `hello`, `settings.get/save`, `project.configure`, `plan.propose/confirm/get/list/fork`, `run.start/cancel/get/list/compare`, `upload.begin/chunk/complete`, `artifact.get`, `audio.complete`, `baseline.approve`, and `report.export`.
 
 Speech RPCs: `speech.synthesize` takes `text` (1–4096 characters) and a unique `speechId`, returning a temporary MP3 artifact ID. `speech.cancel` cancels a specific synthesis without stopping a test run. `speech.release` deletes only a marked temporary speech artifact; it cannot delete test evidence. Existing chunked `artifact.get` transfers audio to the panel. The panel uses generation checks to suppress late playback after cancellation.
 
@@ -27,3 +27,11 @@ Plans may include trusted `pages: [{alias,url,origin,title}]`; browser IDs never
 Profile RPCs: `auth.list/save/delete`. Save accepts `id`, `origin`, `label`, input-only `username/password/totpSecret`, and `algorithm/digits/period`. Public replies expose `hasUsername/hasPassword/hasTotp`, never stored values. Secure planned entry uses `fill_secret` value=`profile:username|password` or `fill_totp` value=`profile`. The host sends a transient `fill` action with `secureOrigin` only to the trusted worker; original plan/run records retain references.
 
 Panel-to-worker page RPCs are `pages.list/share/remove`. `pages.share` accepts an existing tab ID after a site permission grant. `handoff.complete` accepts the current checkpoint ID. `human_checkpoint` value is `mfa`, `captcha` or `approval`; its run snapshot exposes a fresh handoff ID and instructions. Completion polling never blocks a native request for the duration of operator interaction. Cancellation invalidates the handoff, and cleanup closes only tracked run-created tabs still in an explicitly approved origin.
+
+## Version 0.4 workflow additions (envelope version remains 1)
+
+`plan.propose` accepts trusted `mode` (`qa`/`security`), `securityAuthorized`, `apiWritesAllowed` and `dataset` (up to five public string-valued rows). Every case/row is validated; the model cannot grant permissions. `plan.fork` accepts an existing plan ID and optional dataset override, returning a new unconfirmed ID/version. `run.compare` accepts `before`/`after` run IDs on the same primary origin and returns fixed/regressed/added/removed step entries.
+
+`capture_value` uses target=nonprivate element and value=public variable alias. Subsequent fields may contain `${alias}`. `http_check` uses an `http` object: method, same-current-origin URL, JSON body or empty string, expectedStatus, JSON pointer, expectedValue, expectedType, tolerance, public saveAs, idempotencyKey and optional named authSource/authPointer or csrfSource/csrfHeader/csrfBodyField. Actual session/CSRF values stay inside the browser. GET/HEAD permit no body. Writes need explicit trusted consent. Twenty checks/run, 16 KiB response and bounded scalar evidence apply. `security_audit` returns scoped indicators only in authorized security mode.
+
+Steps include `iteration` (one-based row identity), `page` and viewport. Run snapshots may include `diagnosis`, `securityFindings`, and exact `recordedSteps/passedSteps/failedSteps/omittedSteps` counts. Large wire snapshots omit older details under 400 KiB while retaining complete local report records; clients must use counts rather than the visible array length. `report.export` additionally accepts `md` for a reproduction/triage report. Settings add `visualMaskSelectors` independently of private masks.

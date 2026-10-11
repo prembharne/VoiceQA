@@ -1,6 +1,7 @@
 import http from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { createHmac, timingSafeEqual } from 'node:crypto';
+import { labRequest } from './lab-server.mjs';
 const [shop, advanced, child] = await Promise.all(
   ['shop.html', 'advanced.html', 'child.html'].map((name) =>
     readFile(new URL(name, import.meta.url)),
@@ -14,6 +15,7 @@ function codeAt(seconds) {
   return String((digest.readUInt32BE(offset) & 0x7fffffff) % 1000000).padStart(6, '0');
 }
 const server = http.createServer(async (req, res) => {
+  if (await labRequest(req, res)) return;
   const path = new URL(req.url, 'http://127.0.0.1').pathname;
   if (path === '/health') {
     res.writeHead(200, { 'Content-Type': 'text/plain' });

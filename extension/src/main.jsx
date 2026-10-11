@@ -1,3 +1,4 @@
+import { runCounts } from '../run-counts.js';
 import React, { useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { rpc, subscribe, artifact } from './bridge.js';
@@ -12,6 +13,7 @@ import { ArrowLeft, MessageSquarePlus, LoaderCircle } from 'lucide-react';
 import './chat.css';
 import { AuthSettings } from './components/auth-settings.jsx';
 import { RunProgress } from './components/run-progress.jsx';
+import { parseTestData } from './components/workflow-options.jsx';
 
 const terminal = (status) => !['running', 'paused', 'queued'].includes(status);
 const pretty = (s) => String(s || '').replaceAll('_', ' ');
@@ -35,6 +37,13 @@ function App() {
   const [speaking, setSpeaking] = useState(false);
   const [visual, setVisual] = useState(false);
   const [responsive, setResponsive] = useState(true);
+  const [mode, setMode] = useState('qa');
+  const [authorized, setAuthorized] = useState(false);
+  const [apiWrites, setAPIWrites] = useState(false);
+  const [testData, setTestData] = useState('');
+  const [compareBefore, setCompareBefore] = useState('');
+  const [compareAfter, setCompareAfter] = useState('');
+  const [comparison, setComparison] = useState(null);
   const [settings, setSettings] = useState({
     aiProvider: 'openai',
     model: 'gpt-5.6-sol',
@@ -127,7 +136,7 @@ function App() {
           if (terminal(m.run.status) && latestRun.current !== m.run.id) {
             latestRun.current = m.run.id;
             speak(
-              `Test run ${pretty(m.run.status)}. ${m.run.steps.filter((s) => s.status === 'failed').length} failed checks. Open the report for evidence.`,
+              `Test run ${pretty(m.run.status)}. ${runCounts(m.run).failed} failed checks. Open the report for evidence.`,
             );
             void refresh();
           }
@@ -227,6 +236,8 @@ function App() {
           'Site access was declined. Click Share current tab again and allow access to this website.',
         );
       await rpc('bind', { tabId: tab.id });
+      setAuthorized(false);
+      setAPIWrites(false);
       setPlan(null);
       setRun(null);
       setMessages([]);
@@ -254,11 +265,19 @@ function App() {
     setPlan(null);
     await perform(
       async () => {
+        if (mode === 'security' && !authorized)
+          throw new Error(
+            'Confirm that you are authorized to test the shared systems in Test options.',
+          );
         const p = await rpc('plan.propose', {
-          request: demo ? 'Run the local demo shop fixture suite' : prompt,
+          request: demo ? 'Run the local demo fixture suite' : prompt,
           demo,
           responsive,
           visual,
+          mode,
+          securityAuthorized: authorized,
+          apiWritesAllowed: apiWrites,
+          dataset: parseTestData(testData),
         });
         if (token !== generation.current) return;
         setPlan(p);
@@ -267,8 +286,11 @@ function App() {
         const expectations = p.cases
           .flatMap((c) =>
             c.steps
-              .filter((s) => s.operation === 'assert')
-              .map((s) => `${c.name}: ${s.label}, expected ${s.assertion.expected}`),
+              .filter((s) => ['assert', 'http_check'].includes(s.operation))
+              .map(
+                (s) =>
+                  `${c.name}: ${s.label}, expected ${s.http ? `HTTP ${s.http.expectedStatus}` : s.assertion.expected}`,
+              ),
           )
           .join('. ');
         speak(
@@ -323,7 +345,7 @@ function App() {
     if (command === 'status') {
       speak(
         run
-          ? `Run is ${state.paused ? 'paused' : run.status}, ${run.steps.length} recorded steps.`
+          ? `Run is ${state.paused ? 'paused' : run.status}, ${runCounts(run).recorded} recorded steps.`
           : 'No test run is active.',
       );
       return;
@@ -382,6 +404,8 @@ function App() {
   async function unshare() {
     await perform(async () => {
       await rpc('unbind');
+      setAuthorized(false);
+      setAPIWrites(false);
       newChat();
     });
   }
@@ -396,6 +420,8 @@ function App() {
       )
         throw new Error('Additional site access was not granted.');
       await rpc('pages.share', { tabId });
+      setAuthorized(false);
+      setAPIWrites(false);
       setPlan(null);
       setRun(null);
       setMessages([]);
@@ -457,11 +483,30 @@ function App() {
               </span>
               <p>{plan.summary}</p>
               <div className="meta">
+                <span>
+                  {plan.mode === 'security' ? 'Logical security' : 'Functional QA'} ·{' '}
+                  {plan.dataset?.length || 1} data row(s) ·{' '}
+                </span>
                 {plan.pages?.length > 1 && <span>{plan.pages.length} approved pages · </span>}
                 {plan.viewports.map((v) => `${v.width} × ${v.height}`).join(' / ')} ·{' '}
                 {plan.visual ? 'Visual comparison enabled' : 'Evidence screenshots enabled'}
               </div>
             </div>
+            {plan.dataset?.length > 0 && (
+              <details className="plan-data">
+                <summary>Review test data</summary>
+                {plan.dataset.map((row, index) => (
+                  <div key={index} className="data-row">
+                    <strong>Row {index + 1}</strong>
+                    {Object.entries(row).map(([key, value]) => (
+                      <p key={key}>
+                        <span>{key}</span>: {value}
+                      </p>
+                    ))}
+                  </div>
+                ))}
+              </details>
+            )}
             {plan.clarification ? (
               <div className="notice">
                 <h3>One detail is needed</h3>
@@ -489,6 +534,28 @@ function App() {
                           <span>{s.label}</span>
                           {s.operation === 'assert' && (
                             <code>Expected: {s.assertion.expected}</code>
+                          )}
+                          {s.http && (
+                            <code>
+                              {s.http.method} {s.http.url} · expected HTTP {s.http.expectedStatus}
+                              {s.http.jsonPointer
+                                ? ` · ${s.http.jsonPointer}=${s.http.expectedValue || '(capture)'}`
+                                : ''}
+                            </code>
+                          )}
+                          {s.http && (s.http.body || s.http.authSource || s.http.csrfSource) && (
+                            <details>
+                              <summary>Review API context and data</summary>
+                              {s.http.body && <pre>{s.http.body}</pre>}
+                              {s.http.authSource && (
+                                <p className="small">
+                                  Bearer reference: {s.http.authSource} {s.http.authPointer}
+                                </p>
+                              )}
+                              {s.http.csrfSource && (
+                                <p className="small">CSRF reference: {s.http.csrfSource}</p>
+                              )}
+                            </details>
                           )}
                         </li>
                       ))}
@@ -520,8 +587,8 @@ function App() {
     );
   }
   function renderRun(run) {
-    const failed = run.steps.filter((s) => s.status === 'failed').length;
-    const passed = run.steps.filter((s) => s.status === 'passed').length;
+    const failed = run.failedSteps ?? run.steps.filter((s) => s.status === 'failed').length;
+    const passed = run.passedSteps ?? run.steps.filter((s) => s.status === 'passed').length;
     return (
       <>
         <div className="section-heading">
@@ -562,6 +629,27 @@ function App() {
                 </Button>
               </div>
             )}
+            {run.diagnosis && (
+              <div className="triage-card">
+                <h3>Failure triage · {pretty(run.diagnosis.category)}</h3>
+                <p>{run.diagnosis.summary}</p>
+                <p className="small">Next check: {run.diagnosis.nextCheck}</p>
+              </div>
+            )}
+            {run.securityFindings?.length > 0 && (
+              <section className="security-findings" aria-label="Security configuration findings">
+                <h3>Configuration findings</h3>
+                {run.securityFindings.map((finding, index) => (
+                  <article key={`${finding.id}-${index}`}>
+                    <strong>
+                      {pretty(finding.severity)} · {finding.title}
+                    </strong>
+                    <p>{finding.evidence}</p>
+                    <p className="small">{finding.recommendation}</p>
+                  </article>
+                ))}
+              </section>
+            )}
             <RunProgress run={run} paused={state.paused} />
             <div className="stats">
               <div>
@@ -573,7 +661,7 @@ function App() {
                 <span>Failed checks</span>
               </div>
               <div>
-                <strong>{run.steps.length}</strong>
+                <strong>{runCounts(run).recorded}</strong>
                 <span>Recorded</span>
               </div>
             </div>
@@ -584,6 +672,12 @@ function App() {
               </div>
             )}
             {run.error && <div className="notice error">{run.error}</div>}
+            {run.omittedSteps > 0 && (
+              <p className="small">
+                Showing the most recent steps. Export HTML or JSON for all {run.recordedSteps} steps
+                and complete evidence.
+              </p>
+            )}
             {(terminal(run.status) ? run.steps : run.steps.slice(-2)).map((step) => (
               <details
                 className="step"
@@ -604,6 +698,7 @@ function App() {
                     <strong>{step.action.label}</strong>
                     <small>
                       {step.case} · {step.page || 'main'} · {step.viewport}
+                      {run.plan.dataset?.length > 1 ? ` · row ${step.iteration}` : ''}
                     </small>
                   </span>
                   <span className="step-status">{pretty(step.status)}</span>
@@ -662,12 +757,32 @@ function App() {
             {terminal(run.status) && (
               <>
                 <div className="button-row exports">
+                  <Button disabled={busy} onClick={() => exportReport('md', run)}>
+                    Export bug report
+                  </Button>
                   {['html', 'json', 'xml'].map((format) => (
                     <Button key={format} disabled={busy} onClick={() => exportReport(format, run)}>
                       Export {format === 'xml' ? 'JUnit' : format.toUpperCase()}
                     </Button>
                   ))}
                 </div>
+                <Button
+                  className="secondary full"
+                  disabled={busy || Boolean(state.runId)}
+                  onClick={() =>
+                    perform(async () => {
+                      const p = await rpc('plan.fork', {
+                        id: run.plan.id,
+                        dataset: parseTestData(testData),
+                      });
+                      setPlan(p);
+                      setRun(null);
+                      setMessages([{ id: p.id, kind: 'plan', plan: p }]);
+                    })
+                  }
+                >
+                  Reuse workflow with test data
+                </Button>
                 <Button
                   className="secondary full"
                   disabled={
@@ -698,6 +813,67 @@ function App() {
         <Button className="secondary" onClick={() => perform(refresh)}>
           Refresh
         </Button>
+        {history.length > 1 && (
+          <section className="run-comparison">
+            <h2>Compare runs</h2>
+            <label htmlFor="compare-before">Earlier run</label>
+            <select
+              id="compare-before"
+              value={compareBefore}
+              onChange={(e) => setCompareBefore(e.target.value)}
+            >
+              <option value="">Choose a run</option>
+              {history.map((r) => (
+                <option key={r.id} value={r.id}>
+                  {new Date(r.startedAt).toLocaleString()} · {r.status} ·{' '}
+                  {r.plan.request.slice(0, 50)}
+                </option>
+              ))}
+            </select>
+            <label htmlFor="compare-after">Later run</label>
+            <select
+              id="compare-after"
+              value={compareAfter}
+              onChange={(e) => setCompareAfter(e.target.value)}
+            >
+              <option value="">Choose a run</option>
+              {history.map((r) => (
+                <option key={r.id} value={r.id}>
+                  {new Date(r.startedAt).toLocaleString()} · {r.status} ·{' '}
+                  {r.plan.request.slice(0, 50)}
+                </option>
+              ))}
+            </select>
+            <Button
+              disabled={!compareBefore || !compareAfter || busy}
+              onClick={() =>
+                perform(async () =>
+                  setComparison(
+                    await rpc('run.compare', { before: compareBefore, after: compareAfter }),
+                  ),
+                )
+              }
+            >
+              Compare results
+            </Button>
+            {comparison && (
+              <>
+                <p className="small">{comparison.scope}</p>
+                {comparison.entries
+                  .filter((entry) => entry.change !== 'unchanged')
+                  .map((entry, index) => (
+                    <p key={index}>
+                      <strong>{entry.change}</strong> · {entry.label} · {entry.before || 'absent'} →{' '}
+                      {entry.after || 'absent'}
+                    </p>
+                  ))}
+                {comparison.entries.every((entry) => entry.change === 'unchanged') && (
+                  <p>No status differences in matched steps.</p>
+                )}
+              </>
+            )}
+          </section>
+        )}
         {history.length === 0 && (
           <EmptyState
             icon={History}
@@ -952,6 +1128,18 @@ function App() {
                 onChange={(e) => setSettings({ ...settings, maskSelectors: e.target.value })}
               />
             </label>
+            <label>
+              Visual-only masks
+              <input
+                value={settings.visualMaskSelectors || ''}
+                onChange={(e) => setSettings({ ...settings, visualMaskSelectors: e.target.value })}
+                placeholder="[data-testid=order-id], .timestamp"
+              />
+            </label>
+            <p className="small">
+              Hide changing public content in screenshots while keeping it available for functional
+              checks. Private-field masks always apply.
+            </p>
             <Button
               type="submit"
               className="primary full glow-button"
@@ -1130,6 +1318,19 @@ function App() {
       </main>
       {chat && (
         <ChatComposer
+          apiWrites={apiWrites}
+          onAPIWrites={setAPIWrites}
+          mode={mode}
+          onMode={(value) => {
+            setMode(value);
+            if (value === 'security') setResponsive(false);
+            setAuthorized(false);
+            setAPIWrites(false);
+          }}
+          authorized={authorized}
+          onAuthorized={setAuthorized}
+          data={testData}
+          onData={setTestData}
           pages={Object.values(state.pages || {}).filter((p) => !p.owned)}
           onSharePage={sharePage}
           onRemovePage={(alias) =>

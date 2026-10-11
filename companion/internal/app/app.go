@@ -224,7 +224,7 @@ func (a *App) dispatch(m native.Message) (any, error) {
 	}
 	switch m.Type {
 	case "hello":
-		return map[string]any{"version": 1, "hostVersion": "0.3.0", "settings": a.getSettings(), "capabilities": []string{"dom", "input", "assertions", "accessibility", "visual", "voice", "reports", "multi-tab", "totp", "human-checkpoints", "condition-waits"}}, nil
+		return map[string]any{"version": 1, "hostVersion": "0.4.0", "settings": a.getSettings(), "capabilities": []string{"dom", "input", "assertions", "accessibility", "visual", "voice", "reports", "multi-tab", "totp", "human-checkpoints", "condition-waits", "test-data", "workflow-variables", "http-checks", "logical-security", "network-evidence", "triage", "run-comparison"}}, nil
 	case "auth.list", "auth.save", "auth.delete":
 		return a.authDispatch(m)
 	case "settings.get":
@@ -240,7 +240,7 @@ func (a *App) dispatch(m native.Message) (any, error) {
 		if e := decode(m, &p); e != nil {
 			return nil, e
 		}
-		if p.Model == "" || p.TranscriptionModel == "" || len(p.MaskSelectors) > 2000 {
+		if p.Model == "" || p.TranscriptionModel == "" || len(p.MaskSelectors) > 2000 || len(p.VisualMaskSelectors) > 2000 {
 			return nil, errors.New("invalid settings")
 		}
 		if p.StepDelayMS != 0 && (p.StepDelayMS < 3000 || p.StepDelayMS > 5000) {
@@ -304,16 +304,29 @@ func (a *App) dispatch(m native.Message) (any, error) {
 		return p, a.Store.Put("project", p.Origin, p)
 	case "plan.propose":
 		var p struct {
-			Pages      []core.Page `json:"pages"`
-			Request    string      `json:"request"`
-			URL        string      `json:"url"`
-			Origin     string      `json:"origin"`
-			Demo       bool        `json:"demo"`
-			Responsive bool        `json:"responsive"`
-			Visual     bool        `json:"visual"`
+			Pages              []core.Page         `json:"pages"`
+			Mode               string              `json:"mode"`
+			APIWritesAllowed   bool                `json:"apiWritesAllowed"`
+			SecurityAuthorized bool                `json:"securityAuthorized"`
+			Dataset            []map[string]string `json:"dataset"`
+			Request            string              `json:"request"`
+			URL                string              `json:"url"`
+			Origin             string              `json:"origin"`
+			Demo               bool                `json:"demo"`
+			Responsive         bool                `json:"responsive"`
+			Visual             bool                `json:"visual"`
 		}
 		if e := decode(m, &p); e != nil {
 			return nil, e
+		}
+		if e := core.ValidateDataset(p.Dataset); e != nil {
+			return nil, e
+		}
+		if p.Mode != "" && p.Mode != "qa" && p.Mode != "security" {
+			return nil, errors.New("choose QA or logical security mode")
+		}
+		if p.Mode == "security" && !p.SecurityAuthorized {
+			return nil, errors.New("confirm authorization for these shared test systems before security planning")
 		}
 		if len(p.Request) < 3 || len(p.Request) > 8000 || !core.AllowedURL(p.URL, p.Origin) {
 			return nil, errors.New("select a valid target and describe a test")
@@ -336,10 +349,14 @@ func (a *App) dispatch(m native.Message) (any, error) {
 			if e != nil {
 				return nil, e
 			}
-			if obs["fixture"] != "voiceqa-shop-v1" && obs["fixture"] != "voiceqa-advanced-v1" {
+			if obs["fixture"] != "voiceqa-shop-v1" && obs["fixture"] != "voiceqa-advanced-v1" && obs["fixture"] != "voiceqa-security-v1" && obs["fixture"] != "voiceqa-workflow-v1" {
 				return nil, errors.New("open the VoiceQA demo shop before using its fixture plan")
 			}
-			if obs["fixture"] == "voiceqa-advanced-v1" {
+			if obs["fixture"] == "voiceqa-security-v1" {
+				plan = provider.SecurityDemoPlan(p.URL, p.Origin, p.Request, p.Mode == "security" && p.SecurityAuthorized)
+			} else if obs["fixture"] == "voiceqa-workflow-v1" {
+				plan = provider.WorkflowDemoPlan(p.URL, p.Origin, p.Request)
+			} else if obs["fixture"] == "voiceqa-advanced-v1" {
 				profiles, _ := a.authList()
 				profile := ""
 				for _, entry := range profiles {
@@ -369,12 +386,18 @@ func (a *App) dispatch(m native.Message) (any, error) {
 				extra[page.Alias] = view
 			}
 			obs["additionalPages"] = extra
-			plan, e = a.draftPlan(ctx, p.Request, p.URL, p.Origin, p.Responsive, obs, p.Pages...)
+			plan, e = a.draftConfiguredPlan(ctx, p.Request, p.URL, p.Origin, p.Responsive, obs, core.Plan{Mode: p.Mode, SecurityAuthorized: p.SecurityAuthorized, Dataset: p.Dataset, APIWritesAllowed: p.APIWritesAllowed}, p.Pages...)
 			if e != nil {
 				return nil, e
 			}
 		}
 		plan.Pages = p.Pages
+		plan.Mode = p.Mode
+		plan.APIWritesAllowed = p.APIWritesAllowed
+		plan.SecurityAuthorized = p.SecurityAuthorized
+		if len(p.Dataset) > 0 {
+			plan.Dataset = p.Dataset
+		}
 		plan.Visual = p.Visual
 		if plan.Clarification == "" {
 			if e := core.ValidatePlan(plan); e != nil {
@@ -447,6 +470,31 @@ func (a *App) dispatch(m native.Message) (any, error) {
 		return wireRun(r), nil
 	case "run.list":
 		return a.runList()
+	case "run.compare":
+		return a.compareRuns(m)
+	case "plan.fork":
+		var p struct {
+			ID      string               `json:"id"`
+			Dataset *[]map[string]string `json:"dataset"`
+		}
+		if e := decode(m, &p); e != nil {
+			return nil, e
+		}
+		var plan core.Plan
+		if e := a.Store.Get("plan", p.ID, &plan); e != nil {
+			return nil, e
+		}
+		if p.Dataset != nil {
+			plan.Dataset = *p.Dataset
+		}
+		plan.ID = core.ID()
+		plan.Version = 1
+		plan.CreatedAt = core.Now()
+		plan.Confirmed = false
+		if e := core.ValidatePlan(plan); e != nil {
+			return nil, e
+		}
+		return plan, a.Store.Put("plan", plan.ID, plan)
 	case "upload.begin", "upload.chunk", "upload.complete":
 		return a.handleUpload(m)
 	case "artifact.get":

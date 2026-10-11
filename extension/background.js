@@ -2,8 +2,12 @@ import { PageRegistry } from './page-registry.js';
 import { NativeClient } from './native-client.js';
 import { envelope, validateAction, isAllowedURL } from '../shared/protocol.js';
 import { ExecutionFence } from '../shared/execution-fence.js';
+import { NetworkRecorder, publicURL } from './network-recorder.js';
+import { auditConfiguration } from './security-audit.js';
 
 const fence = new ExecutionFence();
+const network = new NetworkRecorder();
+let lastHTTPAt = 0;
 
 const panels = new Set();
 let state = {
@@ -19,6 +23,9 @@ let state = {
   settings: null,
   lastEvent: null,
   error: '',
+  testMode: 'qa',
+  securityAuthorized: false,
+  httpCount: 0,
 };
 let journal = {};
 let stopping = false;
@@ -260,6 +267,11 @@ async function handlePanel(method, payload) {
     diagnostics.length = 0;
     registry.ensure();
     const planned = await native.rpc('plan.get', { id: payload.planId });
+    state.testMode = planned.mode || 'qa';
+    state.securityAuthorized = planned.securityAuthorized === true;
+    state.apiWritesAllowed = planned.apiWritesAllowed === true;
+    state.httpCount = 0;
+    network.reset();
     if (planned.origin !== registry.primary()?.origin)
       throw new Error("Share this plan\'s main website before running it.");
     for (const page of planned.pages || []) {
@@ -292,9 +304,11 @@ async function handlePanel(method, payload) {
       'settings.get',
       'plan.confirm',
       'plan.get',
+      'plan.fork',
       'plan.list',
       'run.get',
       'run.list',
+      'run.compare',
       'baseline.approve',
       'report.export',
       'artifact.get',
@@ -550,6 +564,69 @@ async function execute(action, token, secureOrigin = '') {
       return { handoff: state.handoff };
     case 'wait_for':
       return assertion(action, token);
+    case 'capture_value':
+      return content({ type: 'vqa.capture-value', target: action.target }, token);
+    case 'http_check': {
+      const check = action.http;
+      const tab = await checkTarget();
+      if (!registry.allows(check.url) || new URL(check.url).origin !== new URL(tab.url).origin)
+        throw fault('HTTP check must stay on the active approved origin.', 'blocked');
+      if (
+        !['GET', 'HEAD'].includes(check.method) &&
+        !state.apiWritesAllowed &&
+        (state.testMode !== 'security' || !state.securityAuthorized)
+      )
+        throw fault('Mutating API checks require authorized logical security mode.', 'blocked');
+      if (++state.httpCount > 20)
+        throw fault('The run reached its twenty-request API check limit.', 'blocked');
+      while (Date.now() - lastHTTPAt < 250) {
+        fence.check(token, state);
+        await delay(50);
+      }
+      await waitForTarget(token);
+      lastHTTPAt = Date.now();
+      const result = await content(
+        { type: 'vqa.http-check', check, timeoutMs: action.timeoutMs },
+        token,
+      );
+      fence.check(token, state);
+      if (!result.passed) {
+        const error = fault(
+          `Expected ${result.expected}; observed ${result.actual}`,
+          'assertion_failed',
+        );
+        error.result = result;
+        throw error;
+      }
+      return result;
+    }
+    case 'security_audit': {
+      if (state.testMode !== 'security' || !state.securityAuthorized)
+        throw fault('Choose authorized logical security mode for this audit.', 'blocked');
+      const context = await content({ type: 'vqa.security-context' }, token);
+      const tree = await command('Page.getFrameTree', {}, token);
+      const headers = network.headersFor(state.currentPage, tree.frameTree.frame.id);
+      const response = await command('Network.getCookies', { urls: [context.url] }, token);
+      const cookies = response.cookies.map(({ name, secure, httpOnly, sameSite }) => ({
+        name,
+        secure,
+        httpOnly,
+        sameSite,
+      }));
+      const findings = auditConfiguration({
+        ...context,
+        headers,
+        headersObserved: headers !== undefined,
+        cookies,
+      });
+      return {
+        findings,
+        incompleteEvidence: headers === undefined,
+        scope:
+          'Configuration indicators on the current approved page; not a complete penetration test.',
+        url: publicURL(context.url),
+      };
+    }
     case 'navigate':
       return navigation(action.value, token);
     case 'click':
@@ -560,7 +637,7 @@ async function execute(action, token, secureOrigin = '') {
         throw fault('Credential origin changed before entry.', 'blocked');
       if (secure) await content({ type: 'vqa.mark-secret', target: action.target }, token);
       const r = await click(action.target, token);
-      if (r.privateField && !secure)
+      if (r.privateField && !secure && !(r.inputType === 'email' && !r.secretField))
         throw fault('Use a saved test credential profile for private fields.', 'blocked');
       if (!['INPUT', 'TEXTAREA'].includes(r.tag))
         throw fault('Fill requires a text input', 'blocked');
@@ -602,9 +679,9 @@ async function execute(action, token, secureOrigin = '') {
       throw fault('Unsupported executor operation', 'blocked');
   }
 }
-async function capture(maskSelectors, token) {
+async function capture(maskSelectors, token, visualMaskSelectors = '') {
   await content({ type: 'vqa.settle' }, token);
-  await content({ type: 'vqa.redact', maskSelectors }, token);
+  await content({ type: 'vqa.redact', maskSelectors, visualMaskSelectors }, token);
   try {
     const { data } = await command(
       'Page.captureScreenshot',
@@ -624,7 +701,9 @@ async function capture(maskSelectors, token) {
         navigator.userAgent.match(/(?:Chrome|HeadlessChrome)\/[\d.]+/)?.[0] || navigator.userAgent,
       platform: platform.os,
       maskSelectors,
+      visualMaskSelectors,
       diagnostics: [...diagnostics],
+      network: network.snapshot(state.currentPage),
       url: view.url,
     };
   } finally {
@@ -772,7 +851,7 @@ async function onNative(message) {
         result = await execute(p.action, token, p.secure === true ? p.secureOrigin : '');
         break;
       case 'capture':
-        result = await capture(p.maskSelectors, token);
+        result = await capture(p.maskSelectors, token, p.visualMaskSelectors);
         break;
       case 'accessibility':
         fence.check(token, state);
@@ -810,6 +889,7 @@ async function onNative(message) {
 const diagnostics = [];
 chrome.debugger.onEvent.addListener((source, method, p) => {
   if (source.tabId !== state.target?.tabId) return;
+  network.event(method, p, state.currentPage);
   if (method === 'Runtime.exceptionThrown')
     diagnostics.push({
       type: 'exception',

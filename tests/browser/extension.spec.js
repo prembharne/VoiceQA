@@ -662,9 +662,205 @@ test('mandatory private-field redaction survives an empty custom mask', async ()
         }),
       tabId,
     );
-    expect(response.error).toContain('redacted fields');
+    expect(response.error).toContain('redacted values');
     expect(response.result).toBeUndefined();
   } finally {
     await invoke('settings.save', { maskSelectors: old });
   }
+});
+
+async function labSuite(path, mode = 'qa', dataset) {
+  const url = advancedOrigin + path;
+  await target.goto(url);
+  await target.bringToFront();
+  const tabId = await worker.evaluate(
+    async (url) => (await chrome.tabs.query({})).find((t) => t.url === url)?.id,
+    url,
+  );
+  await invoke('bind', { tabId });
+  const plan = await invoke('plan.propose', {
+    request: 'Run the lab fixture',
+    demo: true,
+    mode,
+    securityAuthorized: mode === 'security',
+    dataset,
+  });
+  await invoke('plan.confirm', { id: plan.id, version: plan.version });
+  const { runId } = await invoke('run.start', {
+    planId: plan.id,
+    version: plan.version,
+    key: crypto.randomUUID(),
+  });
+  await expect
+    .poll(async () => (await invoke('run.get', { id: runId })).status, { timeout: 30000 })
+    .not.toBe('running');
+  return invoke('run.get', { id: runId });
+}
+
+test('workflow data rows carry a real captured order ID into server checks', async () => {
+  const run = await labSuite('/workflows', 'qa', [
+    { quantity: '1', total: '12' },
+    { quantity: '3', total: '36' },
+  ]);
+  expect(run.status, JSON.stringify(run, null, 2)).toBe('passed');
+  const checks = run.steps.filter((s) => s.action.operation === 'http_check');
+  expect(checks).toHaveLength(2);
+  expect(checks[0].result.actual).toContain('/total=12');
+  expect(checks[1].result.actual).toContain('/total=36');
+  for (const check of checks) {
+    const capture = run.steps.find(
+      (s) => s.iteration === check.iteration && s.action.operation === 'capture_value',
+    );
+    expect(check.action.http.url.endsWith('/' + capture.result.value)).toBe(true);
+  }
+  expect(
+    run.steps.some(
+      (s) => s.action.operation === 'capture_value' && s.result.value.startsWith('alice-created-'),
+    ),
+  ).toBe(true);
+  const fork = await invoke('plan.fork', {
+    id: run.plan.id,
+    dataset: [{ quantity: '2', total: '24' }],
+  });
+  expect(fork.id).not.toBe(run.plan.id);
+  expect(fork.confirmed).toBe(false);
+  expect(fork.dataset).toEqual([{ quantity: '2', total: '24' }]);
+  await writeFile(resolve(work, 'data-workflow-run.json'), JSON.stringify(run, null, 2));
+});
+
+let healthySecurityRun;
+test('logical security fixture verifies server authorization, price, CSRF and idempotency', async () => {
+  healthySecurityRun = await labSuite('/security', 'security');
+  expect(healthySecurityRun.status, JSON.stringify(healthySecurityRun, null, 2)).toBe('passed');
+  const checks = healthySecurityRun.steps.filter((s) => s.action.operation === 'http_check');
+  expect(checks).toHaveLength(12);
+  const secrets = await target.evaluate(() => ({
+    csrf: document.querySelector('meta[name="lab-csrf"]').content,
+    bearer: JSON.parse(sessionStorage.getItem('voiceqa-access')).accessToken,
+  }));
+  for (const secret of Object.values(secrets))
+    expect(JSON.stringify(healthySecurityRun)).not.toContain(secret);
+  expect(checks.every((s) => s.status === 'passed')).toBe(true);
+  expect(checks.filter((s) => s.result.status === 403)).toHaveLength(4);
+  expect(checks.some((s) => s.result.status === 401)).toBe(true);
+  expect(healthySecurityRun.securityFindings || []).toEqual([]);
+  const capture = healthySecurityRun.steps.find((s) => s.result?.capture)?.result.capture;
+  expect(capture.network.length).toBeGreaterThan(0);
+  expect(JSON.stringify(capture.network)).not.toContain('X-CSRF-Token');
+  await writeFile(resolve(work, 'security-run.json'), JSON.stringify(healthySecurityRun, null, 2));
+});
+for (const [bug, expected] of [
+  ['idor', 'cross-user order'],
+  ['price', 'tampered price'],
+  ['role', 'admin access'],
+  ['csrf', 'tokenless operation'],
+  ['idempotency', 'repeated key'],
+]) {
+  test(`logical security detects the seeded ${bug} server defect`, async () => {
+    const run = await labSuite('/security?bug=' + bug, 'security');
+    expect(run.status, JSON.stringify(run, null, 2)).toBe('failed');
+    expect(run.steps.some((s) => s.status === 'failed' && s.action.label.includes(expected))).toBe(
+      true,
+    );
+    expect(run.diagnosis).toBeTruthy();
+    const report = await invoke('report.export', { id: run.id, format: 'md' });
+    const data = await invoke('artifact.get', { id: report.artifactId, offset: 0 });
+    expect(Buffer.from(data.data, 'base64').toString()).toContain('Reproduction steps');
+    if (healthySecurityRun) {
+      const comparison = await invoke('run.compare', {
+        before: healthySecurityRun.id,
+        after: run.id,
+      });
+      expect(
+        comparison.entries.some(
+          (entry) => entry.change === 'regressed' && entry.label.includes(expected),
+        ),
+      ).toBe(true);
+    }
+  });
+}
+
+test('security options review and run the real fixture from the chat interface', async () => {
+  await control.getByRole('button', { name: 'New chat', exact: true }).click();
+  await target.goto(advancedOrigin + '/security');
+  await target.bringToFront();
+  const tabId = await worker.evaluate(
+    async (url) => (await chrome.tabs.query({})).find((tab) => tab.url === url)?.id,
+    advancedOrigin + '/security',
+  );
+  await invoke('bind', { tabId });
+  await control.bringToFront();
+  await control.getByLabel('Test options', { exact: true }).click();
+  await control.getByLabel('Testing mode', { exact: true }).selectOption('security');
+  await control.getByLabel('I am authorized to test these shared systems', { exact: true }).check();
+  await control.getByLabel('Test options', { exact: true }).click();
+  await target.bringToFront();
+  await control
+    .getByRole('button', { name: 'Run the demo test suite', exact: true })
+    .evaluate((button) => button.click());
+  await expect(control.getByRole('heading', { name: 'Test plan', exact: true })).toBeVisible();
+  await expect(control.locator('.meta')).toContainText('Logical security');
+  await expect(control.locator('.case-card')).toHaveCount(6);
+  await control.screenshot({ path: resolve(work, 'security-plan.png'), fullPage: true });
+  await control
+    .getByRole('button', { name: 'Confirm and run tests', exact: true })
+    .evaluate((button) => button.click());
+  await expect.poll(async () => (await invoke('state')).runId, { timeout: 20000 }).toBe(null);
+  await expect(control.locator('.result-banner .status')).toHaveText('passed');
+  await expect(
+    control.getByRole('button', { name: 'Export bug report', exact: true }),
+  ).toBeVisible();
+  await control.screenshot({ path: resolve(work, 'security-results.png'), fullPage: true });
+});
+
+test('visual-only masks preserve dynamic captures and isolate baselines by data row', async () => {
+  await invoke('settings.save', { visualMaskSelectors: '[data-testid=order-id]' });
+  try {
+    const url = advancedOrigin + '/workflows';
+    await target.goto(url);
+    await target.bringToFront();
+    const tabId = await worker.evaluate(
+      async (url) => (await chrome.tabs.query({})).find((tab) => tab.url === url)?.id,
+      url,
+    );
+    await invoke('bind', { tabId });
+    const plan = await invoke('plan.propose', {
+      request: 'Run workflow with visual baselines',
+      demo: true,
+      visual: true,
+    });
+    await invoke('plan.confirm', { id: plan.id, version: plan.version });
+    async function runAgain() {
+      const { runId } = await invoke('run.start', {
+        planId: plan.id,
+        version: plan.version,
+        key: crypto.randomUUID(),
+      });
+      await expect
+        .poll(async () => (await invoke('run.get', { id: runId })).status, { timeout: 20000 })
+        .not.toBe('running');
+      return invoke('run.get', { id: runId });
+    }
+    let run = await runAgain();
+    expect(run.status).toBe('needs_review');
+    for (const step of run.steps.filter((step) => step.result?.capture))
+      await invoke('baseline.approve', { runId: run.id, stepId: step.id });
+    run = await runAgain();
+    expect(run.status, JSON.stringify(run, null, 2)).toBe('passed');
+    expect(
+      run.steps
+        .filter((step) => step.action.operation === 'capture_value')
+        .every((step) => step.result.value.startsWith('alice-created-')),
+    ).toBe(true);
+  } finally {
+    await invoke('settings.save', { visualMaskSelectors: '' });
+  }
+});
+
+test('an embedded document cannot replace top-level security policy evidence', async () => {
+  const run = await labSuite('/security?iframe=1', 'security');
+  expect(run.status, JSON.stringify(run, null, 2)).toBe('passed');
+  expect(run.securityFindings || []).toEqual([]);
+  const audit = run.steps.find((s) => s.action.operation === 'security_audit');
+  expect(audit.result.incompleteEvidence).toBe(false);
 });

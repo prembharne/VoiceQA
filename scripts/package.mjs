@@ -1,7 +1,11 @@
-import { cp, mkdir, readFile, writeFile, readdir } from 'node:fs/promises';
+import { cp, mkdir, readFile, writeFile, readdir, rm } from 'node:fs/promises';
 import { execFileSync } from 'node:child_process';
-import { resolve } from 'node:path';
+import { resolve, dirname, basename } from 'node:path';
 const root = resolve('dist/package');
+// Remove only this generated output, so old hashed assets cannot enter a new release.
+if (dirname(root) !== resolve('dist') || basename(root) !== 'package')
+  throw new Error('Refusing to replace an unexpected package directory.');
+await rm(root, { recursive: true, force: true });
 const { version } = JSON.parse(await readFile('package.json', 'utf8'));
 await mkdir(root, { recursive: true });
 await cp('dist/extension', `${root}/extension`, { recursive: true });
@@ -40,6 +44,11 @@ const notices = [
   'VoiceQA includes the following open-source components. Their licenses are included in this folder.',
   'JavaScript runtime: React, React DOM, axe-core, Motion, Lucide React. Local font: Inter (Fontsource). Build-time schema generation: Ajv.',
 ];
+const goRoot = execFileSync('go', ['env', 'GOROOT'], { encoding: 'utf8' }).trim();
+await cp(`${goRoot}/LICENSE`, `${root}/licenses/go-standard-library-LICENSE`);
+notices.push(
+  'Go standard library: BSD-3-Clause; its license is included. CodeRabbit CLI is a separate development service and is not bundled.',
+);
 for (const entry of modules) {
   const [name, version, dir] = entry.split('|');
   if (!version || !dir) continue;

@@ -1,3 +1,4 @@
+import { runCounts } from '../../run-counts.js';
 import React, { useEffect, useState } from 'react';
 import { Clock3, Play } from 'lucide-react';
 
@@ -14,8 +15,8 @@ export function RunProgress({ run, paused }) {
   if (!step || !['running', 'paused', 'queued'].includes(run.status)) return null;
   const waiting = Boolean(run.nextStep);
   const seconds = Math.max(0, Math.ceil((Date.parse(run.nextStepAt || '') - now) / 1000));
-  const index = run.steps.length + (waiting ? 1 : 0);
-  const complete = run.steps.filter((s) => s.status !== 'dispatched').length;
+  const { recorded, complete } = runCounts(run);
+  const index = recorded + (waiting ? 1 : 0);
   return (
     <section className="run-progress" aria-label="Live test progress">
       <div className="run-progress-heading">

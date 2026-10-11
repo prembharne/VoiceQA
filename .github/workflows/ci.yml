@@ -8,11 +8,12 @@ jobs:
       - uses: actions/setup-node@v4
         with: {node-version: '24', cache: npm}
       - uses: actions/setup-go@v5
-        with: {go-version: '1.27', cache: true}
+        with: {go-version: '1.27.2', cache: true}
       - run: npm ci
       - run: npm test
       - run: go test -race ./companion/...
       - run: go vet ./companion/...
+      - run: npm run security:check
       - run: npm run build
   browser:
     runs-on: windows-latest
@@ -21,7 +22,7 @@ jobs:
       - uses: actions/setup-node@v4
         with: {node-version: '24', cache: npm}
       - uses: actions/setup-go@v5
-        with: {go-version: '1.27', cache: true}
+        with: {go-version: '1.27.2', cache: true}
       - run: npm ci
       - run: npm run build:all
       - run: npx playwright install chromium

@@ -10,6 +10,10 @@ import { once } from 'node:events';
 if (process.platform !== 'win32')
   throw new Error('Saved-key smoke check currently requires Windows.');
 const source = join(process.env.LOCALAPPDATA, 'VoiceQA');
+const security = process.argv.includes('--security');
+const origin = security ? 'http://127.0.0.1:4175' : 'http://127.0.0.1:4173';
+const targetURL = security ? `${origin}/security` : `${origin}/`;
+const requestFile = process.argv.slice(2).find((arg) => !arg.startsWith('--'));
 const results = resolve('test-results');
 await mkdir(results, { recursive: true });
 const folder = await mkdtemp(join(results, 'live-plan-'));
@@ -35,9 +39,13 @@ try {
   } finally {
     db.close();
   }
+  if (security && !model.endsWith(':free'))
+    throw new Error(
+      'The live security check requires your selected OpenRouter :free model. It will not switch models or spend paid credits.',
+    );
   browser = await chromium.launch({ channel: 'chromium', headless: true });
   const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
-  await page.goto('http://127.0.0.1:4173/');
+  await page.goto(targetURL);
   // Run the bundled observer against the real DOM; stub only Chrome message delivery.
   await page.evaluate(() => {
     globalThis.chrome = {
@@ -125,18 +133,26 @@ try {
     ttsProvider: 'browser',
   });
   if (!settings.hasApiKey) throw new Error('No saved OpenRouter key is available.');
-  await rpc('project.configure', { origin: 'http://127.0.0.1:4173', url: page.url() });
-  console.log(`Drafting the coupon/cart request with OpenRouter ${model}...`);
+  await rpc('project.configure', { origin, url: page.url() });
+  console.log(
+    `Drafting the ${security ? 'logical security' : 'coupon/cart'} request with OpenRouter ${model}...`,
+  );
   const plan = await rpc('plan.propose', {
-    request: process.argv[2]
-      ? await readFile(resolve(process.argv[2]), 'utf8')
-      : 'Check that invalid coupon is rejected and cart total is updated correctly. The value for a mug is $12.',
+    request: requestFile
+      ? await readFile(resolve(requestFile), 'utf8')
+      : security
+        ? 'On this synthetic lab, verify anonymous and cross-user order access are denied with positive authorized controls. Verify a client price of 0.01 cannot change the server mug price of 12. Verify a client admin claim cannot grant server admin access. Verify missing CSRF is denied and the legitimate protected API works using its named CSRF source. Verify a repeated idempotency key returns the same order ID. Verify the bearer session uses the provided named browser source and enforces ownership. Reset before each case. Use the exact fixture contract and never capture credentials or tokens.'
+        : 'Check that invalid coupon is rejected and cart total is updated correctly. The value for a mug is $12.',
     url: page.url(),
-    origin: 'http://127.0.0.1:4173',
-    responsive: true,
+    origin,
+    responsive: !security,
+    mode: security ? 'security' : 'qa',
+    securityAuthorized: security,
     visual: false,
   });
-  const checks = plan.cases.flatMap((c) => c.steps.filter((s) => s.operation === 'assert'));
+  const checks = plan.cases.flatMap((c) =>
+    c.steps.filter((s) => ['assert', 'http_check'].includes(s.operation)),
+  );
   if (!plan.clarification && !checks.length) throw new Error('Accepted plan has no checks.');
   if (plan.confirmed) throw new Error('Draft was incorrectly confirmed.');
   await writeFile(join(folder, 'accepted-plan.json'), JSON.stringify(plan, null, 2));

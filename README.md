@@ -6,11 +6,11 @@ The side panel is a conversational workspace: share the current website from the
 
 For the proposed hosted product and commercial rollout, see [the micro-SaaS roadmap](docs/MICRO_SAAS.md). Hosted accounts, collaboration and billing are future work.
 
-Version 0.3 adds explicitly shared multi-tab workflows, encrypted test-account profiles, locally generated TOTP codes, condition waits and operator checkpoints. See [advanced browser testing](docs/ADVANCED_TESTING.md) for setup and a reproducible demonstration.
+Version 0.4 adds data-driven workflows, captured values, session-aware API checks, logical security mode, network evidence, failure triage, run comparisons and reusable workflow drafts. See [workflow and security testing](docs/TESTING_WORKFLOWS.md). Version 0.3's multi-tab, encrypted profile, TOTP and operator-checkpoint features remain available in [advanced browser testing](docs/ADVANCED_TESTING.md).
 
 ## Quick start on Windows
 
-Requirements: Node.js 24+, Go 1.26+, Chrome 125+, and PowerShell. No Node runtime is needed by the installed extension or companion after building.
+Requirements: Node.js 24+, a Go installation with automatic toolchain downloads enabled (this release selects patched **Go 1.27.2**), Chrome 125+, and PowerShell. No Node runtime is needed by the installed extension or companion after building.
 
 ```powershell
 npm ci
@@ -87,6 +87,7 @@ Images are normalized to scale factor 1. Pixel changes over 25 RGB units count t
 
 ```powershell
 npm test
+npm run security:check
 go test ./companion/...
 go vet ./companion/...
 go test -race ./companion/...
@@ -142,3 +143,5 @@ One active run, 50 planned actions, and 10 minutes per run. Browser actions are 
 The executor covers DOM-grounded controls, same-origin frames/open shadow roots, main-document accessibility and up to five approved pages. It switches between shared tabs and can open/close its own test tabs. Login redirects may move only between explicitly approved origins. External popups must be shared explicitly; automatic discovery or takeover of authentication popups is unsupported. Cross-origin frame contents, native dialogs, canvas-only controls, arbitrary code execution, load testing and desktop/mobile-native testing remain unsupported. Agent-supplied completion claims do not determine results.
 
 The Go controller and protocol boundary can be reused by a later desktop shell. Native desktop control needs its own executor and acceptance suite.
+
+CodeRabbit is integrated as an optional development reviewer through `.coderabbit.yaml` and `npm run review:coderabbit`. It uses your separate CodeRabbit login; its proprietary CLI is not part of the customer package. The local security check uses npm advisories and the BSD-licensed Go vulnerability checker. See [review integration and commercial boundaries](docs/REVIEW_AND_COMMERCIAL_USE.md).

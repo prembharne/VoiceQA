@@ -13,12 +13,33 @@ import (
 // Drafting never dispatches page mutations. A single retry repairs invalid output,
 // using the same model, observations and deadline. Only a validated draft is saved.
 func (a *App) draftPlan(ctx context.Context, request, url, origin string, responsive bool, obs map[string]any, pages ...core.Page) (core.Plan, error) {
+	return a.draftConfiguredPlan(ctx, request, url, origin, responsive, obs, core.Plan{}, pages...)
+}
+func (a *App) draftConfiguredPlan(ctx context.Context, request, url, origin string, responsive bool, obs map[string]any, config core.Plan, pages ...core.Page) (core.Plan, error) {
 	ctx, cancel := context.WithTimeout(ctx, 100*time.Second)
 	defer cancel()
 	s := a.getSettings()
 	client := a.aiClient(s.AIProvider)
 	key := a.keyFor(s.AIProvider)
 	input := map[string]any{"request": request, "url": url, "approvedOrigin": origin, "observation": obs}
+	input["mode"] = config.Mode
+	input["testDataRows"] = config.Dataset
+	input["securityAuthorized"] = config.SecurityAuthorized
+	input["apiWritesAllowed"] = config.APIWritesAllowed
+	rows := len(config.Dataset)
+	if rows == 0 {
+		rows = 1
+	}
+	views := 1
+	if responsive {
+		views = 2
+	}
+	limit := 50
+	if rows > 1 {
+		limit = 200
+	}
+	input["actionBudget"] = limit / (rows * views)
+	input["apiCheckBudget"] = 20 / (rows * views)
 	if obs["fixture"] == "voiceqa-shop-v1" && (strings.HasPrefix(origin, "http://127.0.0.1:") || strings.HasPrefix(origin, "http://localhost:")) {
 		input["fixtureRequirements"] = provider.DemoPlan(url, origin, "").Cases
 	}
@@ -38,6 +59,14 @@ func (a *App) draftPlan(ctx context.Context, request, url, origin string, respon
 	}
 	input["sharedPages"] = pages
 	input["authProfiles"] = allowedProfiles
+	if strings.HasPrefix(origin, "http://127.0.0.1:") || strings.HasPrefix(origin, "http://localhost:") {
+		if obs["fixture"] == "voiceqa-security-v1" {
+			input["fixtureRequirements"] = provider.SecurityDemoPlan(url, origin, request, config.SecurityAuthorized && config.Mode == "security").Cases
+		}
+		if obs["fixture"] == "voiceqa-workflow-v1" {
+			input["fixtureRequirements"] = provider.WorkflowDemoPlan(url, origin, request).Cases
+		}
+	}
 	if obs["fixture"] == "voiceqa-advanced-v1" && (strings.HasPrefix(origin, "http://127.0.0.1:") || strings.HasPrefix(origin, "http://localhost:")) {
 		profile := ""
 		for _, entry := range allowedProfiles {
@@ -53,7 +82,7 @@ func (a *App) draftPlan(ctx context.Context, request, url, origin string, respon
 		if e := ctx.Err(); e != nil {
 			return core.Plan{}, e
 		}
-		raw, usage, e := client.Structured(ctx, key, s.Model, provider.PlanInstructions, input, provider.PlanSchema(pages...))
+		raw, usage, e := client.StructuredWithBudget(ctx, key, s.Model, provider.PlanInstructions, input, provider.PlanSchema(pages...), 16000)
 		for name, tokens := range usage {
 			totalUsage[name] += tokens
 		}
@@ -71,6 +100,10 @@ func (a *App) draftPlan(ctx context.Context, request, url, origin string, respon
 		}
 		e = json.Unmarshal(raw, &draft)
 		plan := core.Plan{Summary: draft.Summary, Cases: draft.Result.Cases, Pages: pages}
+		plan.Mode = config.Mode
+		plan.APIWritesAllowed = config.APIWritesAllowed
+		plan.SecurityAuthorized = config.SecurityAuthorized
+		plan.Dataset = config.Dataset
 		if e == nil {
 			switch draft.Result.Type {
 			case "plan":

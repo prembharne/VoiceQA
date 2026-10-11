@@ -26,6 +26,11 @@ func baselineKey(r *core.Run, idx int) string {
 			key += "|url:" + fmt.Sprint(capture["url"])
 		}
 	}
+	if step.Iteration > 0 && step.Iteration <= len(r.Plan.Dataset) {
+		row, _ := json.Marshal(r.Plan.Dataset[step.Iteration-1])
+		hash := sha256.Sum256(row)
+		key += "|data:" + hex.EncodeToString(hash[:])
+	}
 	sum := sha256.Sum256([]byte(key))
 	return hex.EncodeToString(sum[:])
 }
@@ -64,6 +69,11 @@ func (a *App) compareBaseline(r *core.Run, idx int, capture map[string]any) (map
 		if fmt.Sprint(baseline[key]) != fmt.Sprint(capture[key]) {
 			return nil, fmt.Errorf("baseline environment mismatch: %s", key)
 		}
+	}
+	oldMasks, _ := baseline["visualMaskSelectors"].(string)
+	newMasks, _ := capture["visualMaskSelectors"].(string)
+	if oldMasks != newMasks {
+		return nil, errors.New("baseline environment mismatch: visualMaskSelectors")
 	}
 	old, e := a.Store.ReadArtifact(fmt.Sprint(baseline["artifactId"]))
 	if e != nil {
@@ -166,6 +176,9 @@ func (a *App) exportReport(m native.Message) (any, error) {
 	var e error
 	mime := ""
 	switch p.Format {
+	case "md":
+		b = []byte(bugReport(r))
+		mime = "text/markdown"
 	case "json":
 		b, e = json.MarshalIndent(r, "", "  ")
 		mime = "application/json"
@@ -216,7 +229,7 @@ func (a *App) exportReport(m native.Message) (any, error) {
 		b = out.Bytes()
 		mime = "text/html"
 	default:
-		return nil, errors.New("format must be html, json, or xml")
+		return nil, errors.New("format must be html, json, xml, or md")
 	}
 	if e != nil {
 		return nil, e

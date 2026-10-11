@@ -1,0 +1,30 @@
+# yaml-language-server: $schema=https://www.coderabbit.ai/integrations/schema.v2.json
+language: en-US
+tone_instructions: "Review concrete correctness and security risks. Distinguish verified defects from assumptions. Do not claim a complete penetration test."
+reviews:
+  profile: assertive
+  request_changes_workflow: false
+  fail_commit_status: true
+  path_filters:
+    - "**"
+    - "!dist/**"
+    - "!node_modules/**"
+    - "!data/**"
+    - "!test-results/**"
+    - "!playwright-report/**"
+    - "!.tools/**"
+    - "!.coderabbit/**"
+    - "!**/*.dpapi"
+    - "!**/.env*"
+  path_instructions:
+    - path: "companion/**"
+      instructions: "Check origin authorization, exact plan confirmation, cancellation, goroutine ownership, JSON bounds, privacy, variable interpolation and report accuracy. Security mode must verify real server status/data; expected 401/403 denials must count as successful checks. Never retry an ambiguous mutation. Credential values belong only in encrypted profiles and transient secure-entry messages."
+    - path: "extension/**"
+      instructions: "Check generation fences before and after awaits, approved-origin and active-tab checks, owned-tab cleanup, fixed operation dispatch, HTTP redirect blocking, secret redaction, bounded network evidence and accessible controls. No model-generated eval, arbitrary scripts, exploit payload engines or CAPTCHA bypass."
+    - path: "tests/**"
+      instructions: "Verify positive and negative controls, seeded server-side defects, cancellation, variable/data-row isolation and actual Chrome/native-host behavior. Mocked tests do not prove live model or third-party authentication behavior."
+  auto_review:
+    enabled: true
+    drafts: false
+chat:
+  auto_reply: false

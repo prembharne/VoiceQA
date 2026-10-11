@@ -89,3 +89,31 @@ func TestProviderErrorRedactsKey(t *testing.T) {
 		t.Fatal(e)
 	}
 }
+
+func TestPlanOutputBudgetAndIncompleteLimit(t *testing.T) {
+	calls := 0
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		if body["max_output_tokens"] != float64(16000) {
+			t.Error("planning output budget missing")
+		}
+		_, _ = w.Write([]byte(`{"status":"incomplete","incomplete_details":{"reason":"max_output_tokens"},"usage":{"input_tokens":100,"output_tokens":16000,"total_tokens":16100}}`))
+	}))
+	defer s.Close()
+	c := New()
+	c.BaseURL = s.URL
+	raw, usage, err := c.StructuredWithBudget(context.Background(), "secret", "model", "", nil, nil, 16000)
+	if err == nil || !strings.Contains(err.Error(), "output limit reached (16000 tokens)") || len(raw) != 0 || usage["output_tokens"] != 16000 || calls != 1 {
+		t.Fatal("incomplete output was accepted, retried or lost its reason", err, usage, calls)
+	}
+	for _, budget := range []int{0, 16001} {
+		if _, _, err := c.StructuredWithBudget(context.Background(), "secret", "model", "", nil, nil, budget); err == nil {
+			t.Fatal("unbounded output accepted")
+		}
+	}
+	if calls != 1 {
+		t.Fatal("invalid budget reached provider")
+	}
+}

@@ -2,8 +2,9 @@
   if (globalThis.__voiceqaInstalled) return;
   globalThis.__voiceqaInstalled = true;
   const overlays = [];
+  const requests = new Set();
   const mandatoryPrivate =
-    'input[type=password],input[autocomplete=one-time-code],[data-voiceqa-secret],[name=cf-turnstile-response],[name=g-recaptcha-response],[name=h-captcha-response]';
+    'input[type=password],input[autocomplete=one-time-code],[data-voiceqa-secret],input[name*=csrf i],input[name*=xsrf i],meta[name*=csrf i],meta[name*=xsrf i],input[name=__RequestVerificationToken],[name=cf-turnstile-response],[name=g-recaptcha-response],[name=h-captcha-response]';
   let maskSelectors = 'input[type=password], input[type=email], [data-private]';
   const privateSelectors = () => (maskSelectors ? maskSelectors + ',' : '') + mandatoryPrivate;
   const normalize = (s) =>
@@ -155,6 +156,7 @@
       target,
       tag: el.tagName,
       privateField: privateElement(el),
+      secretField: Boolean(el.matches(mandatoryPrivate) || el.closest('[data-private]')),
       inputType: el.type,
       options: el.options ? [...el.options].map((o) => ({ value: o.value, label: o.label })) : [],
       selectedIndex: el.selectedIndex,
@@ -194,6 +196,10 @@
       fixture: document.querySelector('meta[name=voiceqa-fixture]')?.content || '',
       controls,
       text,
+      csrfSources: [...document.querySelectorAll('meta[name],input[name]')]
+        .filter((el) => /csrf|xsrf|^__RequestVerificationToken$/i.test(el.name))
+        .slice(0, 10)
+        .map((el) => `${el.tagName === 'META' ? 'meta' : 'input'}:${el.name}`),
       challenges: [
         ...query('iframe[src],.cf-turnstile,.g-recaptcha,.h-captcha,[data-voiceqa-test-captcha]'),
       ]
@@ -232,7 +238,8 @@
       passed = String(actual) === expected;
     } else {
       el = unique(action.target);
-      if (privateElement(el)) throw new Error('Assertions on redacted fields are not supported');
+      if (privateElement(el) && !['enabled', 'selected', 'focus'].includes(kind))
+        throw new Error('Assertions on redacted values are not supported');
       if (kind === 'text' || kind === 'text_contains') {
         actual = normalize(el.textContent);
         passed = kind === 'text' ? actual === expected : actual.includes(expected);
@@ -263,7 +270,7 @@
       target: action.target,
     };
   }
-  function redact() {
+  function redact(visualMaskSelectors = '') {
     unredact();
     for (const root of roots()) {
       const style = document.createElement('style');
@@ -279,9 +286,13 @@
         return true;
       }
     });
-    const masks = [...new Set([...query(privateSelectors()), ...inaccessibleFrames])].filter(
-      visible,
-    );
+    const masks = [
+      ...new Set([
+        ...query(privateSelectors()),
+        ...(visualMaskSelectors ? query(visualMaskSelectors) : []),
+        ...inaccessibleFrames,
+      ]),
+    ].filter(visible);
     for (const el of masks) {
       const r = el.getBoundingClientRect();
       let x = r.x,
@@ -315,6 +326,198 @@
     for (const el of overlays) el.remove();
     overlays.length = 0;
   }
+  function namedBrowserValue(reference) {
+    const at = reference.indexOf(':');
+    const source = reference.slice(0, at),
+      name = reference.slice(at + 1);
+    if (source === 'local') return localStorage.getItem(name);
+    if (source === 'session') return sessionStorage.getItem(name);
+    if (source === 'cookie') {
+      const match = document.cookie
+        .split(';')
+        .map((part) => part.trim())
+        .find((part) => part.startsWith(name + '='));
+      if (!match) return null;
+      try {
+        return decodeURIComponent(match.slice(name.length + 1));
+      } catch {
+        throw new Error('Named browser reference could not be decoded.');
+      }
+    }
+    const elements = [...document.querySelectorAll(`${source}[name="${CSS.escape(name)}"]`)];
+    if (elements.length !== 1) throw new Error('Named browser reference is missing or ambiguous.');
+    return source === 'meta' ? elements[0].content : elements[0].value;
+  }
+  function pointerValue(node, pointer) {
+    for (const part of pointer
+      .slice(1)
+      .split('/')
+      .map((p) => p.replaceAll('~1', '/').replaceAll('~0', '~'))) {
+      if (node === null || typeof node !== 'object' || !Object.hasOwn(node, part)) return undefined;
+      node = node[part];
+    }
+    return node;
+  }
+  async function httpCheck(check, timeoutMs) {
+    const url = new URL(check.url);
+    if (
+      url.origin !== location.origin ||
+      url.username ||
+      url.password ||
+      !['http:', 'https:'].includes(url.protocol)
+    )
+      throw new Error('HTTP checks require the current page origin.');
+    const controller = new AbortController();
+    requests.add(controller);
+    const timeout = setTimeout(() => controller.abort(), timeoutMs || 10000);
+    const started = performance.now();
+    try {
+      const headers = {};
+      let body = check.body || undefined;
+      if (check.body) headers['Content-Type'] = 'application/json';
+      if (check.idempotencyKey) headers['Idempotency-Key'] = check.idempotencyKey;
+      if (check.authSource) {
+        let value = namedBrowserValue(check.authSource);
+        if (check.authPointer) {
+          let data;
+          try {
+            data = JSON.parse(value);
+          } catch {
+            throw new Error(
+              'Named authentication source is not JSON; check the source and pointer.',
+            );
+          }
+          value = pointerValue(data, check.authPointer);
+        }
+        if (typeof value !== 'string') throw new Error('Named bearer token is unavailable.');
+        value = value.replace(/^Bearer\s+/i, '').trim();
+        if (!value || value.length > 8192 || !/^[\x21-\x7e]+$/.test(value) || /^sk[-_]/.test(value))
+          throw new Error('Named bearer token is unavailable, unsupported or exceeds its limit.');
+        headers.Authorization = `Bearer ${value}`;
+      }
+      if (check.csrfSource) {
+        const value = namedBrowserValue(check.csrfSource);
+        if (!value || value.length > 2048 || !/^[\x21-\x7e]+$/.test(value))
+          throw new Error('The named anti-CSRF token is unavailable or exceeds its limit.');
+        if (check.csrfBodyField) {
+          const data = body ? JSON.parse(body) : {};
+          if (!data || typeof data !== 'object' || Array.isArray(data))
+            throw new Error('Anti-CSRF body injection requires a JSON object.');
+          data[check.csrfBodyField] = value;
+          body = JSON.stringify(data);
+          headers['Content-Type'] = 'application/json';
+        } else headers[check.csrfHeader || 'X-CSRF-Token'] = value;
+      }
+      const response = await fetch(url, {
+        method: check.method,
+        headers,
+        body,
+        credentials: 'same-origin',
+        redirect: 'manual',
+        cache: 'no-store',
+        signal: controller.signal,
+      });
+      if (response.type === 'opaqueredirect')
+        throw Object.assign(new Error('HTTP redirect was not followed; review its destination.'), {
+          code: 'needs_review',
+        });
+      if (response.status !== check.expectedStatus || !check.jsonPointer) {
+        await response.body?.cancel();
+        return {
+          passed: response.status === check.expectedStatus,
+          actual: String(response.status),
+          expected: String(check.expectedStatus),
+          status: response.status,
+          method: check.method,
+          durationMs: Math.round(performance.now() - started),
+          responseBytes: 0,
+        };
+      }
+      let text = '',
+        bytes = 0;
+      const reader = response.body?.getReader();
+      const decoder = new TextDecoder();
+      if (reader)
+        while (true) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          bytes += value.length;
+          if (bytes > 16384) {
+            await reader.cancel();
+            throw Object.assign(new Error('HTTP response exceeded the 16 KiB evidence limit.'), {
+              code: 'needs_review',
+            });
+          }
+          text += decoder.decode(value, { stream: true });
+        }
+      text += decoder.decode();
+      let actual = String(response.status),
+        expected = String(check.expectedStatus),
+        value;
+      let passed = response.status === check.expectedStatus;
+      if (check.jsonPointer) {
+        let node;
+        try {
+          node = JSON.parse(text);
+        } catch {
+          throw Object.assign(new Error('Expected a JSON response but received another format.'), {
+            code: 'assertion_failed',
+          });
+        }
+        node = pointerValue(node, check.jsonPointer);
+        if (node === undefined || (node !== null && typeof node === 'object'))
+          throw Object.assign(
+            new Error(
+              'Expected a public scalar JSON field; pointer is missing or selects a container.',
+            ),
+            { code: 'assertion_failed' },
+          );
+        value = String(node);
+        if (check.expectedType)
+          passed =
+            passed &&
+            (check.expectedType === 'null' ? node === null : typeof node === check.expectedType);
+        if (value.length > 1000)
+          throw Object.assign(new Error('Captured response field exceeds the evidence limit.'), {
+            code: 'needs_review',
+          });
+        if (check.expectedValue !== '' || !check.saveAs) {
+          passed =
+            passed &&
+            (check.expectedType === 'number'
+              ? Number.isFinite(node) &&
+                Math.abs(node - Number(check.expectedValue)) <= (check.tolerance || 0)
+              : value === check.expectedValue);
+          actual += `; ${check.jsonPointer}=${value}`;
+          expected += `; ${check.jsonPointer}=${check.expectedValue}`;
+        }
+      }
+      // Response bodies, authentication headers and cookie values are never returned.
+      return {
+        passed,
+        actual,
+        expected,
+        status: response.status,
+        value,
+        method: check.method,
+        jsonPointer: check.jsonPointer,
+        durationMs: Math.round(performance.now() - started),
+        responseBytes: bytes,
+      };
+    } catch (error) {
+      if (error.name === 'AbortError')
+        throw Object.assign(
+          new Error(
+            'HTTP check cancelled or timed out; the request outcome is unknown. Inspect server state before retrying.',
+          ),
+          { code: 'needs_review' },
+        );
+      throw error;
+    } finally {
+      clearTimeout(timeout);
+      requests.delete(controller);
+    }
+  }
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (sender.id !== chrome.runtime.id || !message?.type?.startsWith('vqa.')) return false;
     (async () => {
@@ -332,6 +535,28 @@
             unique(message.target).setAttribute('data-voiceqa-secret', '');
             result = { marked: true };
             break;
+          case 'vqa.capture-value': {
+            const el = unique(message.target);
+            if (privateElement(el))
+              throw new Error('Private fields cannot become workflow variables.');
+            const value = ['INPUT', 'TEXTAREA', 'SELECT'].includes(el.tagName)
+              ? String(el.value)
+              : normalize(el.textContent);
+            if (value.length > 1000) throw new Error('Captured value exceeds 1000 characters.');
+            result = { value };
+            break;
+          }
+          case 'vqa.http-check':
+            result = await httpCheck(message.check, message.timeoutMs);
+            break;
+          case 'vqa.security-context':
+            result = {
+              url: location.href,
+              forms: [...document.forms]
+                .slice(0, 10)
+                .map((f) => ({ action: f.action, method: f.method })),
+            };
+            break;
           case 'vqa.resolve':
             result = resolve(message.target);
             break;
@@ -339,10 +564,11 @@
             result = assertion(message.action);
             break;
           case 'vqa.redact':
-            redact();
+            redact(message.visualMaskSelectors);
             result = { masked: overlays.length };
             break;
           case 'vqa.cleanup':
+            for (const request of requests) request.abort();
             unredact();
             result = { cleaned: true };
             break;

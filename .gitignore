@@ -4,6 +4,8 @@ data/
 test-results/
 playwright-report/
 .env
+.tools/
+.coderabbit/
 *.log
 *.exe
 *.dpapi

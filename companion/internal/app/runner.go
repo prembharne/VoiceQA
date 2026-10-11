@@ -49,11 +49,16 @@ func (a *App) start(m native.Message) (any, error) {
 			totalSteps += len(plan.Viewports)
 		}
 	}
+	rows := len(plan.Dataset)
+	if rows == 0 {
+		rows = 1
+	}
+	totalSteps *= rows
 	r := core.Run{ID: core.ID(), Plan: plan, Status: "running", StartedAt: core.Now(), Steps: []core.Step{}, Usage: map[string]int{}, StepDelayMS: a.settings.StepDelayMS, TotalSteps: totalSteps}
 	for key, value := range plan.Usage {
 		r.Usage[key] = value
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
 	a.activeID = r.ID
 	a.cancel = cancel
 	if e := a.Store.Put("run", r.ID, r); e != nil {
@@ -85,6 +90,7 @@ func (a *App) update(r *core.Run) {
 // shares this cancellable gap. The pace is snapshotted when the run starts.
 func (a *App) beginStep(ctx context.Context, r *core.Run, action core.Action, testCase, viewport string) (int, error) {
 	step := core.Step{ID: core.ID(), Case: testCase, Viewport: viewport, Action: action, Status: "queued"}
+	step.Iteration = r.Iteration
 	if len(r.Steps) > 0 {
 		step.Page = r.Steps[len(r.Steps)-1].Page
 	}
@@ -138,6 +144,7 @@ func (a *App) execute(ctx context.Context, r *core.Run) {
 		}
 		r.CompletedAt = core.Now()
 		r.DurationMS = time.Since(start).Milliseconds()
+		r.Diagnosis = diagnose(r)
 		a.update(r)
 		a.mu.Lock()
 		if a.activeID == r.ID {
@@ -150,161 +157,199 @@ func (a *App) execute(ctx context.Context, r *core.Run) {
 		a.mu.Unlock()
 	}()
 	a.update(r)
-	for _, viewport := range r.Plan.Viewports {
-		if ctx.Err() != nil {
-			a.setInterrupted(r, ctx.Err())
-			return
-		}
-		viewportLabel := fmt.Sprintf("%dx%d", viewport.Width, viewport.Height)
-		viewportAction := core.Action{Operation: "viewport", Label: "Set browser width to " + viewportLabel}
-		vi, e := a.beginStep(ctx, r, viewportAction, "Browser layout", viewportLabel)
-		if e != nil {
-			a.setInterrupted(r, e)
-			return
-		}
-		result, e := a.browser(ctx, r.ID, "", map[string]any{"operation": "viewport", "viewport": viewport, "origin": r.Plan.Origin})
-		r.Steps[vi].CompletedAt = core.Now()
-		r.Steps[vi].Result = result
-		r.Steps[vi].Page, _ = result["page"].(string)
-		r.Steps[vi].Status = "passed"
-		if e != nil {
-			r.Steps[vi].Status = "error"
-			r.Steps[vi].Error = e.Error()
-			a.setInterrupted(r, e)
-			return
-		}
-		a.update(r)
-		for _, test := range r.Plan.Cases {
-			if r.Plan.UsesPageScopes() {
-				page := test.Page
-				if page == "" {
-					page = "main"
-				}
-				idx, err := a.beginStep(ctx, r, core.Action{Operation: "page_scope", Label: "Prepare page scope: " + page}, test.Name, viewportLabel)
-				if err != nil {
-					a.setInterrupted(r, err)
-					return
-				}
-				result, err := a.browser(ctx, r.ID, "", map[string]any{"operation": "page_scope", "page": page, "origin": r.Plan.Origin})
-				r.Steps[idx].Result = result
-				r.Steps[idx].CompletedAt = core.Now()
-				r.Steps[idx].Status = "passed"
-				r.Steps[idx].Page = page
-				if err != nil {
-					r.Steps[idx].Error = err.Error()
-					r.Steps[idx].Status = "error"
-					a.setInterrupted(r, err)
-					return
-				}
-				a.update(r)
+	rows := r.Plan.Dataset
+	if len(rows) == 0 {
+		rows = []map[string]string{{}}
+	}
+	for iteration, row := range rows {
+		r.Iteration = iteration + 1
+		for _, viewport := range r.Plan.Viewports {
+			if ctx.Err() != nil {
+				a.setInterrupted(r, ctx.Err())
+				return
 			}
-			caseFailed := false
-			for _, action := range test.Steps {
-				if ctx.Err() != nil {
-					a.setInterrupted(r, ctx.Err())
-					return
+			viewportLabel := fmt.Sprintf("%dx%d", viewport.Width, viewport.Height)
+			viewportAction := core.Action{Operation: "viewport", Label: "Set browser width to " + viewportLabel}
+			vi, e := a.beginStep(ctx, r, viewportAction, "Browser layout", viewportLabel)
+			if e != nil {
+				a.setInterrupted(r, e)
+				return
+			}
+			result, e := a.browser(ctx, r.ID, "", map[string]any{"operation": "viewport", "viewport": viewport, "origin": r.Plan.Origin})
+			r.Steps[vi].CompletedAt = core.Now()
+			r.Steps[vi].Result = result
+			r.Steps[vi].Page, _ = result["page"].(string)
+			r.Steps[vi].Status = "passed"
+			if e != nil {
+				r.Steps[vi].Status = "error"
+				r.Steps[vi].Error = e.Error()
+				a.setInterrupted(r, e)
+				return
+			}
+			a.update(r)
+			for _, test := range r.Plan.Cases {
+				r.Values = map[string]string{}
+				for k, v := range row {
+					r.Values[k] = v
 				}
-				idx, e := a.beginStep(ctx, r, action, test.Name, viewportLabel)
-				if e != nil {
-					a.setInterrupted(r, e)
-					return
+				if r.Plan.UsesPageScopes() {
+					page := test.Page
+					if page == "" {
+						page = "main"
+					}
+					idx, err := a.beginStep(ctx, r, core.Action{Operation: "page_scope", Label: "Prepare page scope: " + page}, test.Name, viewportLabel)
+					if err != nil {
+						a.setInterrupted(r, err)
+						return
+					}
+					result, err := a.browser(ctx, r.ID, "", map[string]any{"operation": "page_scope", "page": page, "origin": r.Plan.Origin})
+					r.Steps[idx].Result = result
+					r.Steps[idx].CompletedAt = core.Now()
+					r.Steps[idx].Status = "passed"
+					r.Steps[idx].Page = page
+					if err != nil {
+						r.Steps[idx].Error = err.Error()
+						r.Steps[idx].Status = "error"
+						a.setInterrupted(r, err)
+						return
+					}
+					a.update(r)
 				}
-				result, e := a.executeAdvanced(ctx, r, idx, action)
-				// Only unresolved targets may be grounded again. Dispatched actions with ambiguous results are never retried.
-				var be *BrowserError
-				if e != nil && errors.As(e, &be) && be.Code == "target_missing" && r.Plan.Model != "fixture-demo" && canReground(action.Operation) {
-					for attempt := 0; attempt < 2; attempt++ {
-						grounded, ge := a.ground(ctx, r, action)
-						if ge != nil {
-							e = ge
-							break
-						}
-						action.Target = grounded
-						result, e = a.browser(ctx, r.ID, core.ID(), map[string]any{"operation": "execute", "action": action, "origin": r.Plan.Origin})
-						if e == nil || !errors.As(e, &be) || be.Code != "target_missing" {
-							break
+				caseFailed := false
+				for _, action := range test.Steps {
+					if ctx.Err() != nil {
+						a.setInterrupted(r, ctx.Err())
+						return
+					}
+					resolved, resolveErr := core.ResolveAction(action, r.Values)
+					if resolveErr != nil {
+						a.setInterrupted(r, &BrowserError{Code: "blocked", Message: resolveErr.Error()})
+						return
+					}
+					action = resolved
+					idx, e := a.beginStep(ctx, r, action, test.Name, viewportLabel)
+					if e != nil {
+						a.setInterrupted(r, e)
+						return
+					}
+					result, e := a.executeAdvanced(ctx, r, idx, action)
+					// Only unresolved targets may be grounded again. Dispatched actions with ambiguous results are never retried.
+					var be *BrowserError
+					if e != nil && errors.As(e, &be) && be.Code == "target_missing" && r.Plan.Model != "fixture-demo" && canReground(action.Operation) {
+						for attempt := 0; attempt < 2; attempt++ {
+							grounded, ge := a.ground(ctx, r, action)
+							if ge != nil {
+								e = ge
+								break
+							}
+							action.Target = grounded
+							result, e = a.browser(ctx, r.ID, core.ID(), map[string]any{"operation": "execute", "action": action, "origin": r.Plan.Origin})
+							if e == nil || !errors.As(e, &be) || be.Code != "target_missing" {
+								break
+							}
 						}
 					}
-				}
-				r.Steps[idx].CompletedAt = core.Now()
-				r.Steps[idx].Result = result
-				if page, ok := result["page"].(string); ok {
-					r.Steps[idx].Page = page
-				}
-				if e != nil {
-					r.Steps[idx].Error = e.Error()
-					r.Steps[idx].Status = "error"
-					if errors.As(e, &be) {
-						r.Steps[idx].Status = be.Code
-						if be.Code == "assertion_failed" {
-							r.Steps[idx].Status = "failed"
-							failed = true
-							caseFailed = true
+					r.Steps[idx].CompletedAt = core.Now()
+					r.Steps[idx].Result = result
+					if page, ok := result["page"].(string); ok {
+						r.Steps[idx].Page = page
+					}
+					if e != nil {
+						r.Steps[idx].Error = e.Error()
+						r.Steps[idx].Status = "error"
+						if errors.As(e, &be) {
+							r.Steps[idx].Status = be.Code
+							if be.Code == "assertion_failed" {
+								r.Steps[idx].Status = "failed"
+								failed = true
+								caseFailed = true
+							} else {
+								a.setInterrupted(r, e)
+								return
+							}
 						} else {
 							a.setInterrupted(r, e)
 							return
 						}
 					} else {
-						a.setInterrupted(r, e)
-						return
-					}
-				} else {
-					r.Steps[idx].Status = "passed"
-				}
-				if action.Operation == "assert" || caseFailed {
-					capture, ce := a.browser(ctx, r.ID, "", map[string]any{"operation": "capture", "origin": r.Plan.Origin, "maskSelectors": a.getSettings().MaskSelectors})
-					if ce != nil {
-						r.Steps[idx].Error += " Evidence capture failed: " + ce.Error()
-						review = true
-					} else {
-						if r.Steps[idx].Result == nil {
-							r.Steps[idx].Result = map[string]any{}
+						r.Steps[idx].Status = "passed"
+						if action.Operation == "capture_value" {
+							r.Values[action.Value], _ = result["value"].(string)
 						}
-						r.Steps[idx].Result["capture"] = capture
-						if r.Plan.Visual {
-							v, e := a.compareBaseline(r, idx, capture)
-							if e != nil {
-								r.Steps[idx].Result["visual"] = map[string]any{"status": "needs_review", "message": e.Error()}
+						if action.HTTP != nil && action.HTTP.SaveAs != "" {
+							r.Values[action.HTTP.SaveAs], _ = result["value"].(string)
+						}
+						if action.Operation == "security_audit" {
+							if result["incompleteEvidence"] == true {
 								review = true
-							} else {
-								r.Steps[idx].Result["visual"] = v
-								if v["status"] == "failed" {
-									failed = true
-									r.Steps[idx].Status = "failed"
+							}
+							raw, _ := json.Marshal(result["findings"])
+							var findings []core.Finding
+							_ = json.Unmarshal(raw, &findings)
+							r.SecurityFindings = append(r.SecurityFindings, findings...)
+							for _, finding := range findings {
+								if finding.Severity == "high" {
+									review = true
 								}
 							}
 						}
 					}
+					if action.Operation == "assert" || caseFailed {
+						settings := a.getSettings()
+						capture, ce := a.browser(ctx, r.ID, "", map[string]any{"operation": "capture", "origin": r.Plan.Origin, "maskSelectors": settings.MaskSelectors, "visualMaskSelectors": settings.VisualMaskSelectors})
+						if ce != nil {
+							r.Steps[idx].Error += " Evidence capture failed: " + ce.Error()
+							review = true
+						} else {
+							if r.Steps[idx].Result == nil {
+								r.Steps[idx].Result = map[string]any{}
+							}
+							r.Steps[idx].Result["capture"] = capture
+							if r.Plan.Visual {
+								v, e := a.compareBaseline(r, idx, capture)
+								if e != nil {
+									r.Steps[idx].Result["visual"] = map[string]any{"status": "needs_review", "message": e.Error()}
+									review = true
+								} else {
+									r.Steps[idx].Result["visual"] = v
+									if v["status"] == "failed" {
+										failed = true
+										r.Steps[idx].Status = "failed"
+									}
+								}
+							}
+						}
+					}
+					a.update(r)
+					if r.Status == "error" {
+						return
+					}
+					if caseFailed {
+						break
+					}
 				}
-				a.update(r)
-				if r.Status == "error" {
-					return
+				if !caseFailed {
+					idx, e := a.beginStep(ctx, r, core.Action{Operation: "accessibility", Label: "Check serious/critical accessibility findings"}, test.Name, viewportLabel)
+					if e != nil {
+						a.setInterrupted(r, e)
+						return
+					}
+					result, e := a.browser(ctx, r.ID, "", map[string]any{"operation": "accessibility", "origin": r.Plan.Origin})
+					step := &r.Steps[idx]
+					step.CompletedAt = core.Now()
+					step.Status = "passed"
+					step.Result = result
+					step.Page, _ = result["page"].(string)
+					if e != nil {
+						step.Status = "needs_review"
+						step.Error = e.Error()
+						review = true
+					} else if n, ok := result["seriousCount"].(float64); ok && n > 0 {
+						step.Status = "failed"
+						failed = true
+					}
+					a.update(r)
 				}
-				if caseFailed {
-					break
-				}
-			}
-			if !caseFailed {
-				idx, e := a.beginStep(ctx, r, core.Action{Operation: "accessibility", Label: "Check serious/critical accessibility findings"}, test.Name, viewportLabel)
-				if e != nil {
-					a.setInterrupted(r, e)
-					return
-				}
-				result, e := a.browser(ctx, r.ID, "", map[string]any{"operation": "accessibility", "origin": r.Plan.Origin})
-				step := &r.Steps[idx]
-				step.CompletedAt = core.Now()
-				step.Status = "passed"
-				step.Result = result
-				step.Page, _ = result["page"].(string)
-				if e != nil {
-					step.Status = "needs_review"
-					step.Error = e.Error()
-					review = true
-				} else if n, ok := result["seriousCount"].(float64); ok && n > 0 {
-					step.Status = "failed"
-					failed = true
-				}
-				a.update(r)
 			}
 		}
 	}

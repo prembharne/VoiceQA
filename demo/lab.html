@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta name="voiceqa-fixture" content="__FIXTURE__" />
+    <meta name="lab-csrf" content="__CSRF__" />
+    <title>VoiceQA — Workflow & Security Lab</title>
+    <style>
+      body {
+        font: 16px/1.55 system-ui;
+        background: #f4f5f1;
+        color: #173a32;
+        max-width: 900px;
+        margin: auto;
+        padding: 32px;
+      }
+      section {
+        background: white;
+        border: 1px solid #cbd4c9;
+        border-radius: 16px;
+        padding: 24px;
+        margin: 20px 0;
+      }
+      button,
+      input {
+        font: inherit;
+        padding: 12px;
+        border-radius: 9px;
+        border: 1px solid #84998c;
+      }
+      button {
+        cursor: pointer;
+        background: #214b3b;
+        color: white;
+        margin: 5px 5px 5px 0;
+      }
+      label {
+        display: block;
+        margin: 15px 0;
+      }
+      h1,
+      h2 {
+        line-height: 1.2;
+      }
+      small {
+        color: #52685d;
+      }
+      a {
+        color: #214b3b;
+      }
+      .badge {
+        padding: 8px 12px;
+        background: #e1ecdd;
+        border-radius: 9px;
+      }
+    </style>
+  </head>
+  <body>
+    <span class="badge">Synthetic test systems · no real purchases or transfers</span>
+    <h1>Workflow & security lab</h1>
+    <p>
+      Test server authorization, price integrity, CSRF, idempotency and values carried between
+      steps.
+    </p>
+    <section>
+      <h2>Test identity</h2>
+      <p role="status" data-testid="identity">Not signed in</p>
+      <button data-testid="login-alice">Use Alice test account</button
+      ><button data-testid="login-bob">Use Bob test account</button
+      ><button data-testid="client-admin">Claim admin on the client</button>
+      <p data-testid="client-role">Client claims user</p>
+      <small>A client claim never grants server permissions in the healthy fixture.</small>
+    </section>
+    <section>
+      <h2>Create a synthetic order</h2>
+      <p>Studio mug · server price $12.00</p>
+      <label for="quantity">Quantity</label
+      ><input
+        id="quantity"
+        data-testid="order-quantity"
+        type="number"
+        min="1"
+        max="5"
+        value="1"
+      /><button data-testid="create-order">Create test order</button>
+      <p>Order ID: <span data-testid="order-id">No order yet</span></p>
+      <p>Order total: <span data-testid="order-total">0</span></p>
+      <p role="status" data-testid="order-result"></p>
+    </section>
+    <section>
+      <h2>Protected operation</h2>
+      <p>The server requires a CSRF token for this synthetic operation.</p>
+      <button data-testid="genuine-transfer">Submit legitimate test transfer</button>
+      <p role="status" data-testid="transfer-result"></p>
+    </section>
+    <section>
+      <h2>Known test contract</h2>
+      <p>
+        Alice owns <code>alice-order</code>; Bob owns <code>bob-order</code>. Anonymous access must
+        return 401. Alice reading Bob's order or the admin route must return 403. Submitted client
+        prices never override the $12 unit price. Reusing the same idempotency key must return the
+        same order, rather than creating another.
+      </p>
+      <p>
+        Known routes: <code>/security/api/orders/:id</code>, <code>/security/api/orders</code>,
+        <code>/security/api/admin</code>, <code>/security/api/transfer</code>.
+      </p>
+      <a href="/workflows">Data-driven workflow lab</a> ·
+      <a href="/security">Healthy security lab</a> · <a href="/security?bug=idor">IDOR defect</a> ·
+      <a href="/security?bug=price">Price defect</a> ·
+      <a href="/security?bug=role">Role defect</a> · <a href="/security?bug=csrf">CSRF defect</a> ·
+      <a href="/security?bug=idempotency">Idempotency defect</a>
+    </section>
+    <script>
+      const el = (id) => document.querySelector('[data-testid="' + id + '"]');
+      const api = async (path, options = {}) => {
+        const response = await fetch(path, {
+          ...options,
+          headers: { 'Content-Type': 'application/json', ...options.headers },
+        });
+        return { status: response.status, data: await response.json() };
+      };
+      for (const user of ['alice', 'bob'])
+        el('login-' + user).onclick = async () => {
+          const login = await api('/security/fixture-login', {
+            method: 'POST',
+            body: JSON.stringify({ user }),
+          });
+          sessionStorage.setItem(
+            'voiceqa-access',
+            JSON.stringify({ accessToken: login.data.accessToken }),
+          );
+          el('identity').textContent = user === 'alice' ? 'Alice test account' : 'Bob test account';
+        };
+      el('client-admin').onclick = () => {
+        document.cookie = 'vqa_client_role=admin; Path=/; SameSite=Strict';
+        el('client-role').textContent = 'Client claims admin';
+      };
+      el('create-order').onclick = async () => {
+        const { status, data } = await api('/security/api/orders', {
+          method: 'POST',
+          body: JSON.stringify({ sku: 'studio-mug', quantity: Number(el('order-quantity').value) }),
+        });
+        if (status === 201) {
+          el('order-id').textContent = data.id;
+          el('order-total').textContent = data.total;
+          el('order-result').textContent = 'Test order created';
+        } else el('order-result').textContent = 'Order rejected';
+      };
+      el('genuine-transfer').onclick = async () => {
+        const { status } = await api('/security/api/transfer', {
+          method: 'POST',
+          headers: { 'X-CSRF-Token': document.querySelector('meta[name="lab-csrf"]').content },
+          body: JSON.stringify({ amount: 1 }),
+        });
+        el('transfer-result').textContent =
+          status === 200 ? 'Transfer fixture accepted' : 'Transfer rejected';
+      };
+      if (new URLSearchParams(location.search).get('iframe') === '1') {
+        const frame = document.createElement('iframe');
+        frame.title = 'Embedded header regression fixture';
+        frame.hidden = true;
+        frame.src = '/';
+        document.body.append(frame);
+      }
+    </script>
+  </body>
+</html>

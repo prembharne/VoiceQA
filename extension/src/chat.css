@@ -597,6 +597,58 @@ body::before {
 .page-sharing > label {
   display: block;
 }
+.workflow-options {
+  border: 0;
+  padding: 0 0 12px;
+  margin: 0 0 12px;
+  border-bottom: 1px solid var(--border);
+}
+.data-options {
+  margin-top: 14px;
+}
+.data-options summary {
+  cursor: pointer;
+  min-height: 28px;
+}
+.data-options textarea {
+  width: 100%;
+  resize: vertical;
+  font-size: 12px;
+  min-height: 100px;
+}
+.triage-card,
+.run-comparison {
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 16px;
+  margin: 16px 0;
+  background: var(--surface);
+}
+.run-comparison > label {
+  display: block;
+  margin-top: 12px;
+}
+.plan-data {
+  margin: 14px 0;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 12px;
+}
+.data-row {
+  padding: 10px 0;
+  border-bottom: 1px solid var(--border);
+  overflow-wrap: anywhere;
+}
+.data-row p {
+  margin: 5px 0;
+  font-size: 13px;
+}
+.security-findings article {
+  border-left: 3px solid #d9b66d;
+  padding: 10px 14px;
+  margin: 12px 0;
+  background: var(--surface);
+}
 .shared-page {
   display: flex;
   gap: 8px;

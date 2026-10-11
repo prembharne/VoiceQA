@@ -1,6 +1,6 @@
 {
   "name": "voiceqa",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "private": true,
   "type": "module",
   "scripts": {
@@ -12,6 +12,8 @@
     "test": "node scripts/generate-contracts.mjs && node --test tests/unit/*.test.mjs",
     "test:browser": "playwright test",
     "test:go": "go test -race ./companion/...",
+    "review:coderabbit": "node scripts/coderabbit-review.mjs",
+    "security:check": "node scripts/security-check.mjs",
     "check": "npm run test && go test ./companion/... && npm run build"
   },
   "dependencies": {
