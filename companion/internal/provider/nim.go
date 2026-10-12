@@ -69,7 +69,10 @@ func (c *Client) chatStructured(ctx context.Context, key, model, instructions st
 			progress(PlanProgress{Phase: "adapting"})
 		}
 	}
-	if mode != "json-schema" {
+	// Some compatible endpoints advertise strict output but do not expose the
+	// format contract to the model. Put the schema in the prompt as well; local
+	// validation remains authoritative even with native structured output.
+	{
 		schemaJSON, err := json.Marshal(schema)
 		if err != nil {
 			return nil, nil, err
@@ -101,11 +104,6 @@ func (c *Client) chatStructured(ctx context.Context, key, model, instructions st
 				cap = max(1024, min(4096, reasoningAllowance/4))
 			}
 			body["reasoning"] = map[string]any{"max_tokens": cap}
-		} else if stream && capabilities.supports("reasoning") && capabilities.Reasoning.Mandatory != nil && !*capabilities.Reasoning.Mandatory {
-			// Optional thinking without a supported budget can consume the whole
-			// planning deadline. Request direct JSON; never disable mandatory or
-			// unknown reasoning, and never infer support from a model's name.
-			body["reasoning"] = map[string]any{"enabled": false}
 		}
 	}
 	if stream && c.NIM {

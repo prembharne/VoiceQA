@@ -496,7 +496,7 @@ async function key(value, modifiers = 0, token) {
   }
 }
 async function click(target, token) {
-  const r = await content({ type: 'vqa.resolve', target }, token);
+  const r = await resolveReady(target, token);
   await command('Input.dispatchMouseEvent', { type: 'mouseMoved', x: r.x, y: r.y }, token);
   await command(
     'Input.dispatchMouseEvent',
@@ -523,6 +523,21 @@ async function click(target, token) {
       .catch(() => {});
   }
   return r;
+}
+// Poll DOM readiness before dispatching input. An SPA can still be rendering
+// after its navigation click; that is not a reason to invoke another AI call.
+// No dispatched mutation is retried, and cancellation/scope are checked each time.
+async function resolveReady(target, token) {
+  const deadline = Date.now() + 5000;
+  while (true) {
+    fence.check(token, state);
+    try {
+      return await content({ type: 'vqa.resolve', target }, token);
+    } catch (error) {
+      if (error.code !== 'target_missing' || Date.now() >= deadline) throw error;
+      await delay(100);
+    }
+  }
 }
 async function navigation(url, token) {
   if (!registry.allows(url)) throw fault('Navigation outside approved origin', 'blocked');
@@ -674,7 +689,10 @@ async function execute(action, token, secureOrigin = '') {
     case 'fill': {
       if (secure && new URL((await checkTarget()).url).origin !== secureOrigin)
         throw fault('Credential origin changed before entry.', 'blocked');
-      if (secure) await content({ type: 'vqa.mark-secret', target: action.target }, token);
+      if (secure) {
+        await resolveReady(action.target, token);
+        await content({ type: 'vqa.mark-secret', target: action.target }, token);
+      }
       const r = await click(action.target, token);
       if (r.privateField && !secure && !(r.inputType === 'email' && !r.secretField))
         throw fault('Use a saved test credential profile for private fields.', 'blocked');

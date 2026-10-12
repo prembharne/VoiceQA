@@ -2,6 +2,14 @@
 
 This document records current evidence, not projected reliability.
 
+## Live Dots planning and execution — 2026-10-12
+
+Version 0.6.2 was investigated using actual Dots 3 free-model calls and real extension execution. The recorded healthy suites cover 150 steps and 38 checks across 15 cases; a deliberately broken ownership suite correctly reports two cross-account access failures with 11 passed controls. The full broad suite and authentication replay preserve current width and demonstrate at least 4.004-second inspection gaps. These figures include actual model-generated plans, rather than preset fixture plans. See [the live validation record](LIVE_AI_VALIDATION.md) for failures found, scope, evidence and reproduction.
+
+A final fresh request through the extension's real background/native-message path generated six cases via focused AI workstreams and passed all 11 checks across 63 recorded steps. Planning took 176.6 seconds; there is no claim of instant free-provider responses. Earlier live failures and the runtime captured-currency correction are documented in the linked record.
+
+The 0.6.1 reasoning-disable change below is superseded: live runs showed degraded plan quality, so provider defaults are preserved without an advertised reasoning-budget control. Native structured-output formats also receive the visible schema. Origin, credential, workflow and confirmation fences remain enforced.
+
 ## Authentication planning preflight — 2026-10-11
 
 Version 0.6.1 checks explicitly requested saved test profiles locally before calling a model. Missing/incomplete profiles produce the setup path immediately; profiles on other explicitly shared origins remain eligible and SMS/manual MFA does not require a TOTP seed. OpenRouter planning disables optional reasoning only when the public catalog explicitly marks it optional and provides no usable reasoning-budget control. Mandatory/unknown reasoning is unchanged; output caps were not reintroduced. Root-relative navigation paths are expanded against the case's approved origin before normal validation; ambiguous post-tab-switch paths and protocol-relative hosts are not guessed.

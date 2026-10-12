@@ -74,6 +74,9 @@ func (s *Scope) Advance(a Action) error {
 		if e != nil {
 			return errors.New("invalid navigation URL")
 		}
+		if u.Scheme == "" || u.Host == "" {
+			return errors.New("navigate.value must contain an absolute HTTP(S) URL; target is not the navigation URL field")
+		}
 		origin := u.Scheme + "://" + u.Host
 		if !s.Approved[origin] || !AllowedURL(a.Value, origin) {
 			return errors.New("navigation outside explicitly approved origins")

@@ -36,7 +36,7 @@ type planningFailure struct {
 
 func (e *planningFailure) Error() string { return e.message }
 func (e *planningFailure) Unwrap() error { return e.cause }
-func (a *App) draftPlanWithProgress(ctx context.Context, request, url, origin string, responsive bool, obs map[string]any, config core.Plan, progress func(provider.PlanProgress), pages ...core.Page) (core.Plan, error) {
+func (a *App) draftSinglePlanWithProgress(ctx context.Context, request, url, origin string, responsive bool, obs map[string]any, config core.Plan, progress func(provider.PlanProgress), options draftOptions, pages ...core.Page) (core.Plan, error) {
 	ctx, cancel := context.WithTimeout(ctx, provider.PlanningTimeout)
 	defer cancel()
 	s := a.getSettings()
@@ -60,9 +60,14 @@ func (a *App) draftPlanWithProgress(ctx context.Context, request, url, origin st
 		limit = 200
 	}
 	input["actionBudget"] = limit / (rows * views)
+	if options.actionBudget > 0 {
+		input["actionBudget"] = options.actionBudget
+		input["originalRequest"] = options.originalRequest
+		input["workstreamRule"] = "The request field defines only this workstream. Cover its requested scope within actionBudget and at most three cases. Other workstreams from originalRequest are generated separately; do not add their actions here."
+	}
 	input["apiCheckBudget"] = 20 / (rows * views)
 	input["coverageRule"] = "Create a concise, reviewable suite within actionBudget and apiCheckBudget. State any deferred or blocked requested coverage in the summary. Never claim full coverage from a partial suite. Missing optional credentials can be deferred explicitly while planning other discoverable workflows."
-	input["scopeRule"] = "Only plan the workflows the user requested. actionBudget is a ceiling, not a target. A single authentication/MFA/CAPTCHA journey normally needs one case, with navigation first, login, readiness wait, identity assertion, operator checkpoint, and completion assertion. Do not add order, settings, security or other unrelated cases just because their controls are present."
+	input["scopeRule"] = "Only plan the workflows the user requested. actionBudget is a ceiling, not a target. Cover every explicitly requested discoverable workflow; do not replace user journeys with dashboard-only checks. Do not add unrelated cases just because their controls are present. Never invent a profile; an empty authProfiles list means no saved credentials are available."
 	if obs["fixture"] == "voiceqa-shop-v1" && (strings.HasPrefix(origin, "http://127.0.0.1:") || strings.HasPrefix(origin, "http://localhost:")) {
 		input["fixtureRequirements"] = provider.DemoPlan(url, origin, "").Cases
 	}
@@ -85,7 +90,21 @@ func (a *App) draftPlanWithProgress(ctx context.Context, request, url, origin st
 	}
 	input["sharedPages"] = pages
 	input["authProfiles"] = allowedProfiles
-	if err := checkRequestedProfile(request, origin, allowedProfiles, pages...); err != nil {
+	credentialReferences := []map[string]string{}
+	for _, p := range allowedProfiles {
+		if p.HasUsername {
+			credentialReferences = append(credentialReferences, map[string]string{"origin": p.Origin, "operation": "fill_secret", "value": p.ID + ":username"})
+		}
+		if p.HasPassword {
+			credentialReferences = append(credentialReferences, map[string]string{"origin": p.Origin, "operation": "fill_secret", "value": p.ID + ":password"})
+		}
+		if p.HasTOTP {
+			credentialReferences = append(credentialReferences, map[string]string{"origin": p.Origin, "operation": "fill_totp", "value": p.ID})
+		}
+	}
+	input["credentialReferences"] = credentialReferences
+	fixtureTOTP := strings.HasPrefix(fmt.Sprint(obs["fixture"]), "voiceqa-workspace-") && (strings.HasPrefix(origin, "http://127.0.0.1:") || strings.HasPrefix(origin, "http://localhost:")) && strings.Contains(strings.ToLower(request), "mfa")
+	if err := checkRequestedProfileWithTOTP(request, origin, allowedProfiles, fixtureTOTP, pages...); err != nil {
 		return core.Plan{}, err
 	}
 	if strings.HasPrefix(origin, "http://127.0.0.1:") || strings.HasPrefix(origin, "http://localhost:") {
@@ -111,6 +130,56 @@ func (a *App) draftPlanWithProgress(ctx context.Context, request, url, origin st
 		if obs["fixture"] == "voiceqa-workflow-v1" {
 			input["fixtureRequirements"] = provider.WorkflowDemoPlan(url, origin, request).Cases
 		}
+	}
+	startURL := url
+	if requirements, ok := input["fixtureRequirements"].(map[string]any); ok {
+		if options.scope != "" {
+			input["workstream"] = options.scope
+			delete(requirements, "authentication")
+			delete(requirements, "security")
+			delete(requirements, "orderTable")
+			if options.scope == "settings" {
+				delete(requirements, "orderWizard")
+			} else {
+				delete(requirements, "preferences")
+			}
+			if options.scope == "validation" {
+				if wizard, ok := requirements["orderWizard"].(map[string]any); ok {
+					delete(wizard, "serverVerification")
+					delete(wizard, "invoice")
+				}
+			}
+		}
+		if resetURL, ok := requirements["resetURL"].(string); ok {
+			startURL = resetURL
+		}
+		text := strings.ToLower(request)
+		authRequested := strings.Contains(text, "authentication") || strings.Contains(text, "mfa") || strings.Contains(text, "captcha") || strings.Contains(text, "login") || strings.Contains(text, "sign in")
+		otherRequested := strings.Contains(text, "order") || strings.Contains(text, "invoice") || strings.Contains(text, "settings") || strings.Contains(text, "security") || config.Mode == "security"
+		if authRequested && !otherRequested {
+			if auth, ok := requirements["authentication"].(map[string]any); ok {
+				if reset, ok := auth["resetURL"].(string); ok {
+					startURL = reset
+				}
+			}
+			delete(requirements, "orderWizard")
+			delete(requirements, "orderTable")
+			delete(requirements, "preferences")
+			delete(requirements, "security")
+		} else if otherRequested && !authRequested {
+			delete(requirements, "authentication")
+		}
+		if config.Mode != "security" {
+			delete(requirements, "security")
+		} else if security, ok := requirements["security"].(map[string]any); ok {
+			if reset, ok := security["resetURL"].(string); ok {
+				startURL = reset
+			}
+		}
+	}
+	input["navigationExample"] = map[string]any{"operation": "navigate", "target": "", "value": startURL, "label": "Open the starting page", "timeoutMs": 0, "assertion": nil, "http": nil}
+	if strings.HasPrefix(fmt.Sprint(obs["fixture"]), "voiceqa-workspace-") {
+		input["requiredCoverage"] = provider.WorkspaceCoverageRequirements(request)
 	}
 	if obs["fixture"] == "voiceqa-advanced-v1" && (strings.HasPrefix(origin, "http://127.0.0.1:") || strings.HasPrefix(origin, "http://localhost:")) {
 		profile := ""
@@ -156,6 +225,7 @@ func (a *App) draftPlanWithProgress(ctx context.Context, request, url, origin st
 		e = json.Unmarshal(raw, &draft)
 		plan := core.Plan{Summary: draft.Summary, Cases: draft.Result.Cases, Pages: pages}
 		normalizeDraftLabels(plan.Cases)
+		normalizeDraftWaits(plan.Cases)
 		plan.Mode = config.Mode
 		plan.APIWritesAllowed = config.APIWritesAllowed
 		plan.SecurityAuthorized = config.SecurityAuthorized
@@ -210,10 +280,23 @@ func (a *App) draftPlanWithProgress(ctx context.Context, request, url, origin st
 				plan.Cases = []core.Case{}
 			} else {
 				e = core.ValidatePlan(plan)
-				if e == nil && strings.HasPrefix(fmt.Sprint(obs["fixture"]), "voiceqa-workspace-") && (strings.HasPrefix(origin, "http://127.0.0.1:") || strings.HasPrefix(origin, "http://localhost:")) {
-					e = provider.ValidateWorkspaceDraft(plan)
+				if options.actionBudget > 0 {
+					actions := 0
+					for _, c := range plan.Cases {
+						actions += len(c.Steps)
+					}
+					if actions > options.actionBudget || len(plan.Cases) > 3 {
+						e = errors.Join(e, fmt.Errorf("this workstream allows at most %d actions and three cases; compact only its required journeys", options.actionBudget))
+					}
+				}
+				e = errors.Join(e, validateProfileReferences(plan, allowedProfiles))
+				if strings.HasPrefix(fmt.Sprint(obs["fixture"]), "voiceqa-workspace-") && (strings.HasPrefix(origin, "http://127.0.0.1:") || strings.HasPrefix(origin, "http://localhost:")) {
+					e = errors.Join(e, provider.ValidateWorkspaceDraft(plan), provider.ValidateWorkspaceCoverage(plan, request))
 				}
 			}
+		}
+		if a.DraftDiagnostic != nil {
+			a.DraftDiagnostic(attempt+1, plan, e)
 		}
 		if e == nil {
 			if err := ctx.Err(); err != nil {
@@ -230,14 +313,72 @@ func (a *App) draftPlanWithProgress(ctx context.Context, request, url, origin st
 	return core.Plan{}, fmt.Errorf("AI plan attempts exhausted")
 }
 
+func validateProfileReferences(plan core.Plan, profiles []AuthProfile) error {
+	var failures []error
+	for ci, c := range plan.Cases {
+		scope, err := core.NewScope(plan, c.Page)
+		if err != nil {
+			continue
+		}
+		for si, action := range c.Steps {
+			if action.Operation == "fill_secret" || action.Operation == "fill_totp" {
+				references := []string{action.Value}
+				if strings.Contains(action.Value, "${") && len(plan.Dataset) > 0 {
+					references = nil
+					for _, row := range plan.Dataset {
+						ref, err := core.Expand(action.Value, row, false)
+						if err != nil {
+							failures = append(failures, err)
+							continue
+						}
+						references = append(references, ref)
+					}
+				}
+				for _, reference := range references {
+					parts := strings.Split(reference, ":")
+					found := false
+					var choices []string
+					for _, profile := range profiles {
+						if profile.Origin != scope.Origins[scope.Current] {
+							continue
+						}
+						choices = append(choices, profile.ID)
+						if profile.ID != parts[0] {
+							continue
+						}
+						if action.Operation == "fill_totp" {
+							found = profile.HasTOTP
+						} else if len(parts) == 2 {
+							found = parts[1] == "username" && profile.HasUsername || parts[1] == "password" && profile.HasPassword
+						}
+					}
+					if !found {
+						failures = append(failures, fmt.Errorf("case %d, step %d: credential reference %q is unavailable for this page. Use an actual supplied profile id from %v, with :username/:password for fill_secret or the id alone for fill_totp", ci+1, si+1, action.Value, choices))
+					}
+				}
+				if len(references) > 0 {
+					action.Value = references[0]
+				}
+			}
+			if scope.Advance(action) != nil {
+				break
+			}
+		}
+	}
+	return errors.Join(failures...)
+}
+
 // An explicitly requested saved profile is a local prerequisite, not a problem
 // for the language model to reason about. Never reveal profile secret values.
 func checkRequestedProfile(request, origin string, profiles []AuthProfile, pages ...core.Page) error {
+	return checkRequestedProfileWithTOTP(request, origin, profiles, false, pages...)
+}
+func checkRequestedProfileWithTOTP(request, origin string, profiles []AuthProfile, requireTOTP bool, pages ...core.Page) error {
 	text := strings.ToLower(request)
 	if !strings.Contains(text, "saved test profile") && !strings.Contains(text, "saved credential") {
 		return nil
 	}
-	needsMFA := strings.Contains(text, "totp") || strings.Contains(text, "authenticator code")
+	needsMFA := requireTOTP || strings.Contains(text, "totp") || strings.Contains(text, "authenticator code")
 	approved := map[string]bool{origin: true}
 	for _, page := range pages {
 		approved[page.Origin] = true

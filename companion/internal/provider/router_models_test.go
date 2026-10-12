@@ -198,7 +198,7 @@ func TestRouterTerminalUsageCanRepeatAnEmptyStop(t *testing.T) {
 		t.Fatal("post-completion text accepted")
 	}
 }
-func TestRouterOptionalReasoningWithoutBudget(t *testing.T) {
+func TestRouterPreservesReasoningDefaultWithoutBudgetControl(t *testing.T) {
 	for _, kind := range []string{"optional", "mandatory", "unknown", "unsupported"} {
 		t.Run(kind, func(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -216,13 +216,8 @@ func TestRouterOptionalReasoningWithoutBudget(t *testing.T) {
 				}
 				var body map[string]any
 				_ = json.NewDecoder(r.Body).Decode(&body)
-				if kind == "optional" {
-					reasoning, ok := body["reasoning"].(map[string]any)
-					if !ok || reasoning["enabled"] != false {
-						t.Error("optional unbounded thinking left enabled")
-					}
-				} else if body["reasoning"] != nil {
-					t.Error("changed unsupported/mandatory/unknown reasoning")
+				if body["reasoning"] != nil {
+					t.Error("changed the model's reasoning default without an advertised budget control")
 				}
 				if body["max_tokens"] != nil {
 					t.Error("reintroduced output limit")

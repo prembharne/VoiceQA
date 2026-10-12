@@ -19,6 +19,8 @@ import (
 	"voiceqa/companion/internal/store"
 )
 
+const HostVersion = "0.6.2"
+
 type browserReply struct {
 	Result map[string]any
 	Error  string
@@ -33,8 +35,10 @@ type upload struct {
 	Created time.Time
 }
 type App struct {
-	Store           *store.Store
-	Provider        *provider.Client
+	Store    *store.Store
+	Provider *provider.Client
+	// Optional protocol-harness observer. The desktop host never enables this.
+	DraftDiagnostic func(int, core.Plan, error)
 	Send            func(native.Message) error
 	mu              sync.Mutex
 	pending         map[string]chan browserReply
@@ -249,7 +253,7 @@ func (a *App) dispatchWork(m native.Message, generation *uint64) (any, error) {
 	}
 	switch m.Type {
 	case "hello":
-		return map[string]any{"version": 1, "hostVersion": "0.6.1", "settings": a.getSettings(), "capabilities": []string{"dom", "input", "assertions", "accessibility", "visual", "voice", "reports", "multi-tab", "totp", "human-checkpoints", "condition-waits", "test-data", "workflow-variables", "http-checks", "logical-security", "network-evidence", "triage", "run-comparison"}}, nil
+		return map[string]any{"version": 1, "hostVersion": HostVersion, "settings": a.getSettings(), "capabilities": []string{"dom", "input", "assertions", "accessibility", "visual", "voice", "reports", "multi-tab", "totp", "human-checkpoints", "condition-waits", "test-data", "workflow-variables", "http-checks", "logical-security", "network-evidence", "triage", "run-comparison"}}, nil
 	case "auth.list", "auth.save", "auth.delete":
 		return a.authDispatch(m)
 	case "settings.get":

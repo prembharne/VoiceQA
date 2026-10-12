@@ -29,6 +29,12 @@ func normalizeDraftURLs(plan *core.Plan) {
 		}
 		for ai := range c.Steps {
 			a := &c.Steps[ai]
+			// A browser navigation has no element target. Some compatible models
+			// put its URL in target; compile this unambiguous representation before
+			// scope validation, without changing the URL or approved origin.
+			if a.Operation == "navigate" && a.Value == "" && (strings.HasPrefix(a.Target, "http://") || strings.HasPrefix(a.Target, "https://") || strings.HasPrefix(a.Target, "/")) {
+				a.Value, a.Target = a.Target, ""
+			}
 			if a.Operation == "navigate" {
 				a.Value = expand(a.Value)
 			}

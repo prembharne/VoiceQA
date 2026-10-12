@@ -207,7 +207,7 @@ func validateResolvedPlan(p Plan) error {
 					mode = "security"
 				}
 				if e := ValidateHTTP(a.HTTP, mode, scope); e != nil {
-					return e
+					return fmt.Errorf("case %d, step %d (http_check): %w", caseIndex+1, stepIndex+1, e)
 				}
 				checks++
 			}
@@ -216,7 +216,7 @@ func validateResolvedPlan(p Plan) error {
 			}
 			if a.Operation == "assert" || a.Operation == "wait_for" {
 				if a.Assertion == nil || !assertions[a.Assertion.Kind] || a.Assertion.Tolerance < 0 {
-					return errors.New("invalid assertion")
+					return fmt.Errorf("case %d, step %d (%s): assertion must contain a supported kind, string expected and nonnegative tolerance; wait_for requires a readiness condition too", caseIndex+1, stepIndex+1, a.Operation)
 				}
 				if a.Operation == "assert" {
 					checks++

@@ -24,11 +24,22 @@ const origin = workspace
   : security
     ? 'http://127.0.0.1:4175'
     : 'http://127.0.0.1:4173';
-const targetURL = workspace
+let targetURL = workspace
   ? `${origin}/`
   : security
     ? `${origin}/security`
     : `${origin}/fixtures/shop`;
+const bug = process.argv.find((arg) => arg.startsWith('--bug='))?.slice(6);
+if (bug) {
+  if (
+    !workspace ||
+    !['ownership', 'role', 'price', 'csrf', 'duplicate', 'settings', 'search', 'async'].includes(
+      bug,
+    )
+  )
+    throw new Error('Choose a known isolated RelayDesk fault.');
+  targetURL += `?reset=1&bug=${bug}`;
+}
 const requestFile = process.argv.slice(2).find((arg) => !arg.startsWith('--'));
 const results = resolve('.tools/live-checks');
 await mkdir(results, { recursive: true });
@@ -39,6 +50,9 @@ let browser, host;
 const secretFiles = ['openrouter-api-key.dpapi', 'api-key.dpapi'];
 const tasks = new Map();
 const progress = [];
+let planningStartedAt;
+let diagnosticText = '';
+let diagnosticWrites = Promise.resolve();
 try {
   for (const file of secretFiles) {
     try {
@@ -91,9 +105,23 @@ try {
 
   host = spawn(hostPath, ['--stdio'], {
     windowsHide: true,
-    stdio: ['pipe', 'pipe', 'ignore'],
-    env: { ...process.env, VOICEQA_DATA_DIR: dataDir, OPENAI_API_KEY: '', VOICEQA_TTS_API_KEY: '' },
+    stdio: ['pipe', 'pipe', 'pipe'],
+    env: {
+      ...process.env,
+      VOICEQA_DATA_DIR: dataDir,
+      OPENAI_API_KEY: '',
+      VOICEQA_TTS_API_KEY: '',
+      VOICEQA_PLAN_DIAGNOSTICS: '1',
+    },
   });
+  host.stderr.on('data', (chunk) => {
+    diagnosticText += chunk.toString();
+    const snapshot = diagnosticText;
+    diagnosticWrites = diagnosticWrites.then(() =>
+      writeFile(join(folder, 'draft-diagnostics.ndjson'), snapshot),
+    );
+  });
+  console.log(`Diagnostic folder: ${folder}`);
   const send = (type, payload, extra = {}) => {
     const raw = Buffer.from(
       JSON.stringify({ version: 1, id: crypto.randomUUID(), type, payload, ...extra }),
@@ -184,6 +212,7 @@ try {
     `Drafting the ${workspace ? 'RelayDesk order workflow' : security ? 'logical security' : 'coupon/cart'} request with OpenRouter ${model}...`,
   );
   const startedAt = Date.now();
+  planningStartedAt = startedAt;
   const plan = await rpc('plan.propose', {
     request: requestFile
       ? await readFile(resolve(requestFile), 'utf8')
@@ -239,12 +268,28 @@ try {
     }
   } finally {
     try {
-      await browser?.close();
+      await diagnosticWrites;
+      await writeFile(
+        join(folder, 'planning-progress.json'),
+        JSON.stringify(
+          {
+            startedAt: planningStartedAt,
+            elapsedMs: planningStartedAt ? Date.now() - planningStartedAt : 0,
+            progress,
+          },
+          null,
+          2,
+        ),
+      );
     } finally {
-      for (const file of secretFiles)
-        await unlink(join(dataDir, file)).catch((e) => {
-          if (e.code !== 'ENOENT') throw e;
-        });
+      try {
+        await browser?.close();
+      } finally {
+        for (const file of secretFiles)
+          await unlink(join(dataDir, file)).catch((e) => {
+            if (e.code !== 'ENOENT') throw e;
+          });
+      }
     }
   }
 }

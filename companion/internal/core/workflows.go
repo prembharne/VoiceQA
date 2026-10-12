@@ -165,6 +165,12 @@ func ResolveAction(action Action, variables map[string]string) (Action, error) {
 		if e != nil {
 			return action, e
 		}
+		if check.Kind == "number" && templateVariable.MatchString(action.Assertion.Expected) {
+			check.Expected, e = numericCapture(check.Expected)
+			if e != nil {
+				return action, e
+			}
+		}
 		action.Assertion = &check
 	}
 	if action.HTTP != nil {
@@ -176,6 +182,12 @@ func ResolveAction(action Action, variables map[string]string) (Action, error) {
 		check.ExpectedValue, e = Expand(check.ExpectedValue, variables, false)
 		if e != nil {
 			return action, e
+		}
+		if check.ExpectedType == "number" && templateVariable.MatchString(action.HTTP.ExpectedValue) {
+			check.ExpectedValue, e = numericCapture(check.ExpectedValue)
+			if e != nil {
+				return action, e
+			}
 		}
 		check.IdempotencyKey, e = Expand(check.IdempotencyKey, variables, false)
 		if e != nil {
@@ -240,7 +252,7 @@ func ValidateHTTP(check *HTTPCheck, mode string, scope *Scope) error {
 		return errors.New("unsupported expected JSON type")
 	}
 	if check.ExpectedType != "" && check.JSONPointer == "" {
-		return errors.New("JSON type requires a checked JSON pointer")
+		return errors.New("http.expectedType requires http.jsonPointer; for a status-only check leave jsonPointer, expectedType and expectedValue empty")
 	}
 	if check.Tolerance < 0 || math.IsNaN(check.Tolerance) || math.IsInf(check.Tolerance, 0) {
 		return errors.New("invalid JSON numeric tolerance")
@@ -251,7 +263,7 @@ func ValidateHTTP(check *HTTPCheck, mode string, scope *Scope) error {
 	if check.ExpectedType == "number" && (check.ExpectedValue != "" || check.SaveAs == "") {
 		n, e := strconv.ParseFloat(check.ExpectedValue, 64)
 		if e != nil || math.IsInf(n, 0) || math.IsNaN(n) {
-			return errors.New("expected JSON number must be finite")
+			return errors.New("http.expectedValue must be a finite numeric string when expectedType=number, never empty; for status-only checks leave jsonPointer, expectedType and expectedValue empty")
 		}
 	}
 	if check.ExpectedType == "boolean" && check.ExpectedValue != "true" && check.ExpectedValue != "false" && (check.ExpectedValue != "" || check.SaveAs == "") {
