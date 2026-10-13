@@ -1,10 +1,12 @@
 # VoiceQA
 
-A Chrome side-panel extension that plans, executes, and independently verifies website tests from spoken requests. JavaScript controls the selected Chrome tab; a local Go companion handles AI, persistence, baselines, and reports.
+A Chrome side-panel extension that plans, executes, and independently verifies browser workflows and QA checks from typed or dictated requests. JavaScript controls the selected Chrome tab; a local Go companion handles AI, persistence, baselines, and reports.
 
 The side panel is a conversational workspace: share the current website from the bottom composer, type or speak a test request, review the inline plan and watch results stream into the conversation. The top-right settings gear contains only the AI provider and its encrypted API key; the clock/history icon opens saved runs and plans. The **+** menu holds test options and the step gap. New chat clears the visible conversation while preserving saved records. Removing the sharing chip disconnects the selected test target and is disabled during an active run.
 
 For the proposed hosted product and commercial rollout, see [the micro-SaaS roadmap](docs/MICRO_SAAS.md). Hosted accounts, collaboration and billing are future work.
+
+Version 0.7.0 makes normal planning website-independent: one system contract, redacted page evidence, bounded chat context and locally validated actions for both QA and browser workflows. RelayDesk-specific contracts and workstream splitting are removed from ordinary AI requests. The chat now uses soft elevation and generic suggestions, and automatic speech announcements are removed while microphone dictation stays available. See [the request architecture and live acceptance procedure](docs/AGENT_REQUEST_FLOW.md).
 
 Version 0.6.2 fixes model action-field mismatches, validates credential references and known RelayDesk workflow stages before execution, and checks requested demo coverage. Broad demo journeys use focused AI workstreams assembled into one reviewable plan. The planner sends a visible schema, actual navigation/reference examples and focused fixture context. Dots reasoning stays at its provider default when no budget control is advertised; disabling it in 0.6.1 produced unreliable live drafts. The executor waits for missing controls to render before dispatching input, and typed comparisons normalize captured currency amounts. Planning output remains uncapped by VoiceQA and current browser width is preserved. Save an origin-bound test profile under **+ → Test options → Test credentials & MFA** before requesting saved-account authentication.
 
@@ -83,7 +85,7 @@ Typed and dictated requests both require explicit submission and plan approval. 
 
 ## Speech playback
 
-The panel uses browser speech, with no API key or configuration form. Stop cancels playback. The companion's legacy API synthesis endpoints remain available to existing clients, but they are not used by the clean chat UI.
+The panel no longer speaks selection, plan or pass/fail announcements. Microphone dictation remains available. The companion's legacy API synthesis endpoints remain available to existing clients, but they are not used by the clean chat UI.
 
 ## Visual baselines
 

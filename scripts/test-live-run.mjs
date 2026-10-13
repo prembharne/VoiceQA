@@ -10,15 +10,21 @@ import { execFileSync } from 'node:child_process';
 
 let plan = JSON.parse(await readFile(resolve(process.argv[2]), 'utf8'));
 const livePlanning = process.argv.includes('--plan-live');
-if (livePlanning && (plan.aiProvider !== 'openrouter' || !plan.model.endsWith(':free')))
+if (
+  (livePlanning || process.argv.includes('--followup')) &&
+  (plan.aiProvider !== 'openrouter' || !plan.model.endsWith(':free'))
+)
   throw new Error('Live extension planning is restricted to the selected free OpenRouter model.');
 const security = plan.mode === 'security';
 const workspace = plan.origin === 'http://127.0.0.1:4176';
-const origin = workspace
-  ? 'http://127.0.0.1:4176'
-  : security
-    ? 'http://127.0.0.1:4175'
-    : 'http://127.0.0.1:4173';
+const generic = plan.origin === 'http://127.0.0.1:4177';
+const origin = generic
+  ? plan.origin
+  : workspace
+    ? 'http://127.0.0.1:4176'
+    : security
+      ? 'http://127.0.0.1:4175'
+      : 'http://127.0.0.1:4173';
 const url = plan.url;
 if (plan.origin !== origin || plan.clarification || !plan.cases?.length)
   throw new Error('This check requires a runnable local-demo plan.');
@@ -31,13 +37,15 @@ const demoURL = (raw) => {
       u.origin === origin &&
       !u.username &&
       !u.password &&
-      (workspace
-        ? /^\/(?:app\/(?:orders|settings|auth|security|compatibility|projects|layout)|app\/invoices\/[^/]+)?$/.test(
-            u.pathname,
-          )
-        : security
-          ? u.pathname === '/security'
-          : u.pathname === '/fixtures/shop')
+      (generic
+        ? /^\/(?:help)?$/.test(u.pathname)
+        : workspace
+          ? /^\/(?:app\/(?:orders|settings|auth|security|compatibility|projects|layout)|app\/invoices\/[^/]+)?$/.test(
+              u.pathname,
+            )
+          : security
+            ? u.pathname === '/security'
+            : u.pathname === '/fixtures/shop')
     );
   } catch {
     return false;
@@ -106,7 +114,7 @@ let context,
   registered = false;
 const copiedKeys = ['openrouter-api-key.dpapi', 'api-key.dpapi'];
 try {
-  if (livePlanning) {
+  if (livePlanning || process.argv.includes('--followup')) {
     for (const name of copiedKeys) {
       try {
         await copyFile(join(process.env.LOCALAPPDATA, 'VoiceQA', name), join(data, name));
@@ -154,9 +162,26 @@ try {
   ]);
   registered = true;
   const panel = await context.newPage();
+  const panelErrors = [];
+  panel.on('pageerror', (error) => panelErrors.push(error.message));
+  await panel.addInitScript(() => {
+    globalThis.__voiceQAAnnouncements = 0;
+    if (globalThis.speechSynthesis)
+      globalThis.speechSynthesis.speak = () => {
+        globalThis.__voiceQAAnnouncements++;
+      };
+  });
   await panel.goto(`chrome-extension://${extensionId}/panel.html`);
   await panel.setViewportSize({ width: 420, height: 1000 });
   await panel.getByText('Engine connected', { exact: true }).waitFor({ timeout: 15000 });
+  await panel.emulateMedia({ reducedMotion: 'reduce' });
+  for (const width of [360, 420]) {
+    await panel.setViewportSize({ width, height: 900 });
+    await panel.screenshot({ path: join(work, `chat-${width}.png`), fullPage: true });
+    if (await panel.evaluate(() => document.documentElement.scrollWidth > innerWidth))
+      throw new Error(`Chat overflow at ${width}px`);
+  }
+  await panel.setViewportSize({ width: 420, height: 1000 });
   await panel.evaluate(() => {
     const port = chrome.runtime.connect({ name: 'voiceqa-panel' });
     const tasks = new Map();
@@ -275,6 +300,59 @@ try {
       evidence: join(work, 'run.json'),
     }),
   );
+  if (panelErrors.length || (await panel.evaluate(() => globalThis.__voiceQAAnnouncements !== 0)))
+    throw new Error('Chat produced a runtime error or unwanted voice announcement.');
+  await writeFile(
+    join(work, 'ui-checks.json'),
+    JSON.stringify(
+      { widths: [360, 420], reducedMotion: true, pageErrors: panelErrors, spokenAnnouncements: 0 },
+      null,
+      2,
+    ),
+  );
+  if (generic && process.argv.includes('--followup') && run.status === 'passed') {
+    const revised = await rpc('plan.propose', {
+      request:
+        'Revise the booking check to use three Advanced seats instead. Calculate the new total from the earlier fee. Do not submit another booking; verify the preview total only.',
+      conversation: [
+        { role: 'user', text: plan.request },
+        { role: 'assistant', text: plan.summary },
+      ],
+      responsive: false,
+      mode: 'qa',
+      visual: false,
+    });
+    await writeFile(join(work, 'followup-plan.json'), JSON.stringify(revised, null, 2));
+    const steps = revised.cases.flatMap((c) => c.steps);
+    if (
+      revised.clarification ||
+      !steps.some((a) => a.operation === 'fill' && a.value === '3') ||
+      !steps.some(
+        (a) =>
+          a.operation === 'assert' && ['75', '$75.00', '75.00'].includes(a.assertion?.expected),
+      )
+    )
+      throw new Error('Actual AI follow-up did not preserve and revise the booking context.');
+    await rpc('plan.confirm', { id: revised.id, version: revised.version });
+    const next = await rpc('run.start', {
+      planId: revised.id,
+      version: revised.version,
+      key: crypto.randomUUID(),
+    });
+    let followupRun;
+    const followupDeadline = Date.now() + 180000;
+    while (Date.now() < followupDeadline) {
+      followupRun = await rpc('run.get', { id: next.runId });
+      if (!['running', 'paused', 'queued'].includes(followupRun.status)) break;
+      await new Promise((done) => setTimeout(done, 250));
+    }
+    await writeFile(join(work, 'followup-run.json'), JSON.stringify(followupRun, null, 2));
+    if (followupRun.status !== 'passed')
+      throw new Error('Actual AI follow-up execution did not pass.');
+    console.log(
+      'Actual AI follow-up revised three seats and verified the $75 preview in the browser.',
+    );
+  }
   const expectedFailure = process.argv.includes('--expect-failed');
   if (
     (expectedFailure
@@ -301,7 +379,7 @@ try {
           backup,
         ]);
     } finally {
-      if (livePlanning)
+      if (livePlanning || process.argv.includes('--followup'))
         for (const name of copiedKeys)
           await unlink(join(data, name)).catch((error) => {
             if (error.code !== 'ENOENT') throw error;

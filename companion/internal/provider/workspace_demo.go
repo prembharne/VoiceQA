@@ -79,7 +79,7 @@ func WorkspaceRequirements(raw, origin string) map[string]any {
 	return map[string]any{
 		"application":   "RelayDesk synthetic operations workspace",
 		"resetURL":      workspaceReset(origin, "/", raw, false),
-		"sessionRule":   "The main resetURL starts an authenticated synthetic Alice session. Only the authentication lab requires a saved credential/TOTP profile. Security lab loginAlice/loginBob buttons establish authorized fixture sessions without that profile.",
+		"sessionRule":   "Main resetURL authenticates synthetic Alice. Only the auth lab requires a saved credential/TOTP profile. Security loginAlice/loginBob establish fixture sessions without a profile.",
 		"caseIsolation": "Every independent case MUST start with reset=1 using the supplied reset URL. Ordinary SPA navigation does not reset server orders or saved preferences. Replaying a checkbox click without a reset flips its state.",
 		"navigation":    map[string]string{"orders": "testid:nav-orders", "settings": "testid:nav-settings", "overview": "testid:nav-overview"},
 		"orderWizard": map[string]any{

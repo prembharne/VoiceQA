@@ -19,7 +19,7 @@ import (
 	"voiceqa/companion/internal/store"
 )
 
-const HostVersion = "0.6.2"
+const HostVersion = "0.7.0"
 
 type browserReply struct {
 	Result map[string]any
@@ -348,6 +348,7 @@ func (a *App) dispatchWork(m native.Message, generation *uint64) (any, error) {
 	case "plan.propose":
 		var p struct {
 			Pages              []core.Page         `json:"pages"`
+			Conversation       []map[string]string `json:"conversation"`
 			Mode               string              `json:"mode"`
 			APIWritesAllowed   bool                `json:"apiWritesAllowed"`
 			SecurityAuthorized bool                `json:"securityAuthorized"`
@@ -450,6 +451,17 @@ func (a *App) dispatchWork(m native.Message, generation *uint64) (any, error) {
 				extra[page.Alias] = view
 			}
 			obs["additionalPages"] = extra
+			if len(p.Conversation) > 6 {
+				return nil, errors.New("chat context allows at most six turns")
+			}
+			conversation := make([]map[string]string, 0, len(p.Conversation))
+			for _, turn := range p.Conversation {
+				if (turn["role"] != "user" && turn["role"] != "assistant") || len(turn["text"]) > 8000 {
+					return nil, errors.New("invalid chat context")
+				}
+				conversation = append(conversation, map[string]string{"role": turn["role"], "text": turn["text"]})
+			}
+			obs["conversation"] = conversation
 			plan, e = a.draftPlanWithProgress(ctx, p.Request, p.URL, p.Origin, p.Responsive, obs, core.Plan{Mode: p.Mode, SecurityAuthorized: p.SecurityAuthorized, Dataset: p.Dataset, APIWritesAllowed: p.APIWritesAllowed}, func(progress provider.PlanProgress) {
 				_ = a.emit("plan.progress", map[string]any{"requestId": m.ID, "phase": progress.Phase, "receivedChars": progress.ReceivedChars}, "", "")
 			}, p.Pages...)

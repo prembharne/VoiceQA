@@ -54,6 +54,12 @@
         BUTTON: 'button',
         A: 'link',
         SELECT: 'combobox',
+        H1: 'heading',
+        H2: 'heading',
+        H3: 'heading',
+        H4: 'heading',
+        H5: 'heading',
+        H6: 'heading',
         TEXTAREA: 'textbox',
         INPUT:
           { checkbox: 'checkbox', radio: 'radio', submit: 'button', button: 'button' }[el.type] ||
@@ -72,9 +78,17 @@
     }
     return normalize(
       el.getAttribute('aria-label') ||
-        [...(el.labels || [])].map((x) => x.textContent).join(' ') ||
+        [...(el.labels || [])]
+          .map((x) => {
+            const label = x.cloneNode(true);
+            label.querySelectorAll('input,select,textarea,button').forEach((c) => c.remove());
+            return label.textContent;
+          })
+          .join(' ') ||
         el.getAttribute('alt') ||
-        (['button', 'link'].includes(role(el)) ? el.textContent : '') ||
+        (['button', 'link', 'heading', 'option', 'tab', 'menuitem'].includes(role(el))
+          ? el.textContent
+          : '') ||
         el.getAttribute('placeholder') ||
         el.getAttribute('title'),
     );
@@ -93,7 +107,11 @@
       const cut = target.indexOf('|');
       const wantedRole = target.slice(5, cut);
       const wantedName = target.slice(cut + 1);
-      return query('*').filter((el) => role(el) === wantedRole && name(el) === wantedName);
+      const candidates = query('*').filter((el) => role(el) === wantedRole);
+      const exact = candidates.filter((el) => name(el) === wantedName);
+      return exact.length
+        ? exact
+        : candidates.filter((el) => name(el).toLowerCase() === wantedName.toLowerCase());
     }
     if (target.startsWith('label:'))
       return query('input,select,textarea,button,[role]').filter(
@@ -101,11 +119,15 @@
       );
     if (target.startsWith('text:')) {
       const text = target.slice(5);
-      return query('*').filter(
-        (el) =>
-          normalize(el.textContent) === text &&
-          ![...el.children].some((c) => normalize(c.textContent) === text),
-      );
+      const leafMatches = (fold) =>
+        query('*').filter((el) => {
+          const matches = (value) =>
+            (fold ? normalize(value).toLowerCase() : normalize(value)) ===
+            (fold ? text.toLowerCase() : text);
+          return matches(el.textContent) && ![...el.children].some((c) => matches(c.textContent));
+        });
+      const exact = leafMatches(false);
+      return exact.length ? exact : leafMatches(true);
     }
     return query(target);
   }
@@ -170,6 +192,25 @@
       .map((el) => ({
         target: selector(el),
         role: role(el),
+        href:
+          el.tagName === 'A' && !privateElement(el)
+            ? (() => {
+                try {
+                  const u = new URL(el.href);
+                  return /^https?:$/.test(u.protocol) ? u.origin + u.pathname : '';
+                } catch {
+                  return '';
+                }
+              })()
+            : '',
+        inputType: el.tagName === 'INPUT' ? el.type : '',
+        required: Boolean(el.required),
+        min: el.getAttribute('min') || '',
+        max: el.getAttribute('max') || '',
+        options:
+          el.tagName === 'SELECT' && !privateElement(el)
+            ? [...el.options].slice(0, 40).map((o) => ({ value: o.value, label: o.label }))
+            : [],
         name: name(el),
         disabled: Boolean(el.disabled),
         text: privateElement(el) ? '[redacted]' : normalize(el.textContent).slice(0, 180),
@@ -195,6 +236,20 @@
       title: document.title,
       fixture: document.querySelector('meta[name=voiceqa-fixture]')?.content || '',
       controls,
+      results: query('output,h1,h2,h3,[role=status],[role=alert],[aria-live],table,summary')
+        .filter(
+          (el) =>
+            visible(el) ||
+            (['status', 'alert'].includes(el.getAttribute('role')) && !normalize(el.textContent)),
+        )
+        .filter((el) => !privateElement(el))
+        .slice(0, 60)
+        .map((el) => ({
+          target: selector(el),
+          text: normalize(el.textContent).slice(0, 400),
+          tag: el.tagName.toLowerCase(),
+          visible: visible(el),
+        })),
       text,
       csrfSources: [...document.querySelectorAll('meta[name],input[name]')]
         .filter((el) => /csrf|xsrf|^__RequestVerificationToken$/i.test(el.name))
@@ -242,7 +297,10 @@
         throw new Error('Assertions on redacted values are not supported');
       if (kind === 'text' || kind === 'text_contains') {
         actual = normalize(el.textContent);
-        passed = kind === 'text' ? actual === expected : actual.includes(expected);
+        passed =
+          kind === 'text'
+            ? actual === expected
+            : actual.toLowerCase().includes(expected.toLowerCase());
       } else if (kind === 'value') {
         if (!['INPUT', 'TEXTAREA', 'SELECT', 'OPTION'].includes(el.tagName))
           throw Object.assign(

@@ -24,6 +24,22 @@ func TestRequireIndependentAssertion(t *testing.T) {
 		t.Fatal("action-only plan accepted")
 	}
 }
+
+func TestRejectTargetlessElementChecksFromLiveDraft(t *testing.T) {
+	p := validPlan()
+	p.Cases[0].Steps[1].Target = ""
+	if ValidatePlan(p) == nil {
+		t.Fatal("targetless total check reached execution")
+	}
+	p.Cases[0].Steps[1].Target = "role:output"
+	if ValidatePlan(p) == nil {
+		t.Fatal("malformed role target reached execution")
+	}
+	p.Cases[0].Steps[1] = Action{Operation: "assert", Assertion: &Assertion{Kind: "url", Expected: p.URL}}
+	if err := ValidatePlan(p); err != nil {
+		t.Fatal("valid page URL check rejected", err)
+	}
+}
 func TestRejectCrossOriginNavigation(t *testing.T) {
 	p := validPlan()
 	p.Cases[0].Steps = append(p.Cases[0].Steps, Action{Operation: "navigate", Value: "https://other.test/"})

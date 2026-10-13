@@ -19,16 +19,19 @@ const hostPath = resolve(
   process.argv.find((arg) => arg.startsWith('--host='))?.slice('--host='.length) ||
     'dist/voiceqa-host.exe',
 );
-const origin = workspace
-  ? 'http://127.0.0.1:4176'
-  : security
-    ? 'http://127.0.0.1:4175'
-    : 'http://127.0.0.1:4173';
-let targetURL = workspace
-  ? `${origin}/`
-  : security
-    ? `${origin}/security`
-    : `${origin}/fixtures/shop`;
+const customURL = process.argv.find((a) => a.startsWith('--url='))?.slice(6);
+if (customURL && !/^http:\/\/127\.0\.0\.1:4177\/(?:help)?$/.test(customURL))
+  throw new Error('Custom live checks are limited to the owned 4177 browser lab.');
+const origin = customURL
+  ? new URL(customURL).origin
+  : workspace
+    ? 'http://127.0.0.1:4176'
+    : security
+      ? 'http://127.0.0.1:4175'
+      : 'http://127.0.0.1:4173';
+let targetURL =
+  customURL ||
+  (workspace ? `${origin}/` : security ? `${origin}/security` : `${origin}/fixtures/shop`);
 const bug = process.argv.find((arg) => arg.startsWith('--bug='))?.slice(6);
 if (bug) {
   if (
@@ -71,7 +74,11 @@ try {
     db.close();
   }
   if (modelOverride) model = modelOverride;
-  if ((security || workspace) && !model.endsWith(':free') && !process.argv.includes('--allow-paid'))
+  if (
+    (security || workspace || customURL) &&
+    !model.endsWith(':free') &&
+    !process.argv.includes('--allow-paid')
+  )
     throw new Error(
       'The live security check requires your selected OpenRouter :free model. It will not switch models or spend paid credits.',
     );
@@ -209,7 +216,7 @@ try {
     });
   }
   console.log(
-    `Drafting the ${workspace ? 'RelayDesk order workflow' : security ? 'logical security' : 'coupon/cart'} request with OpenRouter ${model}...`,
+    `Drafting the ${customURL ? 'generic browser workflow' : workspace ? 'RelayDesk order workflow' : security ? 'logical security' : 'coupon/cart'} request with OpenRouter ${model}...`,
   );
   const startedAt = Date.now();
   planningStartedAt = startedAt;
@@ -223,7 +230,7 @@ try {
           : 'Check that invalid coupon is rejected and cart total is updated correctly. The value for a mug is $12.',
     url: page.url(),
     origin,
-    responsive: !security && !workspace,
+    responsive: !security && !workspace && !customURL,
     mode: security ? 'security' : 'qa',
     securityAuthorized: security,
     apiWritesAllowed: security && workspace && process.argv.includes('--writes'),

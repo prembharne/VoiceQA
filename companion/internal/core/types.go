@@ -214,9 +214,18 @@ func validateResolvedPlan(p Plan) error {
 			if a.Operation == "key" && !strings.Contains("|Tab|Enter|Escape|ArrowDown|ArrowUp|Space|", "|"+a.Value+"|") {
 				return errors.New("unsupported key")
 			}
+			if strings.HasPrefix(a.Target, "role:") {
+				role, name, ok := strings.Cut(strings.TrimPrefix(a.Target, "role:"), "|")
+				if !ok || strings.TrimSpace(role) == "" || strings.TrimSpace(name) == "" {
+					return fmt.Errorf("case %d, step %d: malformed role target %q; use an observed selector or role:ROLE|EXACT ACCESSIBLE NAME", caseIndex+1, stepIndex+1, a.Target)
+				}
+			}
 			if a.Operation == "assert" || a.Operation == "wait_for" {
 				if a.Assertion == nil || !assertions[a.Assertion.Kind] || a.Assertion.Tolerance < 0 {
 					return fmt.Errorf("case %d, step %d (%s): assertion must contain a supported kind, string expected and nonnegative tolerance; wait_for requires a readiness condition too", caseIndex+1, stepIndex+1, a.Operation)
+				}
+				if strings.TrimSpace(a.Target) == "" && a.Assertion.Kind != "url" && a.Assertion.Kind != "url_contains" && a.Assertion.Kind != "no_overflow" {
+					return fmt.Errorf("case %d, step %d (%s): %s requires a nonempty element target; use an observed result selector, heading or status target", caseIndex+1, stepIndex+1, a.Operation, a.Assertion.Kind)
 				}
 				if a.Operation == "assert" {
 					checks++

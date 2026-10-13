@@ -304,7 +304,7 @@ func readChatStream(body io.Reader, progress func(PlanProgress)) ([]byte, error)
 			return nil, errors.New("AI stream contained an invalid event")
 		}
 		if len(chunk.Error) > 0 && string(chunk.Error) != "null" {
-			return nil, errors.New("AI provider stopped planning; no tests were run")
+			return nil, streamProviderError(chunk.Error)
 		}
 		if chunk.Usage.Total > 0 {
 			completion.Usage = chunk.Usage
@@ -339,4 +339,16 @@ func readChatStream(body io.Reader, progress func(PlanProgress)) ([]byte, error)
 		}
 		return nil, nil
 	})
+}
+
+// Surface numeric provider status without forwarding raw upstream text, which
+// may contain request data or credentials. No partial plan is accepted.
+func streamProviderError(raw json.RawMessage) error {
+	var detail struct {
+		Code int `json:"code"`
+	}
+	if json.Unmarshal(raw, &detail) == nil && detail.Code >= 400 && detail.Code <= 599 {
+		return fmt.Errorf("AI provider returned a stream error (HTTP %d). No draft was accepted and no tests were run", detail.Code)
+	}
+	return errors.New("AI provider reported an error while streaming the plan. No draft was accepted and no tests were run")
 }

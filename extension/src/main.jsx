@@ -2,12 +2,10 @@ import { runCounts } from '../run-counts.js';
 import React, { useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { rpc, subscribe, artifact } from './bridge.js';
-import { say } from './voice.js';
 import { Dictation } from '../../shared/dictation.js';
 import { APISettings } from './components/api-settings.jsx';
 import './ui.css';
 import { classifyCommand } from '../../shared/commands.js';
-import { SpeechPlayer } from '../../shared/speech-player.js';
 import { MotionRoot, Button, Icon, EmptyState, ConnectionSetup } from './components/ui.jsx';
 import { ShieldCheck, Sparkles, ScanLine, FileCheck2, History, Activity } from 'lucide-react';
 import { ChatWelcome, ChatComposer } from './components/chat.jsx';
@@ -36,7 +34,6 @@ function App() {
   const [saved, setSaved] = useState([]);
   const [voiceMode, setVoiceMode] = useState(false);
   const [voiceState, setVoiceState] = useState('Idle');
-  const [speaking, setSpeaking] = useState(false);
   const [visual, setVisual] = useState(false);
   const [responsive, setResponsive] = useState(false);
   const [mode, setMode] = useState('qa');
@@ -65,19 +62,6 @@ function App() {
   const latestRun = useRef(null);
   const generation = useRef(0);
   const settingsRef = useRef(settings);
-  const speech = useRef(
-    new SpeechPlayer({
-      id: () => crypto.randomUUID(),
-      synthesize: (text, speechId) => rpc('speech.synthesize', { text, speechId }),
-      load: artifact,
-      release: (artifactId) => rpc('speech.release', { artifactId }),
-      cancelRequest: (speechId) => rpc('speech.cancel', { speechId }),
-      browserSay: say,
-      makeAudio: (url) => new Audio(url),
-      createURL: (blob) => URL.createObjectURL(blob),
-      revokeURL: (url) => URL.revokeObjectURL(url),
-    }),
-  );
   async function perform(fn, onError, isCurrent = () => true) {
     setBusy(true);
     setError('');
@@ -93,15 +77,8 @@ function App() {
       if (isCurrent()) setBusy(false);
     }
   }
-  function speak(text) {
-    recorder.current.stop(true);
-    setSpeaking(true);
-    void speech.current.speak(
-      text,
-      'browser',
-      () => setSpeaking(false),
-      (e) => setError(`Speech failed: ${e.message}`),
-    );
+  function respond(text) {
+    setMessages((items) => [...items, { id: crypto.randomUUID(), kind: 'text', text }]);
   }
   useEffect(
     () =>
@@ -109,9 +86,8 @@ function App() {
         if (m.type === 'state') {
           setState(m.state);
           if (!m.state.connected) {
-            speech.current.cancel();
             recorder.current.stop(true);
-            setSpeaking(false);
+
             setVoiceMode(false);
           }
           if (m.state.settings) {
@@ -126,9 +102,8 @@ function App() {
           }
         }
         if (m.type === 'disconnect') {
-          speech.current.cancel();
           recorder.current.stop(true);
-          setSpeaking(false);
+
           setVoiceMode(false);
           setState((s) => ({ ...s, connected: false }));
           setError('Connection interrupted. Choose Retry connection to open a fresh session.');
@@ -139,9 +114,6 @@ function App() {
           setPage((p) => (['setup', 'history', 'credentials'].includes(p) ? p : 'console'));
           if (terminal(m.run.status) && latestRun.current !== m.run.id) {
             latestRun.current = m.run.id;
-            speak(
-              `Test run ${pretty(m.run.status)}. ${runCounts(m.run).failed} failed checks. Open the report for evidence.`,
-            );
             void refresh();
           }
         }
@@ -163,7 +135,6 @@ function App() {
     });
     return () => {
       recorder.current.stop(true);
-      speech.current.cancel();
     };
   }, []);
   async function refresh() {
@@ -196,8 +167,7 @@ function App() {
       recorder.current.stop(false);
       return;
     }
-    speech.current.cancel();
-    setSpeaking(false);
+
     setError('');
     const token = generation.current;
     const prefix = request.trimEnd();
@@ -253,7 +223,6 @@ function App() {
       setPlan(null);
       setRun(null);
       setMessages([]);
-      speak(`Selected ${tab.title}. Describe the test you want to run.`);
     });
   }
   async function propose(demo = false, text = request, displayText = text) {
@@ -283,6 +252,13 @@ function App() {
           );
         const p = await rpc('plan.propose', {
           request: demo ? 'Run the local demo fixture suite' : prompt,
+          conversation: messages
+            .filter((m) => ['user', 'plan', 'text'].includes(m.kind))
+            .slice(-6)
+            .map((m) => ({
+              role: m.kind === 'user' ? 'user' : 'assistant',
+              text: String(m.text || m.plan?.summary || '').slice(0, 2000),
+            })),
           demo,
           responsive,
           visual,
@@ -295,20 +271,6 @@ function App() {
         setPlan(p);
         setMessages((items) => [...items, { id: p.id, kind: 'plan', plan: p }]);
         setPage((p) => (['setup', 'history', 'credentials'].includes(p) ? p : 'console'));
-        const expectations = p.cases
-          .flatMap((c) =>
-            c.steps
-              .filter((s) => ['assert', 'http_check'].includes(s.operation))
-              .map(
-                (s) =>
-                  `${c.name}: ${s.label}, expected ${s.http ? `HTTP ${s.http.expectedStatus}` : s.assertion.expected}`,
-              ),
-          )
-          .join('. ');
-        speak(
-          p.clarification ||
-            `${p.summary}. ${expectations}. Say run these tests to confirm, or describe a revision.`,
-        );
       },
       (e) => {
         if (token === generation.current) {
@@ -360,8 +322,7 @@ function App() {
     setDrafting(false);
     setVoiceMode(false);
     recorder.current.stop(true);
-    speech.current.cancel();
-    setSpeaking(false);
+
     await perform(() => rpc('cancel'));
   }
   commandRef.current = async (text) => {
@@ -370,7 +331,7 @@ function App() {
     if (command === 'start') return start();
     if (command === 'resume') return perform(() => rpc('resume'));
     if (command === 'status') {
-      speak(
+      respond(
         run
           ? `Run is ${state.paused ? 'paused' : run.status}, ${runCounts(run).recorded} recorded steps.`
           : 'No test run is active.',
@@ -378,7 +339,7 @@ function App() {
       return;
     }
     if (command === 'repeat') {
-      speak(plan?.clarification || plan?.summary || 'Describe the test you want to run.');
+      respond(plan?.clarification || plan?.summary || 'Describe the test you want to run.');
       return;
     }
     if (command === 'rerun') return start(run?.plan || plan);
@@ -417,9 +378,9 @@ function App() {
   function newChat() {
     generation.current++;
     recorder.current.stop(true);
-    speech.current.cancel();
+
     setVoiceMode(false);
-    setSpeaking(false);
+
     setRequest('');
     setPlan(null);
     setRun(null);
@@ -1002,11 +963,9 @@ function App() {
         : run?.nextStep
           ? 'Waiting between steps…'
           : 'Running tests…'
-      : speaking
-        ? 'Speaking…'
-        : busy
-          ? 'Working…'
-          : 'Engine connected'
+      : busy
+        ? 'Working…'
+        : 'Engine connected'
     : 'Engine offline';
   return (
     <div className={`app chat-shell ${chat ? 'chat-mode' : 'utility-mode'}`}>
@@ -1177,7 +1136,7 @@ function App() {
           busy={busy}
           drafting={drafting}
           running={active}
-          speaking={speaking}
+          speaking={false}
           hasKey={Boolean(state.settings?.hasApiKey)}
           canVoice={Dictation.supported() && !busy && !active}
           voiceMode={voiceMode}
@@ -1198,7 +1157,7 @@ function App() {
       {!chat && (
         <div className="utility-status">
           <span>{status}</span>
-          {(active || speaking || voiceMode || busy) && (
+          {(active || voiceMode || busy) && (
             <Button className="stop-button" onClick={cancel}>
               Stop
             </Button>
