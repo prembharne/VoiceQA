@@ -11,6 +11,34 @@ VoiceQA 0.7.0 uses one evidence-based planner for ordinary QA requests and brows
 5. The model returns a full JSON plan or one essential clarification. The companion checks allowed operations, origins, tab aliases, credential references, variables and assertion semantics. One invalid-draft repair is allowed with the same model and deadline.
 6. The user reviews and confirms the exact plan version. The executor dispatches one browser action at a time, waits for readiness and independently verifies outcomes. Assertions, not the model's prose, determine pass/fail. Exact text/value/URL assertions retain case sensitivity; semantic `text_contains` checks ignore case. Control locators prefer exact names and only fall back to case-insensitive resolution. Native-dropdown input compilation uses observed options on the exact document, and identical redundant cases are consolidated when no repeated-run intent is supplied.
 
+The JSON inside the user message is data, not an additional system prompt. A simplified example (credentials omitted) is:
+
+```json
+{
+  "request": "Verify the workshop preview total for three Advanced seats without submitting",
+  "url": "https://example.test/",
+  "approvedOrigin": "https://example.test",
+  "mode": "qa",
+  "securityAuthorized": false,
+  "apiWritesAllowed": false,
+  "actionBudget": 50,
+  "apiCheckBudget": 20,
+  "sharedPages": [{"alias": "main", "url": "https://example.test/", "origin": "https://example.test"}],
+  "authProfiles": [],
+  "credentialReferences": [],
+  "observation": {
+    "url": "https://example.test/",
+    "viewport": {"width": 1280, "height": 720},
+    "controls": [{"target": "role:combobox|Workshop", "role": "combobox", "options": [{"label": "Advanced", "value": "advanced"}]}],
+    "results": [{"target": "#total", "text": "$15.00", "tag": "output", "visible": true}],
+    "conversation": [],
+    "additionalPages": {}
+  }
+}
+```
+
+Model instructions and the complete output schema are attached separately by the provider adapter. A previous assistant message cannot add an origin or enable API writes: permissions come from locally validated fields, not chat prose.
+
 Simplified OpenRouter/NIM payload:
 
 ```json
@@ -55,4 +83,3 @@ All run captures retained the current 1280x720 website viewport. Earlier live at
 Dots 3 was actually attempted: the first draft exceeded the six-minute deadline and subsequent streams returned upstream errors, including HTTP 502. Gemma's free endpoint returned HTTP 429. These are failed attempts, not verified successes. No automatic production-model fallback was introduced; all alternative models were selected only in isolated test profiles. Numeric stream status now reaches the user without raw provider messages.
 
 Supplementary checks passed: 46 JavaScript tests, Go race tests, Go vet, production build and native-host registration/version probe. These checks supplement the real-model/browser runs; they do not prove universal website or model compatibility. Microphone hardware, real CAPTCHA, SMS/passkeys and production third-party applications were not part of this acceptance run.
-
