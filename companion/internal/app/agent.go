@@ -1,0 +1,261 @@
+package app
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"net/url"
+	"strings"
+	"voiceqa/companion/internal/core"
+	"voiceqa/companion/internal/provider"
+)
+
+type AgentEvidence struct {
+	ID     string         `json:"id"`
+	Tool   string         `json:"tool"`
+	Page   string         `json:"page"`
+	Result map[string]any `json:"result,omitempty"`
+	Error  string         `json:"error,omitempty"`
+}
+type AgentAnswer struct {
+	ID            string          `json:"id"`
+	Answer        string          `json:"answer"`
+	Clarification string          `json:"clarification,omitempty"`
+	Sources       []string        `json:"sources"`
+	Evidence      []AgentEvidence `json:"evidence"`
+	Model         string          `json:"model"`
+	Usage         map[string]int  `json:"usage"`
+}
+type agentArgs struct {
+	Page   string `json:"page"`
+	Target string `json:"target"`
+	Query  string `json:"query"`
+	URL    string `json:"url"`
+}
+type agentReply struct {
+	Type     string    `json:"type"`
+	Name     string    `json:"name,omitempty"`
+	Args     agentArgs `json:"args,omitempty"`
+	Answer   string    `json:"answer,omitempty"`
+	Sources  []string  `json:"sources,omitempty"`
+	Question string    `json:"question,omitempty"`
+}
+
+func publicAgentURL(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return ""
+	}
+	u.User = nil
+	u.RawQuery = ""
+	u.Fragment = ""
+	return u.String()
+}
+
+func (a *App) investigate(ctx context.Context, request, origin string, pages []core.Page, observation map[string]any, conversation []map[string]string, links bool, requestID string) (AgentAnswer, error) {
+	ctx, cancel := context.WithTimeout(ctx, provider.PlanningTimeout)
+	defer cancel()
+	result := AgentAnswer{ID: core.ID(), Evidence: []AgentEvidence{{ID: "E0", Tool: "observe_page", Page: "main", Result: agentPublicEvidence(observation)}}, Usage: map[string]int{}}
+	publicPages := append([]core.Page(nil), pages...)
+	for i := range publicPages {
+		publicPages[i].URL = publicAgentURL(publicPages[i].URL)
+	}
+	settings := a.getSettings()
+	result.Model = settings.Model
+	names := []string{"observe_page", "inspect_element", "search_page", "diagnostics", "accessibility"}
+	if links {
+		names = append(names, "read_link")
+	}
+	registry := []map[string]string{
+		{"name": "observe_page", "purpose": "Read fresh redacted controls, results, links, constraints and visible text from an already shared page alias."},
+		{"name": "inspect_element", "purpose": "Inspect one observed selector on a shared page, including input constraints, options and public attributes. Private values remain redacted."},
+		{"name": "search_page", "purpose": "Search visible public page text for a phrase; return bounded matching elements and selectors."},
+		{"name": "diagnostics", "purpose": "Read captured network status/timing and sanitized runtime exception locations on the primary shared page. Collection starts on demand; absent events do not establish health."},
+		{"name": "accessibility", "purpose": "Read automated accessibility findings on the primary shared page. Rule checks are partial accessibility coverage."},
+	}
+	if links {
+		registry = append(registry, map[string]string{"name": "read_link", "purpose": "Preview a previously observed parameter-free HTTP(S) link on an approved origin in a temporary inactive tab. Never submit/click; close the preview after observing it. At most three link reads."})
+	}
+	profiles, profileErr := a.authList()
+	if profileErr != nil {
+		return result, fmt.Errorf("Could not read credential availability: %w", profileErr)
+	}
+	publicProfiles := []AuthProfile{}
+	for _, profile := range profiles {
+		if profile.Origin == origin {
+			publicProfiles = append(publicProfiles, profile)
+			continue
+		}
+		for _, page := range pages {
+			if page.Origin == profile.Origin {
+				publicProfiles = append(publicProfiles, profile)
+				break
+			}
+		}
+	}
+	seen := map[string]bool{}
+	linkReads := 0
+	for turn := 0; turn < 9; turn++ {
+		ids := make([]string, 0, len(result.Evidence))
+		for _, e := range result.Evidence {
+			ids = append(ids, e.ID)
+		}
+		input := map[string]any{"request": request, "approvedOrigin": origin, "sharedPages": publicPages, "conversation": conversation, "tools": registry, "evidence": result.Evidence, "remainingToolCalls": 8 - turn, "credentialProfiles": publicProfiles, "permissions": map[string]bool{"linkedPageReads": links, "mutations": false, "arbitraryCode": false}}
+		raw, usage, err := a.aiClient(settings.AIProvider).PlanStructured(ctx, a.keyFor(settings.AIProvider), settings.Model, provider.AgentInstructions, input, provider.AgentSchema(names, ids), func(p provider.PlanProgress) {
+			_ = a.emit("plan.progress", map[string]any{"requestId": requestID, "phase": p.Phase, "receivedChars": p.ReceivedChars}, "", "")
+		})
+		for name, n := range usage {
+			result.Usage[name] += n
+		}
+		if err != nil {
+			return result, planningError(err)
+		}
+		var packet struct {
+			Result agentReply `json:"result"`
+		}
+		decoder := json.NewDecoder(bytes.NewReader(raw))
+		decoder.DisallowUnknownFields()
+		if err = decoder.Decode(&packet); err != nil {
+			return result, fmt.Errorf("Agent returned an invalid tool/answer contract: %w", err)
+		}
+		reply := packet.Result
+		switch reply.Type {
+		case "answer":
+			if strings.TrimSpace(reply.Answer) == "" || len(reply.Answer) > 12000 || len(reply.Sources) == 0 {
+				return result, errors.New("Agent answer requires bounded text and evidence sources")
+			}
+			for _, id := range reply.Sources {
+				found := false
+				for _, e := range result.Evidence {
+					if e.ID == id {
+						found = true
+					}
+				}
+				if !found {
+					return result, errors.New("Agent cited unavailable evidence")
+				}
+			}
+			result.Answer = reply.Answer
+			result.Sources = reply.Sources
+			return result, nil
+		case "clarification":
+			if strings.TrimSpace(reply.Question) == "" || len(reply.Question) > 2000 {
+				return result, errors.New("Agent clarification is invalid")
+			}
+			result.Clarification = reply.Question
+			return result, nil
+		case "tool":
+			if turn == 8 {
+				return result, errors.New("Agent exhausted its investigation budget; no test actions were executed")
+			}
+			if reply.Args.Page == "" {
+				reply.Args.Page = "main"
+			}
+			fingerprint, _ := json.Marshal(struct {
+				Name string
+				Args agentArgs
+			}{reply.Name, reply.Args})
+			e := AgentEvidence{ID: fmt.Sprintf("E%d", turn+1), Tool: reply.Name, Page: reply.Args.Page}
+			known := false
+			for _, name := range names {
+				if reply.Name == name {
+					known = true
+				}
+			}
+			allowedPage := reply.Args.Page == "main"
+			for _, page := range pages {
+				if page.Alias == reply.Args.Page {
+					allowedPage = true
+				}
+			}
+			if !known || !allowedPage || len(reply.Args.Target) > 500 || len(reply.Args.Query) > 200 || len(reply.Args.URL) > 2000 {
+				e.Error = "Tool name, page alias or argument exceeds approved scope"
+			} else if seen[string(fingerprint)] {
+				e.Error = "Identical tool call already attempted; use existing evidence or choose another tool"
+			} else {
+				seen[string(fingerprint)] = true
+				if reply.Name == "read_link" {
+					approved := false
+					for _, page := range pages {
+						if core.AllowedURL(reply.Args.URL, page.Origin) {
+							approved = true
+						}
+					}
+					if core.AllowedURL(reply.Args.URL, origin) {
+						approved = true
+					}
+					if !approved || linkReads >= 3 {
+						e.Error = "Link is outside approved origins or link budget"
+					} else {
+						linkReads++
+					}
+				}
+				if e.Error == "" {
+					view, toolErr := a.browser(ctx, "", "", map[string]any{"operation": "agent_tool", "tool": reply.Name, "page": reply.Args.Page, "target": reply.Args.Target, "query": reply.Args.Query, "url": reply.Args.URL, "origin": origin, "allowLinks": links})
+					if toolErr != nil {
+						e.Error = toolErr.Error()
+					} else {
+						e.Result = agentPublicEvidence(view)
+					}
+				}
+			}
+			result.Evidence = append(result.Evidence, e)
+			_ = a.emit("agent.tool", map[string]any{"requestId": requestID, "id": e.ID, "tool": e.Tool, "page": e.Page, "failed": e.Error != ""}, "", "")
+		default:
+			return result, errors.New("Agent must return a tool, answer or essential clarification")
+		}
+	}
+	return result, errors.New("Agent did not finish investigation")
+}
+
+func agentPublicEvidence(view map[string]any) map[string]any {
+	raw, _ := json.Marshal(view)
+	var copy map[string]any
+	_ = json.Unmarshal(raw, &copy)
+	var redact func(any)
+	redact = func(value any) {
+		switch v := value.(type) {
+		case map[string]any:
+			for key, entry := range v {
+				if key == "url" || key == "href" {
+					if raw, ok := entry.(string); ok && (strings.HasPrefix(raw, "http://") || strings.HasPrefix(raw, "https://")) {
+						v[key] = publicAgentURL(raw)
+					}
+				}
+				redact(entry)
+			}
+		case []any:
+			for _, entry := range v {
+				redact(entry)
+			}
+		}
+	}
+	redact(copy)
+	for _, name := range []string{"controls", "results", "matches", "violations"} {
+		if list, ok := copy[name].([]any); ok && len(list) > 40 {
+			copy[name] = list[:40]
+			copy["truncated"] = true
+		}
+	}
+	for {
+		body, _ := json.Marshal(copy)
+		if len(body) <= 24000 {
+			break
+		}
+		reduced := false
+		for _, name := range []string{"controls", "results", "matches", "violations", "options"} {
+			if list, ok := copy[name].([]any); ok && len(list) > 1 {
+				copy[name] = list[:len(list)/2]
+				copy["truncated"] = true
+				reduced = true
+				break
+			}
+		}
+		if !reduced {
+			return map[string]any{"truncated": true, "url": copy["url"], "title": copy["title"], "limitation": "Tool output exceeded its 24KB evidence allowance. Request a narrower inspection."}
+		}
+	}
+	return copy
+}

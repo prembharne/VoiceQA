@@ -11,7 +11,10 @@ import { execFileSync } from 'node:child_process';
 let plan = JSON.parse(await readFile(resolve(process.argv[2]), 'utf8'));
 const livePlanning = process.argv.includes('--plan-live');
 if (
-  (livePlanning || process.argv.includes('--followup')) &&
+  (livePlanning ||
+    process.argv.includes('--followup') ||
+    process.argv.includes('--investigate') ||
+    process.argv.includes('--ask-ui')) &&
   (plan.aiProvider !== 'openrouter' || !plan.model.endsWith(':free'))
 )
   throw new Error('Live extension planning is restricted to the selected free OpenRouter model.');
@@ -114,7 +117,12 @@ let context,
   registered = false;
 const copiedKeys = ['openrouter-api-key.dpapi', 'api-key.dpapi'];
 try {
-  if (livePlanning || process.argv.includes('--followup')) {
+  if (
+    livePlanning ||
+    process.argv.includes('--followup') ||
+    process.argv.includes('--investigate') ||
+    process.argv.includes('--ask-ui')
+  ) {
     for (const name of copiedKeys) {
       try {
         await copyFile(join(process.env.LOCALAPPDATA, 'VoiceQA', name), join(data, name));
@@ -178,6 +186,32 @@ try {
   for (const width of [360, 420]) {
     await panel.setViewportSize({ width, height: 900 });
     await panel.screenshot({ path: join(work, `chat-${width}.png`), fullPage: true });
+    const clipped = await panel.evaluate(() => {
+      const bounds = document.querySelector('.chat-composer').getBoundingClientRect();
+      return [
+        ...document.querySelectorAll(
+          '.composer-toolbar > select,.composer-options > summary,.composer-actions > button,.model-button',
+        ),
+      ]
+        .filter((e) => {
+          const r = e.getBoundingClientRect();
+          return r.width && r.height && (r.left < bounds.left || r.right > bounds.right);
+        })
+        .map((e) => e.getAttribute('aria-label') || e.textContent);
+    });
+    if (clipped.length)
+      throw new Error(`Composer controls clipped at ${width}px: ${clipped.join(', ')}`);
+    for (const selector of ['.model-picker', '.composer-options']) {
+      const popupFits = await panel.evaluate((selector) => {
+        const details = document.querySelector(selector);
+        details.open = true;
+        const popup = details.querySelector('.model-popover,.options-popover');
+        const r = popup.getBoundingClientRect();
+        details.open = false;
+        return r.left >= 0 && r.right <= innerWidth && r.top >= 0 && r.bottom <= innerHeight;
+      }, selector);
+      if (!popupFits) throw new Error(`Composer popup clipped at ${width}px: ${selector}`);
+    }
     if (await panel.evaluate(() => document.documentElement.scrollWidth > innerWidth))
       throw new Error(`Chat overflow at ${width}px`);
   }
@@ -201,7 +235,7 @@ try {
             tasks.delete(id);
             fail(new Error('RPC timed out'));
           },
-          method === 'plan.propose' ? 480000 : 130000,
+          ['plan.propose', 'agent.query'].includes(method) ? 480000 : 130000,
         );
         tasks.set(id, { done, fail, timer });
         port.postMessage({ type: 'request', id, method, payload });
@@ -217,6 +251,24 @@ try {
     url,
   );
   await rpc('bind', { tabId });
+  if (generic && (process.argv.includes('--investigate') || process.argv.includes('--ask-ui'))) {
+    const answer = await rpc('agent.query', {
+      request:
+        'Read the linked Workshop help page and report its cancellation window. Inspect the Attendee field and report its validation pattern and maximum length. Cite the evidence you used. Do not create a test plan, fill fields or submit a booking.',
+      readLinks: true,
+    });
+    await writeFile(join(work, 'investigation.json'), JSON.stringify(answer, null, 2));
+    if (
+      answer.clarification ||
+      !answer.answer ||
+      !answer.evidence.some((e) => e.tool === 'read_link' && !e.error) ||
+      !answer.evidence.some((e) => e.tool === 'inspect_element' && !e.error)
+    )
+      throw new Error('Actual investigation did not read linked evidence and inspect the control.');
+    console.log(
+      `Actual agent used ${answer.evidence.length - 1} browser tool calls and returned an evidence-backed answer.`,
+    );
+  }
   if (workspace && process.argv.includes('--fixture-auth')) {
     await rpc('auth.save', {
       id: 'relay',
@@ -235,6 +287,8 @@ try {
     const started = Date.now();
     plan = await rpc('plan.propose', {
       request: plan.request,
+      discover: process.argv.includes('--discover'),
+      readLinks: true,
       responsive: !plan.preserveViewport && plan.viewports.length > 1,
       mode: plan.mode || 'qa',
       securityAuthorized: Boolean(plan.securityAuthorized),
@@ -353,6 +407,37 @@ try {
       'Actual AI follow-up revised three seats and verified the $75 preview in the browser.',
     );
   }
+  if (generic && process.argv.includes('--ask-ui') && run.status === 'passed') {
+    await panel.getByLabel('Request mode').selectOption('ask');
+    await panel.evaluate(() => {
+      const textarea = document.querySelector('#request');
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set.call(
+        textarea,
+        'Read Workshop help and tell me how far in advance I can cancel. Cite the evidence.',
+      );
+      textarea.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    await panel.waitForFunction(
+      () => !document.querySelector('[aria-label="Send question"]').disabled,
+    );
+    await panel
+      .getByRole('button', { name: 'Send question', exact: true })
+      .evaluate((button) => button.click());
+    await panel
+      .getByText(/Cancellation.*24|cancel.*24|24 hours/i)
+      .last()
+      .waitFor({ timeout: 480000 });
+    await panel
+      .getByText(/Evidence and tool calls/)
+      .last()
+      .waitFor();
+    await panel.screenshot({ path: join(work, 'ask-answer.png'), fullPage: true });
+    if (panelErrors.length || (await panel.evaluate(() => globalThis.__voiceQAAnnouncements !== 0)))
+      throw new Error('Q&A chat failed runtime/silent-operation checks');
+    console.log(
+      'Actual Ask chat submitted the question and rendered the evidence-backed model answer.',
+    );
+  }
   const expectedFailure = process.argv.includes('--expect-failed');
   if (
     (expectedFailure
@@ -379,7 +464,12 @@ try {
           backup,
         ]);
     } finally {
-      if (livePlanning || process.argv.includes('--followup'))
+      if (
+        livePlanning ||
+        process.argv.includes('--followup') ||
+        process.argv.includes('--investigate') ||
+        process.argv.includes('--ask-ui')
+      )
         for (const name of copiedKeys)
           await unlink(join(data, name)).catch((error) => {
             if (error.code !== 'ENOENT') throw error;

@@ -20,6 +20,19 @@ func normalizeDraftControls(cases []core.Case, obs map[string]any) error {
 			}
 		}
 	}
+	byURL := map[string]map[string]any{}
+	for _, view := range views {
+		if raw, ok := view["url"].(string); ok {
+			byURL[raw] = view
+		}
+	}
+	if discovered, ok := obs["discoveredEvidence"].([]AgentEvidence); ok {
+		for _, e := range discovered {
+			if raw, ok := e.Result["url"].(string); ok && e.Result["controls"] != nil {
+				byURL[raw] = e.Result
+			}
+		}
+	}
 	for ci := range cases {
 		alias := cases[ci].Page
 		if alias == "" {
@@ -27,23 +40,45 @@ func normalizeDraftControls(cases []core.Case, obs map[string]any) error {
 		}
 		view := views[alias]
 		current, _ := view["url"].(string)
+		aliasURLs := map[string]string{}
+		for name, v := range views {
+			raw, _ := v["url"].(string)
+			aliasURLs[name] = raw
+		}
 		for si := range cases[ci].Steps {
 			a := &cases[ci].Steps[si]
 			switch a.Operation {
 			case "navigate":
 				current = a.Value
+				view = byURL[current]
 			case "open_tab":
-				view = nil
 				current = a.Value
+				aliasURLs[a.Target] = current
+				view = byURL[current]
 			case "switch_tab":
-				view = views[a.Target]
-				current, _ = view["url"].(string)
+				current = aliasURLs[a.Target]
+				view = byURL[current]
 			case "close_tab":
 				view = views["main"]
 				current, _ = view["url"].(string)
 			}
 			if view == nil || current != view["url"] {
 				continue
+			}
+			if (a.Operation == "assert" || a.Operation == "wait_for") && strings.HasPrefix(a.Target, "role:heading|") {
+				wanted := strings.TrimPrefix(a.Target, "role:heading|")
+				results, _ := view["results"].([]any)
+				candidates := []string{}
+				for _, raw := range results {
+					if row, ok := raw.(map[string]any); ok && strings.HasPrefix(fmt.Sprint(row["tag"]), "h") && strings.Contains(strings.ToLower(fmt.Sprint(row["text"])), strings.ToLower(wanted)) {
+						if target, ok := row["target"].(string); ok && target != "" {
+							candidates = append(candidates, target)
+						}
+					}
+				}
+				if len(candidates) == 1 {
+					a.Target = candidates[0]
+				}
 			}
 			controls, _ := view["controls"].([]any)
 			for _, raw := range controls {

@@ -1,0 +1,25 @@
+# Advanced browser QA goal - active capability audit
+
+The requested goal remains broad: general end-to-end workflows, debugging, Q&A, authorized logical security checks, stronger Chrome isolation, more agent tools and outstanding real-model results across websites. Version 0.8.0 is a verified investigation foundation, not completion of that entire goal.
+
+## Current implementation and evidence
+
+- Normal planning has no RelayDesk business-rule injection. The agent can now select actual `observe_page`, `inspect_element`, `search_page`, `read_link`, `diagnostics` and `accessibility` tool calls, consume their results and answer with validated source references. This is a structured JSON tool protocol executed by the extension, not provider-native function-call messages and not simulated tool output.
+- "Ask & investigate" is a real chat path, separate from runnable plans. "Investigate before planning" uses the same tool loop and feeds collected observations into the website-independent planner. Previewed pages do not become shared aliases or expand origins.
+- Tools are scoped to user-approved pages/origins. Link previews use observed parameter-free destinations, are inactive and are closed after reading. Known action routes require reviewed workflows. Query budgets, source validation, cancellation and exact argument contracts constrain calls. No form/keyboard/mutation tool is available in investigations.
+- Console argument values are never stored. Runtime evidence contains exception classes and source locations, and network evidence redacts URL parameters. Public DOM extraction removes marked private descendants, script/style/template text and marked hidden content. Saved credentials remain local. A real-browser probe rejected empty/ambiguous numeric evidence, preserved a public $50 total and excluded marked private descendants from names, text and inspection: `.tools/live-checks/numeric-privacy-browser.json`.
+- Real `nvidia/nemotron-3-super-120b-a12b:free` investigation read the linked help page and inspected an attendee field, then accurately answered the previously unseen cancellation window, pattern and max length. Evidence: `.tools/live-checks/paced-live-run-CBhv4h/investigation.json`.
+- Fresh real-model discovery + plan + browser execution passed 25 steps and 4 independent checks. Evidence: `.tools/live-checks/paced-live-run-plMBZb/run.json`. Earlier investigation-assisted runs exposed a prose-as-literal expectation and a shortened heading locator; the generic prompt and evidence-bound locator compilation were corrected.
+- Actual chat mode selection/submission/rendering, not only direct RPC, passed. Latest evidence: `.tools/live-checks/paced-live-run-5y8FSh/ask-answer.png`; accompanying run passed 27 steps/4 checks. Composer controls and both popovers fit at 360px and 420px. Reduced-motion and zero-spoken-announcement checks remain enabled.
+- Supplementary guards cover scope/parameter/action-route rejection, encoded action paths, console-value exclusion, undeclared mutation tool requests and bounded sanitized evidence. These are not substitutes for the real-model/browser evidence.
+
+## Still incomplete for the full goal
+
+1. Adaptive execution/replanning of previously unseen multi-stage interfaces after each approved mutation. Initial investigation cannot reveal every state of a wizard. Fresh actions must remain bound to reviewed intent and permissions; dispatched mutations must never be silently replayed.
+2. Broader tool/action coverage for downloads/uploads, custom widgets, drag-and-drop, semantic outcome verification, browser timing/performance and scaled/transformed frame geometry. Existing same-origin frame/shadow-root support is not proof of all frame/widget compatibility.
+3. Model-assisted debugging grounded in complete scoped run evidence, including explicit distinctions between faulty expectations, selector problems, transient backend failures and reproducible application defects. Runtime collection cannot reconstruct events that occurred before attachment.
+4. Fresh generic-planner logical security validation: account/resource ownership, server roles, price authority, CSRF and duplicate submission with positive controls and real model-generated requests. Earlier release fixture results do not validate the new general agent.
+5. Repeatable multi-application acceptance matrix: different application categories, complex stateful journeys, independent intentional defects, multiple origins/tabs, session recovery and legitimate MFA/human challenges. One booking site plus help page does not prove "any website" or outstanding results across the full scope.
+6. Further adversarial and long-running hardening: injected website instructions, scope changes during tool calls, stale evidence, privacy in nested documents, renderer restarts and sustained tool/transport failures.
+
+The goal must stay active while these requirements are incomplete. Do not mark it complete based on a build, unit tests, this narrow live cohort, or a plausible system prompt alone.

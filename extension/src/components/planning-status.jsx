@@ -26,7 +26,11 @@ export function PlanningStatus({ planning }) {
       <LoaderCircle className="spinner" size={16} aria-hidden="true" />
       <div>
         <span role="status">{labels[planning?.phase] || labels.reading}</span>
-        <small>AI planning can take up to 6 minutes. Stop cancels it.</small>
+        <small>
+          {planning?.tools?.length
+            ? `Latest tool: ${planning.tools.at(-1).tool.replaceAll('_', ' ')} · ${planning.tools.length} calls`
+            : 'AI work can take up to 6 minutes. Stop cancels it.'}
+        </small>
       </div>
       <span className="planning-elapsed" aria-hidden="true">
         {Math.floor(elapsed / 60)}:{String(elapsed % 60).padStart(2, '0')}

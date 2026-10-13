@@ -1,3 +1,4 @@
+import { approvedReadLink, rememberPublicLinks, runtimeDiagnostic } from './agent-tools.js';
 import { PageRegistry } from './page-registry.js';
 import { NativeClient } from './native-client.js';
 import { envelope, id, validateAction, isAllowedURL } from '../shared/protocol.js';
@@ -156,6 +157,8 @@ async function handlePanel(method, payload) {
       title: tab.title,
     };
     state.pages = { main: { ...state.target, alias: 'main', owned: false } };
+    network.reset();
+    diagnostics.length = 0;
     state.currentPage = 'main';
     state.handoff = null;
     activeViewport = null;
@@ -252,13 +255,20 @@ async function handlePanel(method, payload) {
     const uploaded = await native.upload(bytes, payload.mime);
     return native.rpc('audio.complete', { artifactId: uploaded.artifactId, mime: payload.mime });
   }
-  if (method === 'plan.propose') {
+  if (method === 'plan.propose' || method === 'agent.query') {
     if (!state.target) throw new Error('Select a target tab first');
     if (state.runId) throw new Error('Finish the current run first');
     if (stopping || state.planning)
       throw new Error('Finish or stop the current planning request first');
     const requestId = id();
-    state.planning = { id: requestId, startedAt: Date.now(), phase: 'reading' };
+    state.planning = {
+      id: requestId,
+      startedAt: Date.now(),
+      phase: 'reading',
+      tools: [],
+      url: state.target.url,
+    };
+    investigationLinks.clear();
     state.cancelled = false;
     await save();
     try {
@@ -395,6 +405,7 @@ async function waitForTarget(token) {
     try {
       await checkTarget();
       fence.check(token, state);
+      if (state.planning && !state.runId) state.paused = false;
       if (!state.paused) return;
     } catch (e) {
       if (e.code !== 'paused') throw e;
@@ -769,7 +780,94 @@ async function capture(maskSelectors, token, visualMaskSelectors = '') {
       .catch(() => {});
   }
 }
+const investigationLinks = new Set();
+async function investigationTool(p, token) {
+  if (!state.planning || state.runId)
+    throw fault('Investigation requires an active read request and no test run.', 'blocked');
+  const shared = registry.ensure()[p.page || 'main'];
+  if (!shared) throw fault('Page is not explicitly shared.', 'blocked');
+  const tab = await chrome.tabs.get(shared.tabId);
+  if (!isAllowedURL(tab.url, shared.origin))
+    throw fault('Shared page left its approved origin.', 'blocked');
+  const read = async (tabId, message) => {
+    fence.check(token, state);
+    await chrome.scripting.executeScript({ target: { tabId }, files: ['content.js'] });
+    const reply = await chrome.tabs.sendMessage(
+      tabId,
+      { ...message, maskSelectors: state.settings?.maskSelectors },
+      { frameId: 0 },
+    );
+    fence.check(token, state);
+    if (reply.error) throw new Error(reply.error);
+    return reply.result;
+  };
+  if (p.tool === 'observe_page') {
+    const view = await read(shared.tabId, { type: 'vqa.observe' });
+    if (!isAllowedURL(view.url, shared.origin))
+      throw fault('Observation left approved origin.', 'blocked');
+    rememberPublicLinks(view, investigationLinks);
+    return view;
+  }
+  if (p.tool === 'inspect_element')
+    return read(shared.tabId, { type: 'vqa.inspect', target: p.target });
+  if (p.tool === 'search_page') return read(shared.tabId, { type: 'vqa.search', query: p.query });
+  if (p.tool === 'diagnostics' || p.tool === 'accessibility') {
+    if (shared.alias !== 'main')
+      throw fault('Diagnostics currently apply to the primary shared tab.', 'blocked');
+    if (p.tool === 'diagnostics') {
+      await attach(token);
+      return {
+        network: network.snapshot('main'),
+        runtime: [...diagnostics].slice(-20),
+        coverage:
+          'Captured events only. Collection starts when debugger attaches; an empty list is not proof of health.',
+      };
+    }
+    await chrome.scripting.executeScript({
+      target: { tabId: shared.tabId },
+      files: ['axe.min.js'],
+    });
+    return read(shared.tabId, { type: 'vqa.accessibility' });
+  }
+  if (p.tool === 'read_link') {
+    if (p.allowLinks !== true)
+      throw fault('Linked previews are not enabled for this investigation.', 'blocked');
+    const url = approvedReadLink(
+      p.url,
+      [...investigationLinks],
+      Object.values(registry.ensure()).map((page) => page.origin),
+    );
+    const preview = await chrome.tabs.create({ url, active: false });
+    try {
+      for (let n = 0; n < 100; n++) {
+        fence.check(token, state);
+        const loaded = await chrome.tabs.get(preview.id);
+        if (loaded.url && loaded.url !== 'about:blank' && !registry.allows(loaded.url))
+          throw fault('Linked preview redirected outside approved origins.', 'blocked');
+        if (loaded.status === 'complete') {
+          const view = await read(preview.id, { type: 'vqa.observe' });
+          if (!registry.allows(view.url))
+            throw fault('Linked preview left approved origins.', 'blocked');
+          rememberPublicLinks(view, investigationLinks);
+          return { ...view, preview: true };
+        }
+        await delay(100);
+      }
+      throw fault('Linked page did not finish loading within 10 seconds.', 'blocked');
+    } finally {
+      const owned = await chrome.tabs.get(preview.id).catch(() => null);
+      if (owned && !owned.active) await chrome.tabs.remove(preview.id).catch(() => {});
+    }
+  }
+  throw fault('Unsupported investigation tool.', 'blocked');
+}
 async function onNative(message) {
+  if (message.type === 'agent.tool') {
+    if (state.planning?.id !== message.payload.requestId || state.cancelled) return;
+    state.planning.tools = [...(state.planning.tools || []), message.payload].slice(-12);
+    broadcast({ type: 'state', state });
+    return;
+  }
   if (message.type === 'plan.progress') {
     const p = message.payload;
     if (state.cancelled || !state.planning || p.requestId !== state.planning.id) return;
@@ -859,6 +957,9 @@ async function onNative(message) {
       await save();
     }
     switch (p.operation) {
+      case 'agent_tool':
+        result = await investigationTool(p, token);
+        break;
       case 'observe':
         result = await content(
           {
@@ -944,6 +1045,8 @@ async function onNative(message) {
       default:
         throw fault('Unsupported browser request', 'blocked');
     }
+    if (['observe', 'observe_page'].includes(p.operation))
+      rememberPublicLinks(result, investigationLinks);
     result = {
       ...result,
       page: result.page || state.currentPage,
@@ -970,13 +1073,8 @@ const diagnostics = [];
 chrome.debugger.onEvent.addListener((source, method, p) => {
   if (source.tabId !== state.target?.tabId) return;
   network.event(method, p, state.currentPage);
-  if (method === 'Runtime.exceptionThrown')
-    diagnostics.push({
-      type: 'exception',
-      message: p.exceptionDetails?.text || 'JavaScript exception',
-    });
-  if (method === 'Network.loadingFailed')
-    diagnostics.push({ type: 'network', message: p.errorText });
+  const entry = runtimeDiagnostic(method, p, state.currentPage, publicURL);
+  if (entry) diagnostics.push({ ...entry, at: new Date().toISOString() });
   if (diagnostics.length > 100) diagnostics.shift();
 });
 chrome.debugger.onDetach.addListener((source) => {
@@ -991,10 +1089,23 @@ chrome.debugger.onDetach.addListener((source) => {
   void save();
 });
 chrome.tabs.onActivated.addListener(({ tabId }) => {
+  if (state.planning && tabId !== state.target?.tabId) {
+    void stop();
+    return;
+  }
   if (state.runId && !registry.switching && tabId !== state.target?.tabId) {
     state.paused = true;
     void save();
   }
+});
+chrome.tabs.onUpdated.addListener((tabId, change) => {
+  if (
+    state.planning &&
+    tabId === state.target?.tabId &&
+    change.url &&
+    change.url !== state.planning.url
+  )
+    void stop();
 });
 chrome.tabs.onRemoved.addListener((tabId) => {
   if (!registry.switching && tabId === state.target?.tabId) {

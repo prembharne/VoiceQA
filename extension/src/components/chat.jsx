@@ -49,6 +49,12 @@ export function ChatWelcome({ target, onPrompt, onDemo, busy }) {
 }
 
 export function ChatComposer({
+  intent,
+  onIntent,
+  readLinks,
+  onReadLinks,
+  discover,
+  onDiscover,
   mode,
   apiWrites,
   onAPIWrites,
@@ -160,6 +166,16 @@ export function ChatComposer({
           }}
         />
         <div className="composer-toolbar">
+          <select
+            className="intent-picker"
+            aria-label="Request mode"
+            value={intent}
+            disabled={busy || running}
+            onChange={(e) => onIntent(e.target.value)}
+          >
+            <option value="test">Test & automate</option>
+            <option value="ask">Ask & investigate</option>
+          </select>
           <details
             className="composer-options"
             onKeyDown={(e) => {
@@ -170,7 +186,25 @@ export function ChatComposer({
               <Plus size={22} aria-hidden="true" />
             </summary>
             <div className="options-popover">
-              <strong>Test options</strong>
+              <strong>Workspace options</strong>
+              <label className="option-check">
+                <input
+                  type="checkbox"
+                  checked={discover}
+                  disabled={busy || running}
+                  onChange={(e) => onDiscover(e.target.checked)}
+                />
+                Investigate before planning
+              </label>
+              <label className="option-check">
+                <input
+                  type="checkbox"
+                  checked={readLinks}
+                  disabled={busy || running}
+                  onChange={(e) => onReadLinks(e.target.checked)}
+                />
+                Read observed links on approved sites
+              </label>
               <WorkflowOptions
                 apiWrites={apiWrites}
                 onAPIWrites={onAPIWrites}
@@ -265,7 +299,7 @@ export function ChatComposer({
               <button
                 type="submit"
                 className="composer-send"
-                aria-label="Send test request"
+                aria-label={intent === 'ask' ? 'Send question' : 'Send test request'}
                 title="Send · Enter"
                 disabled={!request.trim() || busy || !connected || !target || !hasKey}
               >
@@ -280,7 +314,9 @@ export function ChatComposer({
           ? 'Speak your request. Review the text before sending.'
           : running
             ? 'Testing one step at a time. Stop is always available.'
-            : 'Review the plan before running. Shift + Enter for a new line.'}
+            : intent === 'ask'
+              ? 'Reads shared pages and approved links. No test actions are executed.'
+              : 'Review the plan before running. Shift + Enter for a new line.'}
       </p>
     </div>
   );

@@ -19,7 +19,7 @@ import (
 	"voiceqa/companion/internal/store"
 )
 
-const HostVersion = "0.7.0"
+const HostVersion = "0.8.0"
 
 type browserReply struct {
 	Result map[string]any
@@ -127,7 +127,7 @@ func (a *App) Handle(m native.Message) {
 		return
 	}
 	var generation *uint64
-	if m.Type == "plan.propose" || m.Type == "audio.complete" {
+	if m.Type == "plan.propose" || m.Type == "agent.query" || m.Type == "audio.complete" {
 		a.mu.Lock()
 		value := a.workGeneration
 		generation = &value
@@ -236,12 +236,12 @@ func (a *App) dispatch(m native.Message) (any, error) {
 }
 func (a *App) dispatchWork(m native.Message, generation *uint64) (any, error) {
 	timeout := 2 * time.Minute
-	if m.Type == "plan.propose" {
+	if m.Type == "plan.propose" || m.Type == "agent.query" {
 		timeout = provider.PlanningTimeout + time.Minute
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
-	if m.Type == "plan.propose" || m.Type == "audio.complete" {
+	if m.Type == "plan.propose" || m.Type == "agent.query" || m.Type == "audio.complete" {
 		a.mu.Lock()
 		if a.closing || (generation != nil && *generation != a.workGeneration) {
 			a.mu.Unlock()
@@ -253,7 +253,7 @@ func (a *App) dispatchWork(m native.Message, generation *uint64) (any, error) {
 	}
 	switch m.Type {
 	case "hello":
-		return map[string]any{"version": 1, "hostVersion": HostVersion, "settings": a.getSettings(), "capabilities": []string{"dom", "input", "assertions", "accessibility", "visual", "voice", "reports", "multi-tab", "totp", "human-checkpoints", "condition-waits", "test-data", "workflow-variables", "http-checks", "logical-security", "network-evidence", "triage", "run-comparison"}}, nil
+		return map[string]any{"version": 1, "hostVersion": HostVersion, "settings": a.getSettings(), "capabilities": []string{"agent-tools", "qa-answers", "linked-discovery", "dom", "input", "assertions", "accessibility", "visual", "voice", "reports", "multi-tab", "totp", "human-checkpoints", "condition-waits", "test-data", "workflow-variables", "http-checks", "logical-security", "network-evidence", "triage", "run-comparison"}}, nil
 	case "auth.list", "auth.save", "auth.delete":
 		return a.authDispatch(m)
 	case "settings.get":
@@ -345,6 +345,39 @@ func (a *App) dispatchWork(m native.Message, generation *uint64) (any, error) {
 			return nil, errors.New("invalid project origin")
 		}
 		return p, a.Store.Put("project", p.Origin, p)
+	case "agent.query":
+		var p struct {
+			Request      string              `json:"request"`
+			Origin       string              `json:"origin"`
+			URL          string              `json:"url"`
+			Pages        []core.Page         `json:"pages"`
+			Conversation []map[string]string `json:"conversation"`
+			ReadLinks    bool                `json:"readLinks"`
+		}
+		if err := decode(m, &p); err != nil {
+			return nil, err
+		}
+		if strings.TrimSpace(p.Request) == "" || len(p.Request) > 8000 || len(p.Conversation) > 6 || !core.AllowedURL(p.URL, p.Origin) {
+			return nil, errors.New("Invalid investigation request or scope")
+		}
+		if len(p.Pages) > 5 {
+			return nil, errors.New("At most five pages may be investigated")
+		}
+		for _, page := range p.Pages {
+			if !core.AllowedURL(page.URL, page.Origin) {
+				return nil, errors.New("Invalid shared-page origin")
+			}
+		}
+		for _, turn := range p.Conversation {
+			if (turn["role"] != "user" && turn["role"] != "assistant") || len(turn["text"]) > 8000 {
+				return nil, errors.New("Invalid investigation history")
+			}
+		}
+		obs, err := a.browser(ctx, "", "", map[string]any{"operation": "observe", "origin": p.Origin})
+		if err != nil {
+			return nil, err
+		}
+		return a.investigate(ctx, p.Request, p.Origin, p.Pages, obs, p.Conversation, p.ReadLinks, m.ID)
 	case "plan.propose":
 		var p struct {
 			Pages              []core.Page         `json:"pages"`
@@ -357,6 +390,8 @@ func (a *App) dispatchWork(m native.Message, generation *uint64) (any, error) {
 			URL                string              `json:"url"`
 			Origin             string              `json:"origin"`
 			Demo               bool                `json:"demo"`
+			Discover           bool                `json:"discover"`
+			ReadLinks          bool                `json:"readLinks"`
 			Responsive         bool                `json:"responsive"`
 			Visual             bool                `json:"visual"`
 		}
@@ -462,11 +497,33 @@ func (a *App) dispatchWork(m native.Message, generation *uint64) (any, error) {
 				conversation = append(conversation, map[string]string{"role": turn["role"], "text": turn["text"]})
 			}
 			obs["conversation"] = conversation
+			var discoveryUsage map[string]int
+			if p.Discover {
+				var discoveryCancel context.CancelFunc
+				ctx, discoveryCancel = context.WithTimeout(ctx, provider.PlanningTimeout)
+				defer discoveryCancel()
+				discovery, err := a.investigate(ctx, "Discover the controls, linked pages and expected outcomes needed for this requested workflow before plan review. Do not execute the workflow. Request: "+p.Request, p.Origin, p.Pages, obs, conversation, p.ReadLinks, m.ID)
+				if err != nil {
+					return nil, err
+				}
+				if discovery.Clarification != "" {
+					return nil, fmt.Errorf("Investigation needs an essential requirement: %s", discovery.Clarification)
+				}
+				obs["discoveredEvidence"] = discovery.Evidence
+				obs["discoverySummary"] = discovery.Answer
+				discoveryUsage = discovery.Usage
+			}
 			plan, e = a.draftPlanWithProgress(ctx, p.Request, p.URL, p.Origin, p.Responsive, obs, core.Plan{Mode: p.Mode, SecurityAuthorized: p.SecurityAuthorized, Dataset: p.Dataset, APIWritesAllowed: p.APIWritesAllowed}, func(progress provider.PlanProgress) {
 				_ = a.emit("plan.progress", map[string]any{"requestId": m.ID, "phase": progress.Phase, "receivedChars": progress.ReceivedChars}, "", "")
 			}, p.Pages...)
 			if e != nil {
 				return nil, e
+			}
+			for name, count := range discoveryUsage {
+				if plan.Usage == nil {
+					plan.Usage = map[string]int{}
+				}
+				plan.Usage[name] += count
 			}
 		}
 		plan.Pages = p.Pages

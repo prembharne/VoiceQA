@@ -880,3 +880,70 @@ body::before {
     padding: 8px;
   }
 }
+
+.intent-picker {
+  max-width: 132px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  padding: 6px;
+  font-size: 11px;
+  border-radius: 12px;
+}
+.answer-evidence {
+  margin-top: 14px;
+  border: 1px solid var(--border);
+  padding: 12px;
+  border-radius: 14px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.answer-evidence summary {
+  cursor: pointer;
+}
+.answer-evidence ul {
+  list-style: none;
+  padding: 0;
+}
+.answer-evidence li {
+  margin-top: 12px;
+  overflow-wrap: anywhere;
+}
+.answer-evidence span {
+  display: block;
+  margin-top: 4px;
+}
+@media (max-width: 400px) {
+  .composer-toolbar {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .intent-picker {
+    max-width: 120px;
+  }
+}
+
+/* Keep every action reachable: mode is a separate row at side-panel widths. */
+.composer-toolbar {
+  display: grid;
+  grid-template-columns: 40px minmax(0, 1fr);
+  gap: 6px;
+}
+.intent-picker {
+  grid-column: 1 / -1;
+  width: 100%;
+  max-width: none;
+  min-height: 40px;
+}
+.composer-actions {
+  width: 100%;
+  min-width: 0;
+}
+.composer-actions .model-picker {
+  flex: 1;
+  min-width: 0;
+}
+.composer-actions .model-button {
+  min-width: 0;
+  max-width: 100%;
+}

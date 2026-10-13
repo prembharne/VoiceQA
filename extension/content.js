@@ -42,6 +42,14 @@
       throw new Error('Invalid redaction selector');
     }
   }
+  function publicText(el) {
+    if (privateElement(el)) return '[redacted]';
+    const copy = el.cloneNode(true);
+    copy
+      .querySelectorAll(privateSelectors() + ',script,style,template,[hidden],[aria-hidden=true]')
+      .forEach((node) => node.remove());
+    return normalize(copy.textContent);
+  }
   function visible(el) {
     const r = el.getBoundingClientRect();
     const s = el.ownerDocument.defaultView.getComputedStyle(el);
@@ -72,7 +80,10 @@
     if (labelled) {
       const text = labelled
         .split(/\s+/)
-        .map((id) => el.getRootNode().getElementById?.(id)?.textContent || '')
+        .map((id) => {
+          const label = el.getRootNode().getElementById?.(id);
+          return label ? publicText(label) : '';
+        })
         .join(' ');
       if (normalize(text)) return normalize(text);
     }
@@ -87,7 +98,7 @@
           .join(' ') ||
         el.getAttribute('alt') ||
         (['button', 'link', 'heading', 'option', 'tab', 'menuitem'].includes(role(el))
-          ? el.textContent
+          ? publicText(el)
           : '') ||
         el.getAttribute('placeholder') ||
         el.getAttribute('title'),
@@ -192,6 +203,17 @@
       .map((el) => ({
         target: selector(el),
         role: role(el),
+        parameterizedLink:
+          el.tagName === 'A'
+            ? (() => {
+                try {
+                  const u = new URL(el.href);
+                  return Boolean(u.search || u.hash);
+                } catch {
+                  return true;
+                }
+              })()
+            : false,
         href:
           el.tagName === 'A' && !privateElement(el)
             ? (() => {
@@ -213,14 +235,14 @@
             : [],
         name: name(el),
         disabled: Boolean(el.disabled),
-        text: privateElement(el) ? '[redacted]' : normalize(el.textContent).slice(0, 180),
+        text: privateElement(el) ? '[redacted]' : publicText(el).slice(0, 180),
         value: privateElement(el) ? '[redacted]' : String(el.value ?? '').slice(0, 100),
       }))
       .filter((x) => x.target)
       .slice(0, 160);
     const text = [...document.querySelectorAll('h1,h2,h3,p,[role=status],[role=alert]')]
       .filter((el) => !privateElement(el))
-      .map((el) => normalize(el.textContent))
+      .map((el) => publicText(el))
       .join('\n')
       .slice(0, 3000);
     let unsupportedFrames = 0;
@@ -240,13 +262,13 @@
         .filter(
           (el) =>
             visible(el) ||
-            (['status', 'alert'].includes(el.getAttribute('role')) && !normalize(el.textContent)),
+            (['status', 'alert'].includes(el.getAttribute('role')) && !publicText(el)),
         )
         .filter((el) => !privateElement(el))
         .slice(0, 60)
         .map((el) => ({
           target: selector(el),
-          text: normalize(el.textContent).slice(0, 400),
+          text: publicText(el).slice(0, 400),
           tag: el.tagName.toLowerCase(),
           visible: visible(el),
         })),
@@ -273,6 +295,47 @@
       viewport: { width: innerWidth, height: innerHeight },
     };
   }
+  function inspectElement(target) {
+    const el = unique(target);
+    const secret = privateElement(el);
+    return {
+      target: selector(el) || target,
+      tag: el.tagName.toLowerCase(),
+      role: role(el),
+      name: name(el),
+      private: secret,
+      visible: visible(el),
+      disabled: Boolean(el.disabled),
+      required: Boolean(el.required),
+      type: el.type || '',
+      min: el.getAttribute('min') || '',
+      max: el.getAttribute('max') || '',
+      pattern: el.getAttribute('pattern') || '',
+      minLength: el.minLength >= 0 ? el.minLength : null,
+      maxLength: el.maxLength >= 0 ? el.maxLength : null,
+      text: secret ? '[redacted]' : publicText(el).slice(0, 1000),
+      value: secret ? '[redacted]' : String(el.value ?? '').slice(0, 400),
+      options:
+        !secret && el.tagName === 'SELECT'
+          ? [...el.options].slice(0, 40).map((o) => ({ label: o.label, value: o.value }))
+          : [],
+    };
+  }
+  function searchPage(phrase) {
+    if (typeof phrase !== 'string' || !phrase.trim() || phrase.length > 200)
+      throw new Error('Search requires a phrase of 1-200 characters.');
+    const wanted = normalize(phrase).toLowerCase();
+    return {
+      matches: query('h1,h2,h3,p,label,output,[role],button,a[href]')
+        .filter((el) => visible(el) && !privateElement(el) && !el.querySelector(privateSelectors()))
+        .map((el) => ({
+          target: selector(el) || el.tagName.toLowerCase(),
+          text: publicText(el).slice(0, 700),
+        }))
+        .filter((el) => el.text.toLowerCase().includes(wanted))
+        .slice(0, 20),
+    };
+  }
   function assertion(action) {
     const { kind, expected, tolerance = 0 } = action.assertion;
     let actual;
@@ -296,7 +359,7 @@
       if (privateElement(el) && !['enabled', 'selected', 'focus'].includes(kind))
         throw new Error('Assertions on redacted values are not supported');
       if (kind === 'text' || kind === 'text_contains') {
-        actual = normalize(el.textContent);
+        actual = publicText(el);
         passed =
           kind === 'text'
             ? actual === expected
@@ -312,7 +375,19 @@
         actual = String(el.value ?? '');
         passed = actual === expected;
       } else if (kind === 'number') {
-        actual = Number(normalize(el.textContent || el.value).replace(/[^\d.-]/g, ''));
+        const text = publicText(el) || String(el.value ?? '');
+        const candidates = text.match(/[+-]?(?:\d[\d,]*(?:\.\d+)?|\.\d+)(?:[eE][+-]?\d+)?/g) || [];
+        if (
+          candidates.length !== 1 ||
+          (candidates[0].includes(',') && !/^[+-]?\d{1,3}(?:,\d{3})+\.\d+$/.test(candidates[0]))
+        )
+          throw Object.assign(
+            new Error(
+              'Numeric evidence is empty, ambiguous or uses an unsupported number format. Inspect the result target.',
+            ),
+            { code: 'needs_review' },
+          );
+        actual = Number(candidates[0].replaceAll(',', ''));
         passed = Number.isFinite(actual) && Math.abs(actual - Number(expected)) <= tolerance;
       } else if (kind === 'enabled') {
         actual = !el.disabled && el.getAttribute('aria-disabled') !== 'true';
@@ -606,7 +681,7 @@
               throw new Error('Private fields cannot become workflow variables.');
             const value = ['INPUT', 'TEXTAREA', 'SELECT'].includes(el.tagName)
               ? String(el.value)
-              : normalize(el.textContent);
+              : publicText(el);
             if (value.length > 1000) throw new Error('Captured value exceeds 1000 characters.');
             result = { value };
             break;
@@ -621,6 +696,12 @@
                 .slice(0, 10)
                 .map((f) => ({ action: f.action, method: f.method })),
             };
+            break;
+          case 'vqa.inspect':
+            result = inspectElement(message.target);
+            break;
+          case 'vqa.search':
+            result = searchPage(message.query);
             break;
           case 'vqa.resolve':
             result = resolve(message.target);

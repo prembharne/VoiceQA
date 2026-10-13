@@ -23,6 +23,9 @@ function App() {
   const [page, setPage] = useState('console');
   const [messages, setMessages] = useState([]);
   const [drafting, setDrafting] = useState(false);
+  const [intent, setIntent] = useState('test');
+  const [readLinks, setReadLinks] = useState(true);
+  const [discover, setDiscover] = useState(true);
   const scroll = useRef(null);
   const follow = useRef(true);
   const [busy, setBusy] = useState(false);
@@ -246,20 +249,22 @@ function App() {
     setPlan(null);
     await perform(
       async () => {
-        if (mode === 'security' && !authorized)
+        if (intent !== 'ask' && mode === 'security' && !authorized)
           throw new Error(
             'Confirm that you are authorized to test the shared systems in Test options.',
           );
-        const p = await rpc('plan.propose', {
+        const p = await rpc(!demo && intent === 'ask' ? 'agent.query' : 'plan.propose', {
           request: demo ? 'Run the local demo fixture suite' : prompt,
           conversation: messages
-            .filter((m) => ['user', 'plan', 'text'].includes(m.kind))
+            .filter((m) => ['user', 'plan', 'text', 'answer'].includes(m.kind))
             .slice(-6)
             .map((m) => ({
               role: m.kind === 'user' ? 'user' : 'assistant',
               text: String(m.text || m.plan?.summary || '').slice(0, 2000),
             })),
           demo,
+          readLinks,
+          discover,
           responsive,
           visual,
           mode,
@@ -268,6 +273,19 @@ function App() {
           dataset: parseTestData(testData),
         });
         if (token !== generation.current) return;
+        if (!demo && intent === 'ask') {
+          setMessages((items) => [
+            ...items,
+            {
+              id: p.id,
+              kind: 'answer',
+              text: p.answer || p.clarification,
+              evidence: p.evidence,
+              sources: p.sources,
+            },
+          ]);
+          return;
+        }
         setPlan(p);
         setMessages((items) => [...items, { id: p.id, kind: 'plan', plan: p }]);
         setPage((p) => (['setup', 'history', 'credentials'].includes(p) ? p : 'console'));
@@ -1086,7 +1104,32 @@ function App() {
                       ) : message.kind === 'run' ? (
                         renderRun(message.run)
                       ) : (
-                        <p role={message.kind === 'error' ? 'alert' : undefined}>{message.text}</p>
+                        <>
+                          <p role={message.kind === 'error' ? 'alert' : undefined}>
+                            {message.text}
+                          </p>
+                          {message.kind === 'answer' && (
+                            <details className="answer-evidence">
+                              <summary>
+                                Evidence and tool calls ({message.evidence?.length || 0})
+                              </summary>
+                              <ul>
+                                {message.evidence?.map((e) => (
+                                  <li key={e.id}>
+                                    <strong>
+                                      {e.id} · {e.tool.replaceAll('_', ' ')}
+                                    </strong>
+                                    <span>
+                                      {e.page}
+                                      {e.error ? ` · ${e.error}` : ''}
+                                      {message.sources?.includes(e.id) ? ' · cited' : ''}
+                                    </span>
+                                  </li>
+                                ))}
+                              </ul>
+                            </details>
+                          )}
+                        </>
                       )}
                     </article>
                   ),
@@ -1104,6 +1147,12 @@ function App() {
         <ChatComposer
           apiWrites={apiWrites}
           onAPIWrites={setAPIWrites}
+          intent={intent}
+          onIntent={setIntent}
+          discover={discover}
+          onDiscover={setDiscover}
+          readLinks={readLinks}
+          onReadLinks={setReadLinks}
           mode={mode}
           onMode={(value) => {
             setMode(value);
