@@ -33,6 +33,17 @@ func (c *Client) checkKey(key string) error {
 // schema/JSON/text mode is selected from its advertised model capabilities.
 // A stop finish_reason AND [DONE] are required for a streamed draft.
 func (c *Client) chatStructured(ctx context.Context, key, model, instructions string, input, schema any, budget int, stream bool, progress func(PlanProgress)) (json.RawMessage, map[string]int, error) {
+	if c.acceptanceCalls != nil {
+		if !c.Router || model != "qwen/qwen3.7-flash" {
+			return nil, nil, errors.New("Low-token acceptance permits only OpenRouter Qwen 3.7 Flash")
+		}
+		if c.acceptanceCalls.Add(1) > 3 {
+			return nil, nil, errors.New("Low-token acceptance reached its three-call limit")
+		}
+		if budget == 0 || budget > 6000 {
+			budget = 6000
+		}
+	}
 	if e := c.checkKey(key); e != nil {
 		return nil, nil, e
 	}
@@ -73,6 +84,10 @@ func (c *Client) chatStructured(ctx context.Context, key, model, instructions st
 	// format contract to the model. Put the schema in the prompt as well; local
 	// validation remains authoritative even with native structured output.
 	{
+		if c.Router && mode != "json-schema" {
+			schema = compactJSONContract(schema)
+			instructions += "\nCOMPACT JSON MODE: omit unused optional action and HTTP fields rather than emitting empty strings or nulls. Omitted values use local defaults. Include every field needed by the chosen operation and actual assertion."
+		}
 		schemaJSON, err := json.Marshal(schema)
 		if err != nil {
 			return nil, nil, err
@@ -104,6 +119,9 @@ func (c *Client) chatStructured(ctx context.Context, key, model, instructions st
 				cap = max(1024, min(4096, reasoningAllowance/4))
 			}
 			body["reasoning"] = map[string]any{"max_tokens": cap}
+		}
+		if c.acceptanceCalls != nil && capabilities.supports("reasoning") {
+			body["reasoning"] = map[string]any{"enabled": false}
 		}
 	}
 	if stream && c.NIM {
@@ -205,6 +223,42 @@ func (c *Client) chatStructured(ctx context.Context, key, model, instructions st
 		return nil, nil, e
 	}
 	return parseChatStructuredMode(raw, budget, c.Router && mode != "json-schema")
+}
+
+// JSON-mode providers do not enforce OpenAI's all-properties-required rule.
+// Keep a flat operation contract but avoid generating irrelevant field padding.
+// The application still validates every decoded operation semantically.
+func compactJSONContract(schema any) any {
+	raw, err := json.Marshal(schema)
+	if err != nil {
+		return schema
+	}
+	var clone any
+	if json.Unmarshal(raw, &clone) != nil {
+		return schema
+	}
+	var visit func(any)
+	visit = func(value any) {
+		switch node := value.(type) {
+		case map[string]any:
+			if props, ok := node["properties"].(map[string]any); ok {
+				if props["operation"] != nil && props["http"] != nil {
+					node["required"] = []string{"operation", "label"}
+				} else if props["expectedStatus"] != nil && props["method"] != nil {
+					node["required"] = []string{"method", "url", "expectedStatus"}
+				}
+			}
+			for _, child := range node {
+				visit(child)
+			}
+		case []any:
+			for _, child := range node {
+				visit(child)
+			}
+		}
+	}
+	visit(clone)
+	return clone
 }
 
 type chatChoice struct {

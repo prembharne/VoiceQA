@@ -64,3 +64,24 @@ func TestAgentHistoryRedactsNavigationParametersWithoutChangingTypedInput(t *tes
 		t.Fatal("ordinary user input was rewritten")
 	}
 }
+
+func TestEmptyInvestigationClarificationHasOneCorrectionAndDurableDiagnostics(t *testing.T) {
+	a := newTestApp(t)
+	t.Setenv("OPENAI_API_KEY", "fixture-key")
+	calls := 0
+	a.Send = func(native.Message) error { return nil }
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		mockStructured(w, map[string]any{"result": map[string]any{"type": "clarification", "question": ""}})
+	}))
+	defer server.Close()
+	a.Provider.BaseURL = server.URL
+	answer, err := a.investigate(context.Background(), "Discover the rules", "https://app.test", nil, map[string]any{"url": "https://app.test/"}, nil, false, "invalid-question")
+	if err == nil || calls != 2 || answer.Error == "" || answer.Clarification != "" {
+		t.Fatal("empty clarification escaped bounded correction", err, calls, answer)
+	}
+	var saved AgentAnswer
+	if a.Store.Get("investigation", answer.ID, &saved) != nil || saved.Error == "" || len(saved.Evidence) != 2 || saved.Evidence[1].Tool != "response_validation" {
+		t.Fatal("failed investigation diagnostics lost", saved)
+	}
+}

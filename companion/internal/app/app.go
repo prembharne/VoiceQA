@@ -19,7 +19,7 @@ import (
 	"voiceqa/companion/internal/store"
 )
 
-const HostVersion = "0.11.0"
+const HostVersion = "0.11.1"
 
 type browserReply struct {
 	Result map[string]any
@@ -238,6 +238,14 @@ func (a *App) dispatchWork(m native.Message, generation *uint64) (any, error) {
 	timeout := 2 * time.Minute
 	if m.Type == "plan.propose" || m.Type == "agent.query" || m.Type == "automation.propose" {
 		timeout = provider.PlanningTimeout + time.Minute
+	}
+	if m.Type == "plan.propose" {
+		var options struct {
+			Discover bool `json:"discover"`
+		}
+		if json.Unmarshal(m.Payload, &options) == nil && options.Discover {
+			timeout = 2*provider.PlanningTimeout + time.Minute
+		}
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
@@ -513,10 +521,9 @@ func (a *App) dispatchWork(m native.Message, generation *uint64) (any, error) {
 			obs["conversation"] = conversation
 			var discoveryUsage map[string]int
 			if p.Discover {
-				var discoveryCancel context.CancelFunc
-				ctx, discoveryCancel = context.WithTimeout(ctx, provider.PlanningTimeout)
-				defer discoveryCancel()
-				discovery, err := a.investigate(ctx, "Discover the controls, linked pages and expected outcomes needed for this requested workflow before plan review. Do not execute the workflow. Request: "+p.Request, p.Origin, p.Pages, obs, conversation, p.ReadLinks, m.ID)
+				discoveryCtx, discoveryCancel := context.WithTimeout(ctx, provider.PlanningTimeout)
+				discovery, err := a.investigate(discoveryCtx, "Discover the controls, linked pages and expected outcomes needed for this requested workflow before plan review. Do not execute the workflow. Request: "+p.Request, p.Origin, p.Pages, obs, conversation, p.ReadLinks, m.ID)
+				discoveryCancel()
 				if err != nil {
 					return nil, err
 				}

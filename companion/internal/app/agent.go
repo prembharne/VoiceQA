@@ -20,6 +20,7 @@ type AgentEvidence struct {
 	Error  string         `json:"error,omitempty"`
 }
 type AgentAnswer struct {
+	Error         string           `json:"error,omitempty"`
 	RunID         string           `json:"runId,omitempty"`
 	Assessment    *DebugAssessment `json:"assessment,omitempty"`
 	ID            string           `json:"id"`
@@ -61,10 +62,19 @@ func (a *App) investigate(ctx context.Context, request, origin string, pages []c
 	return a.investigateWithRun(ctx, request, origin, pages, observation, conversation, links, requestID, nil)
 }
 
-func (a *App) investigateWithRun(ctx context.Context, request, origin string, pages []core.Page, observation map[string]any, conversation []map[string]string, links bool, requestID string, recorded *core.Run) (AgentAnswer, error) {
+func (a *App) investigateWithRun(ctx context.Context, request, origin string, pages []core.Page, observation map[string]any, conversation []map[string]string, links bool, requestID string, recorded *core.Run) (out AgentAnswer, returnedErr error) {
 	ctx, cancel := context.WithTimeout(ctx, provider.PlanningTimeout)
 	defer cancel()
 	result := AgentAnswer{ID: core.ID(), Evidence: []AgentEvidence{{ID: "E0", Tool: "observe_page", Page: "main", Result: agentPublicEvidence(observation)}}, Usage: map[string]int{}}
+	defer func() {
+		if returnedErr != nil {
+			out.Error = recordedText(returnedErr.Error(), 1200)
+		}
+		if err := a.Store.Put("investigation", result.ID, out); err != nil && returnedErr == nil {
+			returnedErr = fmt.Errorf("Could not persist investigation evidence: %w", err)
+			out.Error = recordedText(returnedErr.Error(), 1200)
+		}
+	}()
 	publicPages := append([]core.Page(nil), pages...)
 	for i := range publicPages {
 		publicPages[i].URL = publicAgentURL(publicPages[i].URL)
@@ -110,6 +120,7 @@ func (a *App) investigateWithRun(ctx context.Context, request, origin string, pa
 	seen := map[string]bool{}
 	linkReads := 0
 	assessmentRepair := false
+	contractRepair := false
 	for turn := 0; turn < 9; turn++ {
 		ids := make([]string, 0, len(result.Evidence))
 		for _, e := range result.Evidence {
@@ -135,10 +146,34 @@ func (a *App) investigateWithRun(ctx context.Context, request, origin string, pa
 		}
 		decoder := json.NewDecoder(bytes.NewReader(raw))
 		decoder.DisallowUnknownFields()
-		if err = decoder.Decode(&packet); err != nil {
-			return result, fmt.Errorf("Agent returned an invalid tool/answer contract: %w", err)
-		}
+		decodeErr := decoder.Decode(&packet)
 		reply := packet.Result
+		contractError := ""
+		if decodeErr != nil {
+			contractError = "Reply does not match the tool, answer or clarification schema. Use only the declared fields."
+		} else {
+			switch reply.Type {
+			case "clarification":
+				if strings.TrimSpace(reply.Question) == "" || len(reply.Question) > 2000 {
+					contractError = "Clarification requires one nonempty essential question of at most 2000 characters. If evidence is sufficient, return an answer with sources, not an empty clarification."
+				}
+			case "answer":
+				if strings.TrimSpace(reply.Answer) == "" || len(reply.Answer) > 12000 || len(reply.Sources) == 0 {
+					contractError = "An answer requires bounded nonempty text and at least one supplied evidence source ID."
+				}
+			case "tool":
+			default:
+				contractError = "Return exactly one tool, answer or essential clarification."
+			}
+		}
+		if contractError != "" {
+			if contractRepair || turn == 8 {
+				return result, errors.New("AI investigation reply failed validation after correction: " + contractError)
+			}
+			contractRepair = true
+			result.Evidence = append(result.Evidence, AgentEvidence{ID: fmt.Sprintf("E%d", turn+1), Tool: "response_validation", Page: "main", Error: contractError})
+			continue
+		}
 		switch reply.Type {
 		case "answer":
 			if strings.TrimSpace(reply.Answer) == "" || len(reply.Answer) > 12000 || len(reply.Sources) == 0 {

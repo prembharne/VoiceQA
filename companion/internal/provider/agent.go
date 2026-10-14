@@ -17,14 +17,25 @@ func AgentDebugSchema(tools, sources []string) map[string]any {
 }
 
 func agentSchema(tools, sources []string, debugging bool) map[string]any {
-	args := Object(map[string]any{"page": String(), "target": String(), "query": String(), "url": String()})
-	call := Object(map[string]any{"type": map[string]any{"type": "string", "enum": []string{"tool"}}, "name": map[string]any{"type": "string", "enum": tools}, "args": args})
+	calls := []any{}
+	for _, name := range tools {
+		fields := map[string]any{"page": String()}
+		switch name {
+		case "inspect_element":
+			fields["target"] = String()
+		case "search_page", "read_run":
+			fields["query"] = String()
+		case "read_link":
+			fields["url"] = map[string]any{"type": "string", "description": "Exact absolute URL of an observed public link on an approved origin. Never a selector, label or new page alias."}
+		}
+		calls = append(calls, Object(map[string]any{"type": map[string]any{"type": "string", "enum": []string{"tool"}}, "name": map[string]any{"type": "string", "enum": []string{name}}, "args": Object(fields)}))
+	}
 	answerFields := map[string]any{"type": map[string]any{"type": "string", "enum": []string{"answer"}}, "answer": String(), "sources": map[string]any{"type": "array", "items": map[string]any{"type": "string", "enum": sources}}}
 	if debugging {
 		list := func() map[string]any { return map[string]any{"type": "array", "items": String()} }
 		answerFields["assessment"] = Object(map[string]any{"category": map[string]any{"type": "string", "enum": []string{"application_behavior", "expectation", "target_or_evidence", "transport", "scope_or_session", "unknown"}}, "confidence": map[string]any{"type": "string", "enum": []string{"observed", "hypothesis", "insufficient_evidence"}}, "facts": list(), "hypotheses": list(), "nextChecks": list()})
 	}
 	answer := Object(answerFields)
-	question := Object(map[string]any{"type": map[string]any{"type": "string", "enum": []string{"clarification"}}, "question": String()})
-	return Object(map[string]any{"result": map[string]any{"anyOf": []any{call, answer, question}}})
+	question := Object(map[string]any{"type": map[string]any{"type": "string", "enum": []string{"clarification"}}, "question": map[string]any{"type": "string", "description": "One nonempty essential question, at most 2000 characters. Never choose clarification with an empty question to signal completion; use an answer with evidence sources."}})
+	return Object(map[string]any{"result": map[string]any{"anyOf": append(calls, answer, question)}})
 }

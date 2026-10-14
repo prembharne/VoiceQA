@@ -1,0 +1,15 @@
+{
+  "id": "parcelgate-security-request",
+  "version": 1,
+  "origin": "http://127.0.0.1:4180",
+  "url": "http://127.0.0.1:4180/",
+  "request": "Discover this application's workflows and security rules. Audit account ownership, role restrictions, authoritative pricing, CSRF protection and duplicate submissions using actual server outcomes and legitimate positive controls. Use saved test accounts when roles need changing. Keep changes limited to synthetic orders, protect credentials, preserve the current browser width and produce a reviewable execution plan with evidence-backed checks.",
+  "model": "nvidia/nemotron-3-super-120b-a12b:free",
+  "aiProvider": "openrouter",
+  "preserveViewport": true,
+  "mode": "security",
+  "securityAuthorized": true,
+  "apiWritesAllowed": true,
+  "viewports": [{ "width": 1280, "height": 720 }],
+  "cases": [{ "name": "Unexecuted request seed", "steps": [] }]
+}

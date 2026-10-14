@@ -339,8 +339,11 @@ func ValidateHTTP(check *HTTPCheck, mode string, scope *Scope) error {
 	if check.ExpectedStatus < 100 || check.ExpectedStatus > 599 {
 		return errors.New("HTTP check needs an explicit expected status")
 	}
-	if check.SaveAs != "" && (!ValidVariable(check.SaveAs) || check.JSONPointer == "") {
-		return errors.New("HTTP capture needs a public variable name and JSON pointer")
+	if check.SaveAs != "" && !ValidVariable(check.SaveAs) {
+		return errors.New("http.saveAs must be a bare public alias matching ^[a-z][a-z0-9_-]{0,31}$; no dots, uppercase, placeholders, credentials or token names. Omit saveAs unless a public response value is needed later")
+	}
+	if check.SaveAs != "" && check.JSONPointer == "" {
+		return errors.New("http.saveAs requires http.jsonPointer to the public response value. CSRF is not a public capture: use csrfSource=meta:OBSERVED_NAME and csrfHeader=DOCUMENTED_HEADER on the write, without a token-reading GET")
 	}
 	if check.JSONPointer != "" && (!strings.HasPrefix(check.JSONPointer, "/") || sensitiveVariable.MatchString(check.JSONPointer)) {
 		return errors.New("JSON pointer must reference public data, never credentials or session tokens")

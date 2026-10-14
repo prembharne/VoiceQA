@@ -16,23 +16,28 @@ const debugRecord = debugPath ? JSON.parse(await readFile(resolve(debugPath), 'u
 const automationUI = process.argv.includes('--automation-ui');
 const automationLive = process.argv.includes('--automation-live') || automationUI;
 const livePlanning = process.argv.includes('--plan-live') || automationLive;
+const paidQwen = process.argv.includes('--paid-qwen-low-tokens');
+if (paidQwen && (plan.aiProvider !== 'openrouter' || plan.model !== 'qwen/qwen3.7-flash'))
+  throw new Error('Paid acceptance permits only the explicitly authorized Qwen 3.7 Flash.');
 if (
   (debugRecord ||
     livePlanning ||
     process.argv.includes('--followup') ||
     process.argv.includes('--investigate') ||
     process.argv.includes('--ask-ui')) &&
-  (plan.aiProvider !== 'openrouter' || !plan.model.endsWith(':free'))
+  (plan.aiProvider !== 'openrouter' || (!plan.model.endsWith(':free') && !paidQwen))
 )
   throw new Error('Live extension planning is restricted to the selected free OpenRouter model.');
 const security = plan.mode === 'security';
 const workspace = plan.origin === 'http://127.0.0.1:4176';
 const multiWorkspace = plan.origin === 'http://127.0.0.1:4179';
+const parcelWorkspace = plan.origin === 'http://127.0.0.1:4180';
 const expectedStale = multiWorkspace && process.argv.includes('--expect-stale-original');
 const generic = [
   'http://127.0.0.1:4177',
   'http://127.0.0.1:4178',
   'http://127.0.0.1:4179',
+  'http://127.0.0.1:4180',
 ].includes(plan.origin);
 const origin = generic
   ? plan.origin
@@ -53,17 +58,19 @@ const demoURL = (raw) => {
       u.origin === origin &&
       !u.username &&
       !u.password &&
-      (multiWorkspace
-        ? /^\/(?:review)?$/.test(u.pathname)
-        : generic
-          ? /^\/(?:help)?$/.test(u.pathname)
-          : workspace
-            ? /^\/(?:app\/(?:orders|settings|auth|security|compatibility|projects|layout)|app\/invoices\/[^/]+)?$/.test(
-                u.pathname,
-              )
-            : security
-              ? u.pathname === '/security'
-              : u.pathname === '/fixtures/shop')
+      (parcelWorkspace
+        ? /^\/(?:guide)?$/.test(u.pathname)
+        : multiWorkspace
+          ? /^\/(?:review)?$/.test(u.pathname)
+          : generic
+            ? /^\/(?:help)?$/.test(u.pathname)
+            : workspace
+              ? /^\/(?:app\/(?:orders|settings|auth|security|compatibility|projects|layout)|app\/invoices\/[^/]+)?$/.test(
+                  u.pathname,
+                )
+              : security
+                ? u.pathname === '/security'
+                : u.pathname === '/fixtures/shop')
     );
   } catch {
     return false;
@@ -101,7 +108,11 @@ for (const c of plan.cases || [])
       !operations.has(a.operation) ||
       (['navigate', 'open_tab'].includes(a.operation) && !demoURL(a.value)) ||
       (a.operation === 'http_check' &&
-        !allowedDemoAPI(a.http?.url, origin, workspace ? 'workspace' : 'security')) ||
+        !allowedDemoAPI(
+          a.http?.url,
+          origin,
+          parcelWorkspace ? 'parcel' : workspace ? 'workspace' : 'security',
+        )) ||
       (a.operation === 'security_audit' && !security)
     )
       throw new Error('Live replay is limited to known routes in the owned local sandbox.');
@@ -161,6 +172,7 @@ try {
     env: {
       ...process.env,
       VOICEQA_DATA_DIR: data,
+      VOICEQA_ACCEPTANCE_QWEN_LOW_TOKENS: paidQwen ? '1' : '',
       OPENAI_API_KEY: '',
       OPENROUTER_API_KEY: '',
       VOICEQA_TTS_API_KEY: '',
@@ -268,7 +280,11 @@ try {
             tasks.delete(id);
             fail(new Error('RPC timed out'));
           },
-          ['plan.propose', 'agent.query', 'automation.propose'].includes(method) ? 480000 : 130000,
+          method === 'plan.propose' && payload.discover === true
+            ? 840000
+            : ['plan.propose', 'agent.query', 'automation.propose'].includes(method)
+              ? 480000
+              : 130000,
         );
         tasks.set(id, { done, fail, timer });
         port.postMessage({ type: 'request', id, method, payload });
@@ -284,6 +300,19 @@ try {
     url,
   );
   await rpc('bind', { tabId });
+  let sharedGuide;
+  if (parcelWorkspace && process.argv.includes('--share-guide')) {
+    const guide = await context.newPage();
+    await guide.goto(origin + '/guide');
+    const guideTab = await worker.evaluate(
+      async (url) => (await chrome.tabs.query({})).find((t) => t.url === url)?.id,
+      origin + '/guide',
+    );
+    await rpc('pages.share', { tabId: guideTab, alias: 'guide' });
+    sharedGuide = { url: guide.url(), text: await guide.locator('body').innerText() };
+    await writeFile(join(work, 'shared-guide.json'), JSON.stringify(sharedGuide, null, 2));
+    await target.bringToFront();
+  }
   if (debugRecord) {
     const before = await target.locator('body').innerText();
     await panel.getByRole('button', { name: 'History', exact: true }).click();
@@ -385,6 +414,18 @@ try {
         period: 30,
       });
     }
+    if (parcelWorkspace) {
+      for (const [id, username, password, label] of [
+        ['owner', 'alice@parcel.test', 'synthetic-owner-password', 'North member test account'],
+        [
+          'manager',
+          'manager@parcel.test',
+          'synthetic-manager-password',
+          'North manager test account',
+        ],
+      ])
+        await rpc('auth.save', { id, origin, username, password, label });
+    }
     let runId;
     if (automationUI) {
       await panel
@@ -470,6 +511,7 @@ try {
       const started = Date.now();
       plan = await rpc(automationLive ? 'automation.propose' : 'plan.propose', {
         request: plan.request,
+        conversation: plan.conversation || [],
         maxActions: 40,
         allowConsequential: false,
         discover: process.argv.includes('--discover'),
@@ -492,6 +534,44 @@ try {
       if (plan.clarification) throw new Error(plan.clarification);
     }
     if (!runId) {
+      if (parcelWorkspace) {
+        const investigationStore = new DatabaseSync(join(data, 'voiceqa.db'), { readOnly: true });
+        let discoveries;
+        try {
+          discoveries = investigationStore
+            .prepare('SELECT body FROM records WHERE kind=?')
+            .all('investigation')
+            .map((row) => JSON.parse(row.body));
+        } finally {
+          investigationStore.close();
+        }
+        await writeFile(join(work, 'investigations.json'), JSON.stringify(discoveries, null, 2));
+        if (
+          !sharedGuide &&
+          !discoveries.some((d) =>
+            d.evidence.some(
+              (e) => e.tool === 'read_link' && !e.error && e.result?.url === origin + '/guide',
+            ),
+          )
+        )
+          throw new Error(
+            'Actual agent did not read the public API guide before security planning.',
+          );
+        if (
+          JSON.stringify([plan, discoveries]).includes('synthetic-owner-password') ||
+          JSON.stringify([plan, discoveries]).includes('synthetic-manager-password')
+        )
+          throw new Error(
+            'Synthetic credential values leaked into model-visible planning evidence.',
+          );
+        for (const step of plan.cases.flatMap((c) => c.steps)) {
+          if (
+            (['navigate', 'open_tab'].includes(step.operation) && !demoURL(step.value)) ||
+            (step.operation === 'http_check' && !allowedDemoAPI(step.http?.url, origin, 'parcel'))
+          )
+            throw new Error('Actual AI plan left the owned ParcelGate route allowlist.');
+        }
+      }
       await rpc('plan.confirm', { id: plan.id, version: plan.version });
       const started = await rpc('run.start', {
         planId: plan.id,
@@ -531,6 +611,98 @@ try {
     const assertions = run.steps.filter((s) =>
       ['assert', 'http_check'].includes(s.action.operation),
     );
+    if (parcelWorkspace) {
+      const state = await target.evaluate(() => fetch('/api/testing-state').then((r) => r.json()));
+      await writeFile(join(work, 'security-state.json'), JSON.stringify(state, null, 2));
+      const http = assertions.filter((s) => s.action.operation === 'http_check');
+      const checked = (method, path, status) =>
+        http.some(
+          (s) =>
+            s.action.http.method === method &&
+            new URL(s.action.http.url).pathname === path &&
+            s.action.http.expectedStatus === status,
+        );
+      if (
+        !checked('GET', '/api/orders/OA1001', 200) ||
+        !checked('GET', '/api/orders/OB2002', 403) ||
+        !checked('POST', '/api/orders/OA1001/approve', 403) ||
+        !checked('POST', '/api/orders/OA1001/approve', 200) ||
+        !http.some(
+          (s) =>
+            s.action.http.method === 'POST' &&
+            /^\/api\/orders(?:\/OA1001\/approve)?$/.test(new URL(s.action.http.url).pathname) &&
+            !s.action.http.csrfSource &&
+            s.action.http.expectedStatus === 403,
+        )
+      )
+        throw new Error(
+          'Actual AI did not exercise ownership, server roles and missing-CSRF controls.',
+        );
+      const creates = http.filter(
+        (s) =>
+          s.action.http.method === 'POST' &&
+          new URL(s.action.http.url).pathname === '/api/orders' &&
+          s.action.http.expectedStatus === 201,
+      );
+      if (
+        !creates.some((s) => {
+          const body = JSON.parse(s.action.http.body);
+          if (!(
+            (body.unitPrice !== undefined && body.unitPrice !== 35) ||
+            (body.total !== undefined && body.total !== body.quantity * 35)
+          ))
+            return false;
+          const createdId = s.action.http.jsonPointer === '/id' ? s.result?.value : undefined;
+          return http.some(
+            (price) =>
+              price.action.http.jsonPointer === '/total' &&
+              price.action.http.expectedType === 'number' &&
+              Number(price.action.http.expectedValue) === body.quantity * 35 &&
+              (price === s ||
+                (createdId &&
+                  price.action.http.method === 'GET' &&
+                  new URL(price.action.http.url).pathname === '/api/orders/' + createdId)),
+          );
+        })
+      )
+        throw new Error('Actual AI omitted independently derived authoritative-price checks.');
+      const keys = creates.map((s) => s.action.http.idempotencyKey);
+      if (
+        new Set(keys).size === keys.length ||
+        state.creations !== new Set(keys).size ||
+        !state.events.some(
+          (e) =>
+            e.actor === 'alice' &&
+            e.path.endsWith('/approve') &&
+            e.status === 403 &&
+            e.csrfAccepted === true,
+        ) ||
+        !state.events.some(
+          (e) =>
+            e.actor === 'manager' &&
+            e.path.endsWith('/approve') &&
+            e.status === 200 &&
+            e.csrfAccepted === true,
+        )
+      )
+        throw new Error(
+          'Actual server evidence did not establish duplicate prevention and legitimate role controls.',
+        );
+      if (
+        process.argv.includes('--expect-ownership-defect') &&
+        !http.some(
+          (s) =>
+            s.status === 'failed' &&
+            new URL(s.action.http.url).pathname === '/api/orders/OB2002' &&
+            s.action.http.expectedStatus === 403 &&
+            s.result?.status === 200,
+        )
+      )
+        throw new Error('Actual AI did not detect the deliberately broken ownership boundary.');
+      console.log(
+        `Actual server security controls verified: ${http.length} HTTP checks, ${state.creations} unique created orders, genuine member/manager sessions.`,
+      );
+    }
     if (multiWorkspace) {
       const finalState = await target.evaluate(() => fetch('/api/state').then((r) => r.json()));
       await writeFile(join(work, 'workspace-state.json'), JSON.stringify(finalState, null, 2));
@@ -547,17 +719,20 @@ try {
         );
       if (expectedStale) {
         const recordedRegression = assertions.some((s) => {
-          if (s.status !== 'failed' || s.page !== 'main' || !s.result?.historical)
-            return false;
+          if (s.status !== 'failed' || s.page !== 'main' || !s.result?.historical) return false;
           const prior = run.observations.find((o) => o.id === s.result.priorObservationId);
           const bad = run.observations.find((o) => o.id === s.result.observationId);
-          const text = (o) => o?.evidence?.results?.find((x) => x.target === '#project-summary')?.text;
+          const text = (o) =>
+            o?.evidence?.results?.find((x) => x.target === '#project-summary')?.text;
           return (
-            prior?.evidence?.page === 'main' && bad?.evidence?.page === 'main' &&
-            prior.evidence.url === origin + '/' && bad.evidence.url === origin + '/' &&
+            prior?.evidence?.page === 'main' &&
+            bad?.evidence?.page === 'main' &&
+            prior.evidence.url === origin + '/' &&
+            bad.evidence.url === origin + '/' &&
             /Aurora.*Pro.*3 seats.*84/.test(text(prior) || '') &&
             text(bad) === 'Project details unavailable after workspace update' &&
-            s.result.actual === text(bad) && /Aurora|84/.test(s.action.assertion?.expected || '')
+            s.result.actual === text(bad) &&
+            /Aurora|84/.test(s.action.assertion?.expected || '')
           );
         });
         if (
@@ -733,6 +908,27 @@ try {
     )
       throw new Error('Paced workflow did not pass with the required gap.');
   }
+} catch (error) {
+  const diagnostic = new DatabaseSync(join(data, 'voiceqa.db'), { readOnly: true });
+  try {
+    const investigations = diagnostic
+      .prepare('SELECT body FROM records WHERE kind=?')
+      .all('investigation')
+      .map((row) => JSON.parse(row.body));
+    const planning = diagnostic
+      .prepare('SELECT body FROM records WHERE kind=?')
+      .all('planning_diagnostic')
+      .map((row) => JSON.parse(row.body));
+    await writeFile(join(work, 'investigations.json'), JSON.stringify(investigations, null, 2));
+    await writeFile(join(work, 'planning-diagnostics.json'), JSON.stringify(planning, null, 2));
+    await writeFile(
+      join(work, 'failure.json'),
+      JSON.stringify({ error: String(error.message).slice(0, 1600) }, null, 2),
+    );
+  } finally {
+    diagnostic.close();
+  }
+  throw error;
 } finally {
   try {
     await context?.close();

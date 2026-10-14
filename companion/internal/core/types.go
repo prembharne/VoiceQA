@@ -260,7 +260,7 @@ func ValidateScopedAction(p Plan, scope *Scope, a Action) error {
 		return errors.New("security audit requires logical security mode")
 	}
 	if a.Operation == "capture_value" && !ValidVariable(a.Value) {
-		return errors.New("capture requires a public variable name")
+		return errors.New("capture_value requires a bare public alias matching ^[a-z][a-z0-9_-]{0,31}$, never a CSRF/auth token. For CSRF remove the capture step and put csrfSource=meta:OBSERVED_NAME with csrfHeader=DOCUMENTED_HEADER directly on the HTTP write")
 	}
 	if a.Operation == "http_check" {
 		mode := p.Mode

@@ -1,6 +1,7 @@
 package app
 
 import (
+	"net/url"
 	"strings"
 	"voiceqa/companion/internal/core"
 )
@@ -37,6 +38,23 @@ func normalizeDraftURLs(plan *core.Plan) {
 			}
 			if a.Operation == "navigate" {
 				a.Value = expand(a.Value)
+				// HTTP references after navigation belong to that actual destination.
+				// An unapproved destination remains invalid, never a source for repair.
+				if destination, err := url.Parse(a.Value); err == nil && destination.Host != "" {
+					next := destination.Scheme + "://" + destination.Host
+					known := next == plan.Origin
+					for _, page := range plan.Pages {
+						known = known || next == page.Origin
+					}
+					if known && core.AllowedURL(a.Value, next) {
+						origin = next
+					} else {
+						origin = ""
+					}
+				}
+			}
+			if a.Operation == "http_check" && a.HTTP != nil {
+				a.HTTP.URL = expand(a.HTTP.URL)
 			}
 			// Once tab context changes, relative paths are ambiguous. Keep them
 			// for validation/repair instead of assigning the wrong origin.

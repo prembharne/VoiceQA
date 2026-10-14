@@ -79,6 +79,9 @@ test('disconnected mutating requests are rejected and never replayed', async () 
 test('planning deadlines outlive the companion while ordinary methods keep their limits', () => {
   assert.ok(nativeTimeout('plan.propose') > 420000);
   assert.ok(panelTimeout('plan.propose') > nativeTimeout('plan.propose'));
+  assert.ok(nativeTimeout('plan.propose',{discover:true}) > 780000);
+  assert.ok(panelTimeout('plan.propose',{discover:true}) > nativeTimeout('plan.propose',{discover:true}));
+  assert.equal(nativeTimeout('agent.query',{discover:true}),nativeTimeout('agent.query'));
   for (const method of ['hello', 'audio.complete', 'run.start', 'speech.synthesize']) {
     assert.equal(nativeTimeout(method), 120000);
     assert.equal(panelTimeout(method), 150000);

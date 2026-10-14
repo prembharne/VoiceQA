@@ -23,6 +23,9 @@ type PlanProgress struct {
 // Planning has its own bounded deadline. Speech and target grounding retain the
 // shorter default HTTP timeout. Only a completed response can become a plan.
 func (c *Client) PlanStructured(ctx context.Context, key, model, instructions string, input, schema any, progress func(PlanProgress)) (json.RawMessage, map[string]int, error) {
+	if c.acceptanceCalls != nil && (!c.Router || model != "qwen/qwen3.7-flash") {
+		return nil, nil, errors.New("Low-token acceptance permits only OpenRouter Qwen 3.7 Flash")
+	}
 	ctx, cancel := context.WithTimeout(ctx, PlanningTimeout)
 	defer cancel()
 	if c.Router {

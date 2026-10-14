@@ -87,6 +87,29 @@
     const s = el.ownerDocument.defaultView.getComputedStyle(el);
     return r.width > 0 && r.height > 0 && s.visibility !== 'hidden' && s.display !== 'none';
   }
+  function readingText() {
+    const chunks = [];
+    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+    let node,
+      visited = 0,
+      length = 0;
+    while ((node = walker.nextNode()) && visited++ < 3000 && length < 9000) {
+      const parent = node.parentElement;
+      if (
+        !parent ||
+        parent.closest('script,style,template,noscript,[hidden],[aria-hidden=true]') ||
+        privateElement(parent) ||
+        !visible(parent)
+      )
+        continue;
+      const text = normalize(node.nodeValue).slice(0, 9000 - length);
+      if (text) {
+        chunks.push(text);
+        length += text.length + 1;
+      }
+    }
+    return chunks.join('\n');
+  }
   function role(el) {
     if (el.getAttribute('role')) return el.getAttribute('role');
     return (
@@ -279,11 +302,7 @@
       }))
       .filter((x) => x.target)
       .slice(0, 160);
-    const text = [...document.querySelectorAll('h1,h2,h3,p,[role=status],[role=alert]')]
-      .filter((el) => !privateElement(el))
-      .map((el) => publicText(el))
-      .join('\n')
-      .slice(0, 3000);
+    const text = readingText();
     let unsupportedFrames = 0;
     for (const f of document.querySelectorAll('iframe')) {
       try {
@@ -314,6 +333,35 @@
           visible: visible(el),
         })),
       text,
+      // Reference names only; HttpOnly session cookies travel with fetch and
+      // need no Authorization header. Never expose storage/cookie values.
+      authSources: (() => {
+        const refs = [];
+        const allowed = (key) =>
+          key.length <= 100 &&
+          /auth|token|session|jwt/i.test(key) &&
+          !/api.?key|openai|openrouter|nvidia/i.test(key);
+        for (const prefix of ['local', 'session']) {
+          try {
+            const storage = prefix === 'local' ? localStorage : sessionStorage;
+            for (let i = 0; i < storage.length && refs.length < 20; i++) {
+              const key = storage.key(i);
+              if (allowed(key)) refs.push(`${prefix}:${key}`);
+            }
+          } catch {
+            /* Storage may be disabled for this document. */
+          }
+        }
+        try {
+          for (const cookie of document.cookie.split(';')) {
+            const key = cookie.split('=')[0].trim();
+            if (refs.length < 20 && allowed(key)) refs.push(`cookie:${key}`);
+          }
+        } catch {
+          /* Cookie access may be disabled. */
+        }
+        return refs;
+      })(),
       csrfSources: [...document.querySelectorAll('meta[name],input[name]')]
         .filter((el) => /csrf|xsrf|^__RequestVerificationToken$/i.test(el.name))
         .slice(0, 10)

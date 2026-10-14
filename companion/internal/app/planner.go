@@ -114,7 +114,7 @@ func (a *App) draftPlanWithProgress(ctx context.Context, request, url, origin st
 	if err := checkRequestedProfileWithTOTP(request, origin, allowedProfiles, false, pages...); err != nil {
 		return core.Plan{}, err
 	}
-	input["navigationExample"] = map[string]any{"operation": "navigate", "target": "", "value": url, "label": "Open the shared starting page", "timeoutMs": 0, "assertion": nil, "http": nil}
+	input["navigationExample"] = map[string]any{"operation": "navigate", "value": url, "label": "Open the shared starting page", "timeoutMs": 0}
 	input["planningContext"] = "Use observed controls, link destinations, input constraints and shared-page evidence. No site-specific fixture contracts are supplied. Navigation does not guarantee a reset; preserve existing user data and state unless the request explicitly authorizes a reset."
 	totalUsage := map[string]int{}
 	for attempt := 0; attempt < 2; attempt++ {
@@ -156,7 +156,10 @@ func (a *App) draftPlanWithProgress(ctx context.Context, request, url, origin st
 		if len(unique) < len(plan.Cases) {
 			plan.Summary += " Identical duplicate cases were consolidated."
 		}
-		plan.Cases = unique
+		plan.Cases = mergePlanPreparation(unique)
+		if len(plan.Cases) < len(unique) {
+			plan.Summary += " Preparation fragments were combined with their following checked workflow; action order is unchanged."
+		}
 		plan.Mode = config.Mode
 		plan.APIWritesAllowed = config.APIWritesAllowed
 		plan.SecurityAuthorized = config.SecurityAuthorized
@@ -211,12 +214,45 @@ func (a *App) draftPlanWithProgress(ctx context.Context, request, url, origin st
 				plan.Cases = []core.Case{}
 			} else {
 				e = core.ValidatePlan(plan)
+				if e != nil {
+					e = errors.Join(e, draftActionFeedback(plan))
+				}
+				e = errors.Join(e, validateDraftAuthSources(plan, obs))
 				e = errors.Join(e, validateProfileReferences(plan, allowedProfiles))
 
 			}
 		}
 		if a.DraftDiagnostic != nil {
 			a.DraftDiagnostic(attempt+1, plan, e)
+		}
+		if e != nil {
+			cases := []map[string]any{}
+			for _, candidate := range plan.Cases {
+				actions := []map[string]any{}
+				for _, action := range candidate.Steps {
+					row := map[string]any{"operation": action.Operation, "target": recordedText(action.Target, 300), "label": recordedText(action.Label, 300)}
+					if action.Operation == "navigate" || action.Operation == "open_tab" {
+						row["destination"] = publicAgentURL(action.Value)
+					}
+					if action.Assertion != nil {
+						row["assertionKind"] = action.Assertion.Kind
+					}
+					if action.HTTP != nil {
+						row["httpMethod"] = action.HTTP.Method
+						row["httpURL"] = publicAgentURL(action.HTTP.URL)
+						row["expectedStatus"] = action.HTTP.ExpectedStatus
+					}
+					actions = append(actions, row)
+					if len(actions) == 120 {
+						break
+					}
+				}
+				cases = append(cases, map[string]any{"name": recordedText(candidate.Name, 100), "page": candidate.Page, "actions": actions})
+				if len(cases) == 12 {
+					break
+				}
+			}
+			_ = a.Store.Put("planning_diagnostic", core.ID(), map[string]any{"attempt": attempt + 1, "model": s.Model, "error": recordedText(e.Error(), 1200), "cases": cases})
 		}
 		if e == nil {
 			if err := ctx.Err(); err != nil {
@@ -231,6 +267,38 @@ func (a *App) draftPlanWithProgress(ctx context.Context, request, url, origin st
 		}
 	}
 	return core.Plan{}, fmt.Errorf("AI plan attempts exhausted")
+}
+
+// Return several independent pre-dispatch errors in the one allowed repair,
+// rather than spending another provider call to reveal each malformed field.
+func draftActionFeedback(plan core.Plan) error {
+	issues := []error{}
+	seen := map[string]bool{}
+	for ci, c := range plan.Cases {
+		scope, err := core.NewScope(plan, c.Page)
+		if err != nil {
+			continue
+		}
+		for si, action := range c.Steps {
+			candidate := scope.Clone()
+			if err := core.ValidateScopedAction(plan, candidate, action); err != nil {
+				if !seen[err.Error()] {
+					seen[err.Error()] = true
+					issues = append(issues, fmt.Errorf("case %d step %d: %w", ci+1, si+1, err))
+					if len(issues) == 8 {
+						return errors.Join(issues...)
+					}
+				}
+				// Invalid tab/navigation changes make subsequent scope ambiguous.
+				if action.Operation == "navigate" || strings.HasSuffix(action.Operation, "_tab") {
+					break
+				}
+			} else {
+				scope = candidate
+			}
+		}
+	}
+	return errors.Join(issues...)
 }
 
 func validateProfileReferences(plan core.Plan, profiles []AuthProfile) error {

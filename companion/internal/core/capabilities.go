@@ -2,8 +2,10 @@ package core
 
 import (
 	"errors"
+	"fmt"
 	"net/url"
 	"regexp"
+	"sort"
 	"strings"
 )
 
@@ -79,7 +81,14 @@ func (s *Scope) Advance(a Action) error {
 		}
 		origin := u.Scheme + "://" + u.Host
 		if !s.Approved[origin] || !AllowedURL(a.Value, origin) {
-			return errors.New("navigation outside explicitly approved origins")
+			approved := []string{}
+			for candidate, allowed := range s.Approved {
+				if allowed {
+					approved = append(approved, candidate)
+				}
+			}
+			sort.Strings(approved)
+			return fmt.Errorf("navigation outside explicitly approved origins: received origin %q; use exactly an approved origin from %v. Copy the trusted URL/origin verbatim; do not add or guess hosts", origin, approved)
 		}
 		s.Origins[s.Current] = origin
 	case "open_tab":

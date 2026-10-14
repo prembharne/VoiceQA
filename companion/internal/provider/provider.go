@@ -10,21 +10,29 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/textproto"
+	"os"
 	"strings"
+	"sync/atomic"
 	"time"
 	"voiceqa/companion/internal/core"
 )
 
 type Client struct {
-	HTTP    *http.Client
-	BaseURL string
-	Router  bool
-	NIM     bool
-	models  *modelCache
+	HTTP            *http.Client
+	BaseURL         string
+	Router          bool
+	NIM             bool
+	models          *modelCache
+	acceptanceCalls *atomic.Int32
 }
 
 func New() *Client {
-	return &Client{HTTP: &http.Client{Timeout: 90 * time.Second}, BaseURL: "https://api.openai.com/v1", models: &modelCache{}}
+	c := &Client{HTTP: &http.Client{Timeout: 90 * time.Second}, BaseURL: "https://api.openai.com/v1", models: &modelCache{}}
+	// Explicit isolated acceptance only; normal user planning stays uncapped.
+	if os.Getenv("VOICEQA_ACCEPTANCE_QWEN_LOW_TOKENS") == "1" {
+		c.acceptanceCalls = &atomic.Int32{}
+	}
+	return c
 }
 
 // ForProvider returns a copy so speech always keeps the OpenAI endpoint.
@@ -89,6 +97,9 @@ func (c *Client) Structured(ctx context.Context, key, model, instructions string
 
 // StructuredWithBudget keeps generation bounded while allowing complete multi-case plans.
 func (c *Client) StructuredWithBudget(ctx context.Context, key, model, instructions string, input any, schema any, budget int) (json.RawMessage, map[string]int, error) {
+	if c.acceptanceCalls != nil && (!c.Router || model != "qwen/qwen3.7-flash") {
+		return nil, nil, errors.New("Low-token acceptance permits only OpenRouter Qwen 3.7 Flash")
+	}
 	if budget < 512 || budget > 16000 {
 		return nil, nil, errors.New("structured output budget must be 512–16000 tokens")
 	}
@@ -211,6 +222,9 @@ func PlanSchema(pages ...core.Page) map[string]any {
 			aliases = append(aliases, p.Alias)
 		}
 	}
+	// Keep full-plan arrays flat. Live tools use their operation-specific
+	// contract separately; nested operation unions caused real QA drafts to
+	// mix action types even when discovery supplied the correct site rules.
 	action := ActionSchema()
 	test := Object(map[string]any{"page": map[string]any{"type": "string", "enum": aliases}, "name": String(), "goal": String(), "source": String(), "steps": map[string]any{"type": "array", "items": action}})
 	ready := Object(map[string]any{"type": map[string]any{"type": "string", "enum": []string{"plan"}}, "cases": map[string]any{"type": "array", "items": test}})
@@ -230,6 +244,9 @@ func ActionSchema() map[string]any {
 		"tolerance": map[string]any{"type": "number", "description": "Nonnegative numeric comparison tolerance. Use 0 for text, count and url."},
 	})
 	httpCheck := Object(map[string]any{"authSource": String(), "authPointer": String(), "csrfSource": String(), "csrfHeader": String(), "csrfBodyField": String(), "expectedType": map[string]any{"type": "string", "enum": []string{"", "string", "number", "boolean", "null"}}, "tolerance": map[string]any{"type": "number"}, "method": map[string]any{"type": "string", "enum": []string{"GET", "HEAD", "POST", "PUT", "PATCH", "DELETE"}}, "url": String(), "body": String(), "expectedStatus": map[string]any{"type": "integer"}, "jsonPointer": String(), "expectedValue": String(), "saveAs": String(), "idempotencyKey": String()})
+	httpCheck["properties"].(map[string]any)["saveAs"] = map[string]any{"type": "string", "pattern": "^$|^[a-z][a-z0-9_-]{0,31}$", "description": "Bare public capture alias, e.g. created-id, with jsonPointer=/id. Omit unless needed later. Never capture CSRF/auth tokens or use camelCase aliases."}
+	httpCheck["properties"].(map[string]any)["csrfSource"] = map[string]any{"type": "string", "description": "Private browser reference meta:OBSERVED_NAME, input:OBSERVED_NAME or cookie:OBSERVED_NAME. Set directly on a write with csrfHeader or csrfBodyField. No preceding HTTP capture of a token."}
+	httpCheck["properties"].(map[string]any)["authSource"] = map[string]any{"type": "string", "description": "Optional additional bearer reference, only from observation.authSources or explicit public documentation. Default omit: HTTP already uses browser session cookies. Never invent local:session or session:auth. HttpOnly cookies need no bearer reference."}
 	return Object(map[string]any{"http": map[string]any{"anyOf": []any{httpCheck, map[string]any{"type": "null"}}}, "operation": map[string]any{"type": "string", "enum": []string{"navigate", "click", "fill", "select", "scroll", "key", "assert", "open_tab", "switch_tab", "close_tab", "wait_for", "fill_secret", "fill_totp", "human_checkpoint", "capture_value", "http_check", "security_audit"}}, "target": String(), "value": map[string]any{"type": "string", "description": "capture_value: a bare public variable alias matching ^[a-z][a-z0-9_-]{0,31}$, for example order-id; never a selector, dot path, ${placeholder}, secret name or actual captured value. Other operations use the requested action value."}, "label": String(), "timeoutMs": map[string]any{"type": "integer", "description": "0 for default, or 500–30000 milliseconds for a condition wait."}, "assertion": map[string]any{"anyOf": []any{booleanCheck, valueCheck, map[string]any{"type": "null"}}}})
 }
 
@@ -252,6 +269,7 @@ PLANNING METHOD:
 Return only JSON: {"summary":"what is covered and any genuine blocker", "result":{"type":"plan","cases":[{"page":"main","name":"human-readable case","goal":"expected behavior","source":"agent-proposed","steps":[...]}]}}. If an essential requirement is absent, return result={"type":"clarification","question":"one specific question"}. Do not ask permission to run. The application handles review/confirmation. Propose 1–10 independent cases within actionBudget/apiCheckBudget; these are ceilings, not targets. Do not defer requested workflows whose contract is provided. Do not duplicate cases for viewports or data rows.
 
 Every case MUST begin with navigate to its known start/reset URL. Steps are an ordered ARRAY: setup, interact, wait, assert. Do not put assertions first. A navigate action MUST put the URL in value, with target="". input.navigationExample provides a complete navigation action using this application's actual address. Use the actual observed starting URL for each case; never output placeholder origins.
+Prefer a small number of coherent sequential cases over repeating identical login/setup for each check. Wait for the authenticated application state after signing in before protected requests. If the current session is already the required role, do not sign in unnecessarily. Apply documented response statuses literally, including idempotent replay statuses; never substitute conventional assumptions.
 Every action has operation,target,value,label,timeoutMs,assertion,http. Unused target/value are empty strings; unused assertion/http are null; ordinary timeoutMs=0. Give every action a meaningful label.
 Operations:
 - navigate: value=known absolute URL, target="".
@@ -265,7 +283,8 @@ Targets: use observed selectors or testid:ID, role:ROLE|EXACT ACCESSIBLE NAME, l
 - open_tab: target=unique alias, value=known URL on an approved origin; activates it. switch_tab: target=existing alias. close_tab: target=run-created alias only; returns to main. Never close shared/user tabs. Each case starts on its declared page alias, main by default. At most five pages.
 - fill_secret: target=input, value=ACTUAL_PROFILE_ID:username or ACTUAL_PROFILE_ID:password. fill_totp: target=OTP input, value=ACTUAL_PROFILE_ID. ACTUAL_PROFILE_ID must exactly equal an id in authProfiles; do not emit the literal placeholder profile. Use only supplied origin-bound authProfiles metadata; never include secret values. Missing required credentials are a blocker. SMS/passkeys/device prompts/real CAPTCHA use human_checkpoint with value=mfa or captcha and label=operator instructions, then an independent application-state assert. Do not inject challenge tokens or use solver services. Owned synthetic CAPTCHA is still an operator checkpoint.
 - http_check: http={method,url,body,expectedStatus,jsonPointer,expectedValue,expectedType,tolerance,saveAs,idempotencyKey,authSource,authPointer,csrfSource,csrfHeader,csrfBodyField}; unused strings empty, tolerance=0. Body is JSON string. jsonPointer is RFC6901. saveAs is a public alias. Routes/business rules must be supplied. GET/HEAD are allowed in QA mode. Mutations require apiWritesAllowed or explicitly authorized security mode. HTTP uses the active approved-origin session; never retry mutations automatically. Named browser references only: authSource=local:KEY/session:KEY/cookie:NAME, csrfSource=meta:NAME/input:NAME/cookie:NAME. Never expose token values or put credentials in HTTP bodies. Use supported CSRF headers/body fields.
-- security_audit: only explicitly authorized security mode. Test known account ownership, server roles, authoritative prices, CSRF and idempotency with legitimate positive controls on the authorized sandbox. Never brute force, scan/exfiltrate or run exploit code. UI visibility is not server authorization evidence; report uncertainty instead of blanket security claims.
+HTTP examples are tool syntax, not website rules: a public ID capture uses jsonPointer="/id", expectedType="string", saveAs="created-id"; a later equality check uses expectedValue="${created-id}". A numeric total check uses jsonPointer="/total", expectedType="number", expectedValue=an independently derived numeric string. A private CSRF reference is supplied directly on each write as csrfSource="meta:OBSERVED_NAME", csrfHeader="DOCUMENTED_HEADER"; never add a GET to capture CSRF, never use saveAs for secrets. Status-only checks omit captures and value comparisons.
+- security_audit: only explicitly authorized security mode; reads observed response-header and cookie-flag configuration indicators. It does not execute ownership, role, pricing, CSRF or duplicate-submission tests. Use http_check and secure account interactions to test those rules, including legitimate positive controls. A header scan cannot establish logical security. Never brute force, scan/exfiltrate or run exploit code. UI visibility is not server authorization evidence; report uncertainty instead of blanket security claims.
 
 If validationError and previousDraft are provided, return the corrected FULL plan, preserving requested coverage and exact approved origins. Do not keep an invalid action unchanged. Return JSON only.`
 
