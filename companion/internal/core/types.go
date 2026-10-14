@@ -104,6 +104,7 @@ type Step struct {
 	CompletedAt string         `json:"completedAt,omitempty"`
 }
 type Run struct {
+	DecisionErrors   []map[string]any  `json:"decisionErrors,omitempty"`
 	Observations     []map[string]any  `json:"observations,omitempty"`
 	EvidenceOmitted  bool              `json:"evidenceOmitted,omitempty"`
 	AgentPhase       string            `json:"agentPhase,omitempty"`

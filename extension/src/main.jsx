@@ -853,6 +853,12 @@ function App() {
                   <span className="step-status">{pretty(step.status)}</span>
                 </summary>
                 <div className="step-body">
+                  {step.result?.historical && (
+                    <p className="small">
+                      Observed earlier in this run, after action {step.result.observedAfterActions}.
+                      Reopening the page did not clear this recorded issue.
+                    </p>
+                  )}
                   {step.error && <p className="failure-text">{step.error}</p>}
                   {step.result?.expected !== undefined && (
                     <div className="check-comparison">

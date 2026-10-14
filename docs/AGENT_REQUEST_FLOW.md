@@ -1,6 +1,6 @@
 # Website-independent browser agent
 
-VoiceQA 0.10.0 has separate QA/debugging and direct live-tool browser-automation workspaces, plus evidence-backed Q&A in either workspace. Automation does not ask AI for an initial plan/checklist. RelayDesk contracts, reset URLs, validation rules and workflow splitting are not injected into normal AI requests. Explicit deterministic fixture suites remain separate developer tools.
+VoiceQA 0.11.0 has separate QA/debugging and direct live-tool browser-automation workspaces, plus evidence-backed Q&A in either workspace. Automation does not ask AI for an initial plan/checklist. RelayDesk contracts, reset URLs, validation rules and workflow splitting are not injected into normal AI requests. Explicit deterministic fixture suites remain separate developer tools.
 
 The request method selects the system contract and response schema:
 
@@ -63,6 +63,10 @@ Simplified OpenRouter/NIM payload:
 ```
 
 The API key is an authorization header handled by the local companion. Passwords, TOTP seeds and private token values are not supplied as planning context. Previous chat is bounded reference data and cannot add system instructions or permissions.
+
+Live action requests additionally include `navigationChoices`: public links actually observed on an approved origin, with a suggested new tab alias. These bind tab arguments to current evidence; they are not a generated itinerary. Completion replies contain a `page` alias per assertion. The runner validates aliases, budgets necessary switches and reads each page again before checking it. Invalid pre-dispatch decisions retain bounded sanitized diagnostics without filled values or raw HTTP bodies.
+
+Live action schemas are specific to each operation and completion accepts only assertion actions. The late review additionally receives locally compared temporal witnesses: a correct text result later became incorrect on the same document/target. It judges unwanted regressions against the request, while the controller validates witness IDs and records historical evidence explicitly. Neither this review nor its witnesses generate an initial action plan.
 
 ## Interface and voice
 

@@ -49,6 +49,7 @@ func (a *App) runList() (any, error) {
 			r.Steps = nil
 			r.Values = nil
 			r.Observations = nil
+			r.DecisionErrors = nil
 			r.SecurityFindings = nil
 			r.Error = trim(r.Error, 200)
 			runs = append(runs, r)
@@ -81,7 +82,7 @@ func wireRun(r core.Run) core.Run {
 			continue
 		}
 		result := map[string]any{"detailsOmitted": "Large result; export HTML/JSON for complete evidence."}
-		for _, key := range []string{"actual", "expected", "kind", "passed", "capture", "visual", "seriousCount", "rulePasses"} {
+		for _, key := range []string{"actual", "expected", "kind", "passed", "capture", "visual", "seriousCount", "rulePasses", "historical", "observationId", "priorObservationId", "observedAfterActions"} {
 			if value, ok := old[key]; ok {
 				result[key] = value
 			}

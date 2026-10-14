@@ -88,8 +88,17 @@ func (s *Scope) Advance(a Action) error {
 			return errors.New("invalid new-tab URL")
 		}
 		origin := u.Scheme + "://" + u.Host
-		if !AliasPattern.MatchString(a.Target) || s.Origins[a.Target] != "" || len(s.Origins) >= 5 || !s.Approved[origin] || !AllowedURL(a.Value, origin) {
-			return errors.New("new tab needs a unique alias and an explicitly approved origin, within five pages")
+		if !AliasPattern.MatchString(a.Target) {
+			return errors.New("open_tab.target must be a new lowercase page alias such as review, not a selector, label or URL")
+		}
+		if s.Origins[a.Target] != "" {
+			return errors.New("open_tab.target already exists; use switch_tab for that alias or choose a new alias")
+		}
+		if len(s.Origins) >= 5 {
+			return errors.New("new tab exceeds the five-page scope limit")
+		}
+		if !s.Approved[origin] || !AllowedURL(a.Value, origin) {
+			return errors.New("open_tab.value must be an absolute URL on an explicitly approved origin")
 		}
 		s.Origins[a.Target] = origin
 		s.Created[a.Target] = true

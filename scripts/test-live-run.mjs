@@ -27,7 +27,13 @@ if (
   throw new Error('Live extension planning is restricted to the selected free OpenRouter model.');
 const security = plan.mode === 'security';
 const workspace = plan.origin === 'http://127.0.0.1:4176';
-const generic = ['http://127.0.0.1:4177', 'http://127.0.0.1:4178'].includes(plan.origin);
+const multiWorkspace = plan.origin === 'http://127.0.0.1:4179';
+const expectedStale = multiWorkspace && process.argv.includes('--expect-stale-original');
+const generic = [
+  'http://127.0.0.1:4177',
+  'http://127.0.0.1:4178',
+  'http://127.0.0.1:4179',
+].includes(plan.origin);
 const origin = generic
   ? plan.origin
   : workspace
@@ -36,7 +42,7 @@ const origin = generic
       ? 'http://127.0.0.1:4175'
       : 'http://127.0.0.1:4173';
 const url = plan.url;
-if (plan.origin !== origin || plan.clarification || !plan.cases?.length)
+if (plan.origin !== origin || plan.clarification || (!automationLive && !plan.cases?.length))
   throw new Error('This check requires a runnable local-demo plan.');
 // Replay only the owned local sandbox. These checks constrain destinations and
 // operations, while allowing the actual model to choose its UI selectors/steps.
@@ -47,15 +53,17 @@ const demoURL = (raw) => {
       u.origin === origin &&
       !u.username &&
       !u.password &&
-      (generic
-        ? /^\/(?:help)?$/.test(u.pathname)
-        : workspace
-          ? /^\/(?:app\/(?:orders|settings|auth|security|compatibility|projects|layout)|app\/invoices\/[^/]+)?$/.test(
-              u.pathname,
-            )
-          : security
-            ? u.pathname === '/security'
-            : u.pathname === '/fixtures/shop')
+      (multiWorkspace
+        ? /^\/(?:review)?$/.test(u.pathname)
+        : generic
+          ? /^\/(?:help)?$/.test(u.pathname)
+          : workspace
+            ? /^\/(?:app\/(?:orders|settings|auth|security|compatibility|projects|layout)|app\/invoices\/[^/]+)?$/.test(
+                u.pathname,
+              )
+            : security
+              ? u.pathname === '/security'
+              : u.pathname === '/fixtures/shop')
     );
   } catch {
     return false;
@@ -87,7 +95,7 @@ if (
     ['running', 'paused', 'queued'].includes(debugRecord.status))
 )
   throw new Error('Debug acceptance requires a completed actual run from this owned origin.');
-for (const c of plan.cases)
+for (const c of plan.cases || [])
   for (const a of c.steps) {
     if (
       !operations.has(a.operation) ||
@@ -466,7 +474,7 @@ try {
         allowConsequential: false,
         discover: process.argv.includes('--discover'),
         readLinks: true,
-        responsive: !plan.preserveViewport && plan.viewports.length > 1,
+        responsive: !automationLive && !plan.preserveViewport && plan.viewports.length > 1,
         mode: plan.mode || 'qa',
         securityAuthorized: Boolean(plan.securityAuthorized),
         apiWritesAllowed: Boolean(plan.apiWritesAllowed),
@@ -523,6 +531,68 @@ try {
     const assertions = run.steps.filter((s) =>
       ['assert', 'http_check'].includes(s.action.operation),
     );
+    if (multiWorkspace) {
+      const finalState = await target.evaluate(() => fetch('/api/state').then((r) => r.json()));
+      await writeFile(join(work, 'workspace-state.json'), JSON.stringify(finalState, null, 2));
+      const primary = await target.locator('#project-summary').innerText();
+      if (
+        finalState.creations !== 1 ||
+        finalState.theme !== 'dark' ||
+        finalState.project?.name !== 'Aurora' ||
+        finalState.project?.total !== 84 ||
+        !run.steps.some((s) => s.action.operation === 'open_tab')
+      )
+        throw new Error(
+          'Actual model did not complete the multi-tab server-backed workflow correctly.',
+        );
+      if (expectedStale) {
+        const recordedRegression = assertions.some((s) => {
+          if (s.status !== 'failed' || s.page !== 'main' || !s.result?.historical)
+            return false;
+          const prior = run.observations.find((o) => o.id === s.result.priorObservationId);
+          const bad = run.observations.find((o) => o.id === s.result.observationId);
+          const text = (o) => o?.evidence?.results?.find((x) => x.target === '#project-summary')?.text;
+          return (
+            prior?.evidence?.page === 'main' && bad?.evidence?.page === 'main' &&
+            prior.evidence.url === origin + '/' && bad.evidence.url === origin + '/' &&
+            /Aurora.*Pro.*3 seats.*84/.test(text(prior) || '') &&
+            text(bad) === 'Project details unavailable after workspace update' &&
+            s.result.actual === text(bad) && /Aurora|84/.test(s.action.assertion?.expected || '')
+          );
+        });
+        if (
+          run.status !== 'failed' ||
+          (!primary.includes('unavailable') && !recordedRegression) ||
+          !assertions.some(
+            (s) =>
+              s.status === 'failed' &&
+              s.page === 'main' &&
+              /Aurora|84/.test(s.action.assertion?.expected || ''),
+          )
+        )
+          throw new Error(
+            'Actual model did not detect the original tab changing after the review tab updated.',
+          );
+      } else if (
+        run.status !== 'passed' ||
+        !primary.includes('Aurora') ||
+        !assertions.some((s) => s.status === 'passed' && s.page === 'main') ||
+        !assertions.some((s) => s.status === 'passed' && s.page !== 'main')
+      ) {
+        throw new Error('Actual model did not independently verify both pages.');
+      }
+      const survivors = await worker.evaluate(() => chrome.tabs.query({}));
+      if (
+        !survivors.some((t) => t.id === tabId) ||
+        survivors.some((t) => t.url === origin + '/review')
+      )
+        throw new Error(
+          'Multi-tab cleanup removed the user tab or left the actor-created review tab behind.',
+        );
+      console.log(
+        'Actual multi-tab state verified: one Aurora Pro project, $84 total, dark preference; original tab preserved and actor tab cleaned up.',
+      );
+    }
     const gaps = run.steps
       .slice(1)
       .map((s, i) => Date.parse(s.startedAt) - Date.parse(run.steps[i].completedAt));
@@ -652,7 +722,7 @@ try {
     }
     const expectedFailure = process.argv.includes('--expect-failed');
     if (
-      (expectedTotalDefect
+      (expectedTotalDefect || expectedStale
         ? false
         : expectedFailure
           ? run.status !== 'failed' ||

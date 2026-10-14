@@ -1,6 +1,6 @@
 # Advanced browser QA goal - active capability audit
 
-The requested goal remains broad: general end-to-end workflows, debugging, Q&A, authorized logical security checks, stronger Chrome isolation, more agent tools and outstanding real-model results across websites. The user's latest correction specifically requires browser automation to use live tools from the current page/request, without preplanning. Version 0.10.0 removes the initial AI mission-planning call/checklist and adds scoped historical debugging. It is not completion of the entire highest-capability goal.
+The requested goal remains broad: general end-to-end workflows, debugging, Q&A, authorized logical security checks, stronger Chrome isolation, more agent tools and outstanding real-model results across websites. The user's latest correction specifically requires browser automation to use live tools from the current page/request, without preplanning. Version 0.11.0 retains the direct live-tool loop and adds fresh multi-tab completion, operation-specific tool arguments and scoped temporal evidence. It is not completion of the entire highest-capability goal.
 
 ## Current implementation and evidence
 
@@ -16,6 +16,12 @@ The requested goal remains broad: general end-to-end workflows, debugging, Q&A, 
 - Fresh adaptive Osaka/three-traveller acceptance passed 13 steps and 6 checks with a correctly derived $460 total, one submission and a real UI permission-change rejection before launch: `.tools/live-checks/paced-live-run-CfeS5a/`. The preceding blocked attempt exposed malformed unnamed-role absence checks and an invented viewport criterion; local compilation/validation now handles those cases without changing expected application outcomes.
 
 ## Still incomplete for the full goal
+
+The owned WorkLedger app extends acceptance beyond the booking application. Real live tools detected the intentionally corrupted original-tab summary after a second-tab preference update (9 recorded steps; expected Aurora/Pro/3 seats/$84, observed unavailable). Evidence: `.tools/live-checks/paced-live-run-55aK0H/run.json`. Earlier attempts exposed malformed tool arguments, missing failed-step page metadata and a false pass after navigation restored a broken display. These drove the smaller live contracts, explicit failure page recording and locally compared temporal witnesses reviewed against the request. The witness mechanism is bounded to retained text results; it does not close general temporal QA or the wider multi-application matrix.
+
+The final healthy WorkLedger control passed 12 recorded steps and 3 checks across the original and review tabs, plus server-side confirmation of exactly one project and a saved dark preference: `.tools/live-checks/paced-live-run-bHh9Aa/`. Width remained 1280x720; UI checks at 360px/420px produced no overflow/runtime errors or spoken announcements. This establishes that owned workflow, not universal website compatibility.
+
+The final same-build faulty-app run actually refreshed the original tab and recovered its display. Temporal verification still correctly failed the earlier observed violation: 15 recorded steps, one historical failure supported by O4/O8/O9. Evidence: `.tools/live-checks/paced-live-run-r8W62q/`. Retained-observation limits, intentional intermediate transitions and wider temporal properties remain further acceptance work.
 
 Latest verified progress: direct live tools passed the Osaka journey in 9 steps/2 checks with no initial AI plan, and caught the intentionally incorrect Tokyo receipt using $410 versus $435. Actual historical debugging distinguished the pricing discrepancy from a blocked selector after local correction. See `BROWSER_AUTOMATION.md` and `RECORDED_DEBUGGING.md` for evidence. This does not close the broader requirements below.
 

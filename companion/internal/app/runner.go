@@ -102,11 +102,14 @@ func (a *App) update(r *core.Run) {
 
 // Every visible action, including viewport changes and accessibility checks,
 // shares this cancellable gap. The pace is snapshotted when the run starts.
-func (a *App) beginStep(ctx context.Context, r *core.Run, action core.Action, testCase, viewport string) (int, error) {
+func (a *App) beginStep(ctx context.Context, r *core.Run, action core.Action, testCase, viewport string, pages ...string) (int, error) {
 	step := core.Step{ID: core.ID(), Case: testCase, Viewport: viewport, Action: action, Status: "queued"}
 	step.Iteration = r.Iteration
 	if len(r.Steps) > 0 {
 		step.Page = r.Steps[len(r.Steps)-1].Page
+	}
+	if len(pages) > 0 && pages[0] != "" {
+		step.Page = pages[0]
 	}
 	if len(r.Steps) > 0 && r.StepDelayMS > 0 {
 		r.NextStep = &step

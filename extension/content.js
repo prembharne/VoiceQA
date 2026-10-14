@@ -3,6 +3,38 @@
   globalThis.__voiceqaInstalled = true;
   const overlays = [];
   const requests = new Set();
+  const submissionForms = new WeakMap();
+  function submissionKey(el, key = '') {
+    const control = el.closest('button,input[type=submit],input[type=image]') || el;
+    const form = control.form || control.closest('form');
+    const implicit =
+      key === 'Enter' &&
+      control.tagName === 'INPUT' &&
+      !['button', 'reset', 'checkbox', 'radio'].includes(control.type);
+    if (!form || (!(control.type === 'submit' || control.type === 'image') && !implicit)) return '';
+    // Compare values locally, including private fields; only an opaque random
+    // identity leaves this isolated content world. Never expose a secret/hash.
+    const values = JSON.stringify(
+      [...form.elements].map((field) => [
+        field.name,
+        field.type,
+        field.value,
+        Boolean(field.checked),
+        [...(field.files || [])].map((file) => [file.name, file.size, file.lastModified]),
+      ]),
+    );
+    let state = submissionForms.get(form);
+    if (!state || state.values !== values) {
+      state = {
+        values,
+        id: [...crypto.getRandomValues(new Uint8Array(16))]
+          .map((n) => n.toString(16).padStart(2, '0'))
+          .join(''),
+      };
+      submissionForms.set(form, state);
+    }
+    return state.id;
+  }
   const mandatoryPrivate =
     'input[type=password],input[autocomplete^=cc-],input[autocomplete=one-time-code],[data-voiceqa-secret],input[name*=csrf i],input[name*=xsrf i],meta[name*=csrf i],meta[name*=xsrf i],input[name=__RequestVerificationToken],[name=cf-turnstile-response],[name=g-recaptcha-response],[name=h-captcha-response]';
   let maskSelectors = 'input[type=password], input[type=email], [data-private]';
@@ -194,6 +226,7 @@
       inputType: el.type,
       options: el.options ? [...el.options].map((o) => ({ value: o.value, label: o.label })) : [],
       selectedIndex: el.selectedIndex,
+      submissionKey: submissionKey(el),
       viewport: { width: innerWidth, height: innerHeight },
     };
   }
@@ -748,7 +781,11 @@
                 text,
               ) ||
               Boolean(form?.querySelector('[autocomplete^=cc-]'));
-            result = { consequential, control: name(el) };
+            result = {
+              consequential,
+              control: name(el),
+              submissionKey: submissionKey(el, message.key || ''),
+            };
             break;
           }
           case 'vqa.inspect':

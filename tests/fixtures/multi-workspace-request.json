@@ -1,0 +1,11 @@
+{
+  "id": "workledger-live-request",
+  "version": 1,
+  "origin": "http://127.0.0.1:4179",
+  "url": "http://127.0.0.1:4179/",
+  "request": "Create one Pro project named Aurora with three seats. Use a second tab for the review workspace, verify the project and its pricing, and save dark theme. Confirm the project details remain correct on both the original page and review workspace after saving the preference. Preserve my original tab and browser width.",
+  "model": "nvidia/nemotron-3-super-120b-a12b:free",
+  "aiProvider": "openrouter",
+  "preserveViewport": true,
+  "mode": "automation"
+}

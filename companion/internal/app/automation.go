@@ -8,6 +8,8 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"sort"
+	"strconv"
 	"strings"
 	"time"
 	"voiceqa/companion/internal/core"
@@ -61,6 +63,7 @@ func (a *App) proposeAutomation(ctx context.Context, m native.Message) (any, err
 }
 
 type automationCheck struct {
+	Page        string      `json:"page,omitempty"`
 	Requirement string      `json:"requirement,omitempty"`
 	CriterionID int         `json:"criterionId"`
 	Action      core.Action `json:"action"`
@@ -149,7 +152,7 @@ func (a *App) executeAutomation(ctx context.Context, r *core.Run) {
 		rememberAutomationObservation(r, public)
 		var decision automationDecision
 		validation := ""
-		for attempt := 0; attempt < 2; attempt++ {
+		for attempt := 0; attempt < 3; attempt++ {
 			r.AgentPhase = "Choosing the next action"
 			a.update(r)
 			if r.Status == "error" {
@@ -161,9 +164,14 @@ func (a *App) executeAutomation(ctx context.Context, r *core.Run) {
 			}
 			schema := provider.AutomationStepSchema(len(r.Plan.Automation.Criteria))
 			if r.Plan.Automation.Live {
-				schema = provider.AutomationLiveStepSchema()
+				aliases := []string{""}
+				for alias := range scope.Origins {
+					aliases = append(aliases, alias)
+				}
+				sort.Strings(aliases)
+				schema = provider.AutomationLiveStepSchema(aliases...)
 			}
-			raw, usage, e := a.aiClient(r.Plan.AIProvider).PlanStructured(ctx, a.keyFor(r.Plan.AIProvider), r.Plan.Model, provider.AutomationInstructions, map[string]any{"goal": r.Plan.Request, "conversation": r.Plan.Conversation, "successCriteria": r.Plan.Automation.Criteria, "permissions": r.Plan.Automation, "apiWritesAllowed": r.Plan.APIWritesAllowed, "scope": scope, "observation": public, "observedStateHistory": r.Observations, "earlierEvidenceOmitted": r.EvidenceOmitted, "recentSteps": agentPublicEvidence(map[string]any{"steps": history})["steps"], "publicValues": r.Values, "credentialProfiles": allowedProfiles, "remainingActions": r.Plan.Automation.MaxActions - len(r.Steps), "validationError": validation}, schema, nil)
+			raw, usage, e := a.aiClient(r.Plan.AIProvider).PlanStructured(ctx, a.keyFor(r.Plan.AIProvider), r.Plan.Model, provider.AutomationInstructions, map[string]any{"goal": r.Plan.Request, "conversation": r.Plan.Conversation, "successCriteria": r.Plan.Automation.Criteria, "permissions": r.Plan.Automation, "apiWritesAllowed": r.Plan.APIWritesAllowed, "scope": scope, "observation": public, "navigationChoices": automationNavigationChoices(scope, obs), "observedStateHistory": r.Observations, "earlierEvidenceOmitted": r.EvidenceOmitted, "recentSteps": agentPublicEvidence(map[string]any{"steps": history})["steps"], "publicValues": r.Values, "credentialProfiles": allowedProfiles, "remainingActions": r.Plan.Automation.MaxActions - len(r.Steps), "validationError": validation}, schema, nil)
 			for key, n := range usage {
 				r.Usage[key] += n
 			}
@@ -178,7 +186,14 @@ func (a *App) executeAutomation(ctx context.Context, r *core.Run) {
 			decoder.DisallowUnknownFields()
 			e = decoder.Decode(&packet)
 			decision = packet.Result
+			if e == nil {
+				normalizeAutomationOptionals(&decision.Action)
+				for i := range decision.Checks {
+					normalizeAutomationOptionals(&decision.Checks[i].Action)
+				}
+			}
 			if e == nil && decision.Type == "action" {
+				normalizeAutomationTab(&decision.Action, scope, obs)
 				compiled := []core.Case{{Steps: []core.Action{{Operation: "navigate", Value: fmt.Sprint(obs["url"])}, decision.Action}}}
 				e = normalizeDraftControls(compiled, obs)
 				decision.Action = compiled[0].Steps[1]
@@ -194,7 +209,11 @@ func (a *App) executeAutomation(ctx context.Context, r *core.Run) {
 						decision.Action = resolved
 						e = core.ValidateAutomationAction(r.Plan, scope.Clone(), decision.Action)
 						if e == nil && (decision.Action.Operation == "click" || decision.Action.Operation == "fill" || decision.Action.Operation == "select" || decision.Action.Operation == "fill_secret" || decision.Action.Operation == "fill_totp" || decision.Action.Operation == "capture_value") {
-							_, e = a.browser(ctx, r.ID, "", map[string]any{"operation": "resolve_target", "target": decision.Action.Target, "origin": r.Plan.Origin})
+							var meta map[string]any
+							meta, e = a.browser(ctx, r.ID, "", map[string]any{"operation": "resolve_target", "target": decision.Action.Target, "origin": r.Plan.Origin})
+							if e == nil && decision.Action.Operation == "click" && meta["submissionAlreadyDispatched"] == true {
+								e = errors.New("Unchanged form inputs were already submitted. Do not click submit again; inspect the actual result or advance to the next requested page")
+							}
 							if e != nil {
 								e = fmt.Errorf("The proposed control is not currently actionable. Do not guess a later-stage field. Use the actual current controls and advance this stage first. Details: %w", e)
 							}
@@ -211,11 +230,23 @@ func (a *App) executeAutomation(ctx context.Context, r *core.Run) {
 					decision.Checks[i].Action = resolved
 				}
 				if e == nil {
-					normalizeAutomationCheckTargets(decision.Checks, obs)
+					for i := range decision.Checks {
+						if decision.Checks[i].Page == "" {
+							decision.Checks[i].Page = scope.Current
+						}
+						if decision.Checks[i].Page == scope.Current {
+							normalizeAutomationCheckTargets(decision.Checks[i:i+1], obs)
+						}
+					}
 					e = validateAutomationCompletion(r.Plan, scope, decision.Checks)
 				}
 				if e == nil && r.Plan.Automation.Live {
 					e = a.auditLiveCompletion(ctx, r, public, decision.Checks)
+					var measured *BrowserError
+					if errors.As(e, &measured) && measured.Code == "assertion_failed" {
+						a.setAutomationFailure(r, e)
+						return
+					}
 				}
 			} else if e == nil && decision.Type != "blocked" {
 				e = errors.New("choose action, complete or blocked")
@@ -225,6 +256,9 @@ func (a *App) executeAutomation(ctx context.Context, r *core.Run) {
 			}
 			if e == nil && decision.Type == "complete" {
 				for _, check := range decision.Checks {
+					if check.Page != scope.Current {
+						continue
+					}
 					if e = a.preflightAutomationAssertion(ctx, r, check.Action); e != nil {
 						break
 					}
@@ -233,8 +267,12 @@ func (a *App) executeAutomation(ctx context.Context, r *core.Run) {
 			if e == nil {
 				break
 			}
+			repeated := validation == e.Error()
 			validation = e.Error()
-			if attempt == 1 {
+			if len(r.DecisionErrors) < 8 {
+				r.DecisionErrors = append(r.DecisionErrors, map[string]any{"afterActions": len(r.Steps), "error": recordedText(validation, 1200), "candidate": recordedStepEvidence(core.Step{Action: decision.Action})})
+			}
+			if repeated || attempt == 2 {
 				a.setInterrupted(r, &BrowserError{Code: "blocked", Message: "Adaptive decision failed validation: " + validation})
 				return
 			}
@@ -245,11 +283,43 @@ func (a *App) executeAutomation(ctx context.Context, r *core.Run) {
 			return
 		}
 		if decision.Type == "complete" {
-			if len(r.Steps)+len(decision.Checks) > r.Plan.Automation.MaxActions {
+			if len(r.Steps)+automationCompletionCost(scope.Current, decision.Checks) > r.Plan.Automation.MaxActions {
 				a.setInterrupted(r, &BrowserError{Code: "blocked", Message: "Not enough action budget remains for every success criterion"})
 				return
 			}
 			for _, check := range decision.Checks {
+				if check.Page != scope.Current {
+					switchAction := core.Action{Operation: "switch_tab", Target: check.Page, Label: "Switch to " + check.Page + " for outcome verification"}
+					if err = core.ValidateAutomationAction(r.Plan, scope.Clone(), switchAction); err != nil {
+						a.setInterrupted(r, err)
+						return
+					}
+					if err = a.runAutomationAction(ctx, r, switchAction, label, scope.Current); err != nil {
+						a.setAutomationFailure(r, err)
+						return
+					}
+					if err = scope.Advance(switchAction); err != nil {
+						a.setInterrupted(r, err)
+						return
+					}
+				}
+				fresh, observeErr := a.browser(ctx, r.ID, "", map[string]any{"operation": "observe", "origin": r.Plan.Origin})
+				if observeErr != nil {
+					a.setInterrupted(r, observeErr)
+					return
+				}
+				if page, ok := fresh["page"].(string); ok && page != "" && page != check.Page {
+					a.setInterrupted(r, &BrowserError{Code: "needs_review", Message: "Verification page changed before its fresh observation"})
+					return
+				}
+				rememberAutomationObservation(r, agentPublicEvidence(fresh))
+				one := []automationCheck{check}
+				normalizeAutomationCheckTargets(one, fresh)
+				check = one[0]
+				if err = a.preflightAutomationAssertion(ctx, r, check.Action); err != nil {
+					a.setAutomationFailure(r, err)
+					return
+				}
 				criterion := check.Requirement
 				if !r.Plan.Automation.Live {
 					criterion = r.Plan.Automation.Criteria[check.CriterionID-1]
@@ -262,7 +332,7 @@ func (a *App) executeAutomation(ctx context.Context, r *core.Run) {
 				if r.Plan.Automation.Live {
 					check.Action.Label = "Verify outcome: " + string(criterionLabel)
 				}
-				if err = a.runAutomationAction(ctx, r, check.Action, label); err != nil {
+				if err = a.runAutomationAction(ctx, r, check.Action, label, scope.Current); err != nil {
 					a.setAutomationFailure(r, err)
 					return
 				}
@@ -276,12 +346,12 @@ func (a *App) executeAutomation(ctx context.Context, r *core.Run) {
 			return
 		}
 		hash := automationStateFingerprint(action, public)
-		if action.Operation != "assert" && action.Operation != "wait_for" && seen[hash] {
+		if action.Operation != "assert" && action.Operation != "wait_for" && action.Operation != "switch_tab" && seen[hash] {
 			a.setInterrupted(r, &BrowserError{Code: "needs_review", Message: "Identical action requested against unchanged evidence; no mutation was replayed"})
 			return
 		}
 		seen[hash] = true
-		if err = a.runAutomationAction(ctx, r, action, label); err != nil {
+		if err = a.runAutomationAction(ctx, r, action, label, scope.Current); err != nil {
 			a.setAutomationFailure(r, err)
 			return
 		}
@@ -312,7 +382,13 @@ func rememberAutomationObservation(r *core.Run, public map[string]any) {
 			return
 		}
 	}
-	r.Observations = append(r.Observations, map[string]any{"id": fmt.Sprintf("O%d", len(r.Steps)), "afterActions": len(r.Steps), "evidence": snapshot})
+	nextID := 0
+	for _, previous := range r.Observations {
+		if n, err := strconv.Atoi(strings.TrimPrefix(stringField(previous, "id"), "O")); err == nil && n >= nextID {
+			nextID = n + 1
+		}
+	}
+	r.Observations = append(r.Observations, map[string]any{"id": fmt.Sprintf("O%d", nextID), "afterActions": len(r.Steps), "evidence": snapshot})
 	for len(r.Observations) > 1 {
 		body, _ := json.Marshal(r.Observations)
 		if len(body) <= 96*1024 && len(r.Observations) <= 12 {
@@ -332,11 +408,20 @@ func validateAutomationCompletion(plan core.Plan, scope *core.Scope, checks []au
 		seen := map[string]bool{}
 		for _, check := range checks {
 			key := strings.ToLower(strings.TrimSpace(check.Requirement))
-			if key == "" || len(key) > 500 || seen[key] || check.Action.Operation != "assert" {
+			page := check.Page
+			if page == "" {
+				page = scope.Current
+			}
+			dedup := page + "|" + key
+			if key == "" || len(key) > 500 || seen[dedup] || check.Action.Operation != "assert" {
 				return errors.New("live completion needs unique requested-outcome descriptions and assertions")
 			}
-			seen[key] = true
-			if err := core.ValidateAutomationAction(plan, scope.Clone(), check.Action); err != nil {
+			seen[dedup] = true
+			checkScope, err := automationCheckScope(scope, check.Page)
+			if err != nil {
+				return err
+			}
+			if err := core.ValidateAutomationAction(plan, checkScope, check.Action); err != nil {
 				return err
 			}
 		}
@@ -351,14 +436,53 @@ func validateAutomationCompletion(plan core.Plan, scope *core.Scope, checks []au
 			return errors.New("completion requires one unique assert per approved criterion")
 		}
 		seen[check.CriterionID] = true
-		if err := core.ValidateAutomationAction(plan, scope.Clone(), check.Action); err != nil {
+		checkScope, err := automationCheckScope(scope, check.Page)
+		if err != nil {
+			return err
+		}
+		if err := core.ValidateAutomationAction(plan, checkScope, check.Action); err != nil {
 			return err
 		}
 	}
 	return nil
 }
-func (a *App) runAutomationAction(ctx context.Context, r *core.Run, action core.Action, viewport string) error {
-	idx, err := a.beginStep(ctx, r, action, "Adaptive browser automation", viewport)
+
+func automationCheckScope(scope *core.Scope, page string) (*core.Scope, error) {
+	copy := scope.Clone()
+	if page != "" {
+		if copy.Origins[page] == "" {
+			return nil, errors.New("completion check targets an unknown or closed page alias")
+		}
+		copy.Current = page
+	}
+	return copy, nil
+}
+
+func automationCompletionCost(current string, checks []automationCheck) int {
+	cost := len(checks)
+	for _, check := range checks {
+		page := check.Page
+		if page == "" {
+			page = current
+		}
+		if page != current {
+			cost++
+			current = page
+		}
+	}
+	return cost
+}
+
+func normalizeAutomationOptionals(action *core.Action) {
+	if action.Operation != "http_check" && action.HTTP != nil && *action.HTTP == (core.HTTPCheck{}) {
+		action.HTTP = nil
+	}
+	if action.Operation != "assert" && action.Operation != "wait_for" && action.Assertion != nil && *action.Assertion == (core.Assertion{}) {
+		action.Assertion = nil
+	}
+}
+func (a *App) runAutomationAction(ctx context.Context, r *core.Run, action core.Action, viewport, page string) error {
+	idx, err := a.beginStep(ctx, r, action, "Adaptive browser automation", viewport, page)
 	if err != nil {
 		return err
 	}
@@ -366,7 +490,9 @@ func (a *App) runAutomationAction(ctx context.Context, r *core.Run, action core.
 	r.Steps[idx].CompletedAt = core.Now()
 	r.Steps[idx].Result = result
 	r.Steps[idx].Status = "passed"
-	r.Steps[idx].Page, _ = result["page"].(string)
+	if actualPage, ok := result["page"].(string); ok && actualPage != "" {
+		r.Steps[idx].Page = actualPage
+	}
 	if err != nil {
 		r.Steps[idx].Status = "error"
 		r.Steps[idx].Error = err.Error()
@@ -449,7 +575,7 @@ func normalizeAutomationCheckTargets(checks []automationCheck, obs map[string]an
 			}
 			return strings.Contains(strings.ToLower(text), strings.ToLower(a.Assertion.Expected))
 		}
-		currentMatches := false
+		currentPresent := false
 		candidates := []string{}
 		for _, raw := range results {
 			row, ok := raw.(map[string]any)
@@ -458,14 +584,17 @@ func normalizeAutomationCheckTargets(checks []automationCheck, obs map[string]an
 			}
 			target, _ := row["target"].(string)
 			text, _ := row["text"].(string)
-			if target == a.Target && matches(text) {
-				currentMatches = true
+			if target == a.Target {
+				currentPresent = true
 			}
 			if target != "" && matches(text) {
 				candidates = append(candidates, target)
 			}
 		}
-		if !currentMatches && len(candidates) == 1 {
+		// An observed target with the wrong result is a potential application
+		// defect. Never move its check to another element just because that
+		// element happens to contain the expectation.
+		if !currentPresent && len(candidates) == 1 {
 			a.Target = candidates[0]
 		}
 	}

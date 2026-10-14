@@ -8,6 +8,7 @@ import { auditConfiguration } from './security-audit.js';
 
 const fence = new ExecutionFence();
 const network = new NetworkRecorder();
+const submittedForms = new Set();
 let lastHTTPAt = 0;
 
 const panels = new Set();
@@ -316,6 +317,7 @@ async function handlePanel(method, payload) {
     const planned = await native.rpc('plan.get', { id: payload.planId });
     state.testMode = planned.mode || 'qa';
     state.automationPolicy = planned.automation || null;
+    submittedForms.clear();
     state.securityAuthorized = planned.securityAuthorized === true;
     state.apiWritesAllowed = planned.apiWritesAllowed === true;
     state.httpCount = 0;
@@ -611,7 +613,6 @@ async function execute(action, token, secureOrigin = '') {
   await waitForTarget(token);
   if (
     state.automationPolicy &&
-    !state.automationPolicy.allowConsequential &&
     (action.operation === 'click' ||
       (action.operation === 'key' && ['Enter', 'Space'].includes(action.value)))
   ) {
@@ -620,14 +621,23 @@ async function execute(action, token, secureOrigin = '') {
         type: 'vqa.action-context',
         target: action.target || '',
         focused: action.operation === 'key',
+        key: action.value || '',
       },
       token,
     );
-    if (context.consequential)
+    if (context.consequential && !state.automationPolicy.allowConsequential)
       throw fault(
         'This control may send, publish, pay, transfer or delete. Consequential-action permission was not granted in mission review.',
         'needs_review',
       );
+    if (context.submissionKey) {
+      if (submittedForms.has(context.submissionKey))
+        throw fault(
+          'These form inputs were already submitted. Inspect the result instead of submitting unchanged data again.',
+          'needs_review',
+        );
+      submittedForms.add(context.submissionKey);
+    }
   }
   switch (action.operation) {
     case 'open_tab':
@@ -1050,6 +1060,9 @@ async function onNative(message) {
       }
       case 'resolve_target':
         result = await resolveReady(p.target, token);
+        result.submissionAlreadyDispatched = Boolean(
+          result.submissionKey && submittedForms.has(result.submissionKey),
+        );
         break;
       case 'execute':
         await attach(token);

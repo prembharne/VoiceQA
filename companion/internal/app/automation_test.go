@@ -46,6 +46,69 @@ func TestLiveCompletionRequiresOutcomeAssertionsInsteadOfActionPlans(t *testing.
 	}
 }
 
+func TestMultiPageCompletionUsesScopedAliasesAndBudgetsSwitches(t *testing.T) {
+	p := core.Plan{Mode: "automation", URL: "https://app.test/", Origin: "https://app.test", Pages: []core.Page{{Alias: "review", URL: "https://app.test/review", Origin: "https://app.test"}}, Automation: &core.AutomationPolicy{Live: true, MaxActions: 20}}
+	scope, _ := core.NewScope(p, "main")
+	check := automationCheck{Page: "review", Requirement: "Requested project data", Action: core.Action{Operation: "assert", Target: "#summary", Assertion: &core.Assertion{Kind: "text_contains", Expected: "Aurora"}}}
+	other := check
+	other.Page = "main"
+	checks := []automationCheck{check, other}
+	if err := validateAutomationCompletion(p, scope, checks); err != nil {
+		t.Fatal(err)
+	}
+	if scope.Current != "main" || automationCompletionCost("main", checks) != 4 {
+		t.Fatal("validation switched scope or ignored transition cost", scope, checks)
+	}
+	check.Page = "closed"
+	if validateAutomationCompletion(p, scope, []automationCheck{check}) == nil {
+		t.Fatal("unknown/closed page accepted as completion proof")
+	}
+}
+
+func TestEmptyAutomationOptionalsNormalizeWithoutDroppingRealHTTPIntent(t *testing.T) {
+	a := core.Action{Operation: "open_tab", HTTP: &core.HTTPCheck{}, Assertion: &core.Assertion{}}
+	normalizeAutomationOptionals(&a)
+	if a.HTTP != nil || a.Assertion != nil {
+		t.Fatal("empty unused fields were retained", a)
+	}
+	a.HTTP = &core.HTTPCheck{Method: "POST", URL: "https://app.test/create"}
+	normalizeAutomationOptionals(&a)
+	if a.HTTP == nil {
+		t.Fatal("meaningful mismatched HTTP intent was silently discarded")
+	}
+}
+
+func TestTabArgumentCompilationRequiresObservedLinkAndPreservesScope(t *testing.T) {
+	p := core.Plan{URL: "https://app.test/", Origin: "https://app.test"}
+	scope, _ := core.NewScope(p, "main")
+	obs := map[string]any{"url": p.URL, "controls": []any{map[string]any{"href": "https://app.test/review", "name": "Review workspace", "parameterizedLink": false}}}
+	a := core.Action{Operation: "open_tab", Target: "role:link|Review workspace", Value: "/review"}
+	normalizeAutomationTab(&a, scope, obs)
+	if a.Target != "review-workspace" || a.Value != "https://app.test/review" || scope.Current != "main" {
+		t.Fatal("observed tab arguments not safely compiled", a, scope)
+	}
+	for _, input := range []core.Action{
+		{Operation: "open_tab", Target: "peer", Value: "Review workspace"},
+		{Operation: "open_tab", Target: "https://app.test/review", Value: "peer"},
+	} {
+		normalizeAutomationTab(&input, scope, obs)
+		if input.Target != "peer" || input.Value != "https://app.test/review" {
+			t.Fatal("observed label/swapped fields not grounded", input)
+		}
+	}
+	obs["controls"] = append(obs["controls"].([]any), map[string]any{"href": "https://app.test/other", "name": "Review workspace"})
+	a = core.Action{Operation: "open_tab", Target: "peer", Value: "Review workspace"}
+	normalizeAutomationTab(&a, scope, obs)
+	if a.Value != "Review workspace" {
+		t.Fatal("ambiguous observed link label was guessed", a)
+	}
+	a = core.Action{Operation: "open_tab", Target: "role:link|Guessed route", Value: "https://outside.test/review"}
+	normalizeAutomationTab(&a, scope, obs)
+	if a.Target != "role:link|Guessed route" || scope.Advance(a) == nil {
+		t.Fatal("unobserved destination escaped scope", a)
+	}
+}
+
 func TestLiveRequestPreparationDoesNotCallAIOrGenerateAPlan(t *testing.T) {
 	a := newTestApp(t)
 	a.Send = func(m native.Message) error {
@@ -68,6 +131,27 @@ func TestLiveDecisionTimeoutDoesNotClaimNoActionsRan(t *testing.T) {
 	err := agentResponseError(context.DeadlineExceeded, "next tool decision", true)
 	if !errors.Is(err, context.DeadlineExceeded) || !strings.Contains(err.Error(), "completed actions remain") || strings.Contains(err.Error(), "No tests were run") || strings.Contains(err.Error(), "building the plan") {
 		t.Fatal("live timeout lost partial-action meaning or cancellation identity", err)
+	}
+}
+
+func TestFailedLiveAssertionKeepsItsExecutionPageWithoutReplyMetadata(t *testing.T) {
+	a := newTestApp(t)
+	a.Send = func(m native.Message) error {
+		if m.Type == "browser.request" {
+			var payload map[string]any
+			_ = json.Unmarshal(m.Payload, &payload)
+			if payload["operation"] == "execute" {
+				a.Handle(message("browser.result", map[string]any{"requestId": m.ID, "code": "assertion_failed", "error": "Expected 84; observed 99", "result": map[string]any{"expected": "84", "actual": "99"}}))
+			} else {
+				a.Handle(message("browser.result", map[string]any{"requestId": m.ID, "result": map[string]any{"page": "review"}}))
+			}
+		}
+		return nil
+	}
+	r := core.Run{ID: "failed-peer-check", Status: "running", Plan: core.Plan{Origin: "https://app.test", Mode: "automation"}}
+	err := a.runAutomationAction(context.Background(), &r, core.Action{Operation: "assert", Target: "#receipt", Assertion: &core.Assertion{Kind: "number", Expected: "84"}}, "1280x720", "review")
+	if err == nil || len(r.Steps) != 1 || r.Steps[0].Page != "review" || r.Steps[0].Status != "failed" {
+		t.Fatal("failed assertion lost its explicit execution page", err, r.Steps)
 	}
 }
 
@@ -141,6 +225,18 @@ func TestAutomationTargetCorrectionDoesNotRewriteExpectedValues(t *testing.T) {
 	normalizeAutomationCheckTargets(checks, obs)
 	if checks[0].Action.Target != "#wrong" || checks[0].Action.Assertion.Expected != "Submitted: 1" {
 		t.Fatal("incorrect application result normalized into a pass")
+	}
+}
+
+func TestAutomationKeepsWrongObservedResultInsteadOfCheckingAnotherMatchingElement(t *testing.T) {
+	checks := []automationCheck{{Action: core.Action{Operation: "assert", Target: "#receipt", Assertion: &core.Assertion{Kind: "text_contains", Expected: "$84.00"}}}}
+	obs := map[string]any{"results": []any{
+		map[string]any{"target": "#receipt", "text": "$99.00"},
+		map[string]any{"target": "#preview", "text": "$84.00"},
+	}}
+	normalizeAutomationCheckTargets(checks, obs)
+	if checks[0].Action.Target != "#receipt" || checks[0].Action.Assertion.Expected != "$84.00" {
+		t.Fatal("wrong receipt was replaced by a matching preview", checks)
 	}
 }
 
