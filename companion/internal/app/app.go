@@ -19,7 +19,7 @@ import (
 	"voiceqa/companion/internal/store"
 )
 
-const HostVersion = "0.9.0"
+const HostVersion = "0.10.0"
 
 type browserReply struct {
 	Result map[string]any
@@ -349,6 +349,7 @@ func (a *App) dispatchWork(m native.Message, generation *uint64) (any, error) {
 		return a.proposeAutomation(ctx, m)
 	case "agent.query":
 		var p struct {
+			RunID        string              `json:"runId"`
 			Request      string              `json:"request"`
 			Origin       string              `json:"origin"`
 			URL          string              `json:"url"`
@@ -375,11 +376,22 @@ func (a *App) dispatchWork(m native.Message, generation *uint64) (any, error) {
 				return nil, errors.New("Invalid investigation history")
 			}
 		}
+		var recorded *core.Run
+		if p.RunID != "" {
+			var record core.Run
+			if err := a.Store.Get("run", p.RunID, &record); err != nil {
+				return nil, errors.New("Selected recorded run is unavailable")
+			}
+			if err := validateRecordedRunScope(record, p.Origin, p.Pages); err != nil {
+				return nil, err
+			}
+			recorded = &record
+		}
 		obs, err := a.browser(ctx, "", "", map[string]any{"operation": "observe", "origin": p.Origin})
 		if err != nil {
 			return nil, err
 		}
-		return a.investigate(ctx, p.Request, p.Origin, p.Pages, obs, p.Conversation, p.ReadLinks, m.ID)
+		return a.investigateWithRun(ctx, p.Request, p.Origin, p.Pages, obs, p.Conversation, p.ReadLinks, m.ID, recorded)
 	case "plan.propose":
 		var p struct {
 			Pages              []core.Page         `json:"pages"`

@@ -1,5 +1,5 @@
 import React, { useLayoutEffect, useRef } from 'react';
-import { ArrowUp, Globe2, Mic, Plus, Sparkles, Square, X } from 'lucide-react';
+import { ArrowUp, Globe2, Mic, Plus, Sparkles, Square, X, History } from 'lucide-react';
 import { Button } from './ui.jsx';
 import { PageSharing } from './page-sharing.jsx';
 import { WorkflowOptions } from './workflow-options.jsx';
@@ -19,8 +19,7 @@ export function ChatWelcome({ target, onPrompt, onDemo, busy }) {
           to verified action.
         </h1>
         <p>
-          Explore a website, automate a workflow, or test what matters. Review the plan. Follow the
-          evidence.
+          Explore a website, use live automation tools, or test what matters. Follow the evidence.
         </p>
       </div>
       <div className="suggestions" aria-label="Suggested requests">
@@ -56,6 +55,8 @@ export function ChatComposer({
   discover,
   onDiscover,
   workspace,
+  recordContext,
+  onDetachRecord,
   allowConsequential,
   onAllowConsequential,
   mode,
@@ -168,6 +169,22 @@ export function ChatComposer({
             }
           }}
         />
+        {recordContext && (
+          <div className="sharing-chip" aria-label="Historical run attached">
+            <span className="sharing-label">
+              <History size={16} aria-hidden="true" />
+              <span>Recorded run attached</span>
+            </span>
+            <button
+              type="button"
+              disabled={busy || running}
+              aria-label="Detach recorded run"
+              onClick={onDetachRecord}
+            >
+              <X size={16} aria-hidden="true" />
+            </button>
+          </div>
+        )}
         <div className="composer-toolbar">
           <select
             className="intent-picker"
@@ -203,35 +220,51 @@ export function ChatComposer({
                   Allow consequential actions (send, publish, pay, delete)
                 </label>
               )}
-              <label className="option-check">
-                <input
-                  type="checkbox"
-                  checked={discover}
-                  disabled={busy || running}
-                  onChange={(e) => onDiscover(e.target.checked)}
+              {workspace === 'qa' && (
+                <label className="option-check">
+                  <input
+                    type="checkbox"
+                    checked={discover}
+                    disabled={busy || running}
+                    onChange={(e) => onDiscover(e.target.checked)}
+                  />
+                  Investigate before planning
+                </label>
+              )}
+              {(workspace === 'qa' || intent === 'ask') && (
+                <label className="option-check">
+                  <input
+                    type="checkbox"
+                    checked={readLinks}
+                    disabled={busy || running}
+                    onChange={(e) => onReadLinks(e.target.checked)}
+                  />
+                  Read observed links on approved sites
+                </label>
+              )}
+              {workspace === 'qa' ? (
+                <WorkflowOptions
+                  apiWrites={apiWrites}
+                  onAPIWrites={onAPIWrites}
+                  mode={mode}
+                  onMode={onMode}
+                  authorized={authorized}
+                  onAuthorized={onAuthorized}
+                  data={data}
+                  onData={onData}
+                  disabled={running || busy}
                 />
-                Investigate before planning
-              </label>
-              <label className="option-check">
-                <input
-                  type="checkbox"
-                  checked={readLinks}
-                  disabled={busy || running}
-                  onChange={(e) => onReadLinks(e.target.checked)}
-                />
-                Read observed links on approved sites
-              </label>
-              <WorkflowOptions
-                apiWrites={apiWrites}
-                onAPIWrites={onAPIWrites}
-                mode={mode}
-                onMode={onMode}
-                authorized={authorized}
-                onAuthorized={onAuthorized}
-                data={data}
-                onData={onData}
-                disabled={running || busy}
-              />
+              ) : (
+                <label className="option-check">
+                  <input
+                    type="checkbox"
+                    checked={apiWrites}
+                    disabled={busy || running}
+                    onChange={(e) => onAPIWrites(e.target.checked)}
+                  />
+                  Allow browser-session API writes
+                </label>
+              )}
               <PageSharing
                 pages={pages}
                 running={running}
@@ -261,24 +294,28 @@ export function ChatComposer({
                 <option value={5000}>5 seconds</option>
                 <option value={0}>No gap · fast automation</option>
               </select>
-              <label className="option-check">
-                <input
-                  type="checkbox"
-                  checked={responsive}
-                  disabled={busy || running}
-                  onChange={(e) => onResponsive(e.target.checked)}
-                />
-                Resize for desktop + mobile checks
-              </label>
-              <label className="option-check">
-                <input
-                  type="checkbox"
-                  checked={visual}
-                  disabled={busy || running}
-                  onChange={(e) => onVisual(e.target.checked)}
-                />
-                Compare approved visual baselines
-              </label>
+              {workspace === 'qa' && (
+                <>
+                  <label className="option-check">
+                    <input
+                      type="checkbox"
+                      checked={responsive}
+                      disabled={busy || running}
+                      onChange={(e) => onResponsive(e.target.checked)}
+                    />
+                    Resize for desktop + mobile checks
+                  </label>
+                  <label className="option-check">
+                    <input
+                      type="checkbox"
+                      checked={visual}
+                      disabled={busy || running}
+                      onChange={(e) => onVisual(e.target.checked)}
+                    />
+                    Compare approved visual baselines
+                  </label>
+                </>
+              )}
             </div>
           </details>
           <div className="composer-actions">
@@ -315,7 +352,13 @@ export function ChatComposer({
               <button
                 type="submit"
                 className="composer-send"
-                aria-label={intent === 'ask' ? 'Send question' : 'Send test request'}
+                aria-label={
+                  intent === 'ask'
+                    ? 'Send question'
+                    : workspace === 'automation'
+                      ? 'Send automation request'
+                      : 'Send test request'
+                }
                 title="Send · Enter"
                 disabled={!request.trim() || busy || !connected || !target || !hasKey}
               >
@@ -332,7 +375,9 @@ export function ChatComposer({
             ? 'Testing one step at a time. Stop is always available.'
             : intent === 'ask'
               ? 'Reads shared pages and approved links. No test actions are executed.'
-              : 'Review the plan before running. Shift + Enter for a new line.'}
+              : workspace === 'automation'
+                ? 'Live tools follow your request. Shift + Enter for a new line.'
+                : 'Review the plan before running. Shift + Enter for a new line.'}
       </p>
     </div>
   );

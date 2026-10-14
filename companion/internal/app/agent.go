@@ -20,13 +20,15 @@ type AgentEvidence struct {
 	Error  string         `json:"error,omitempty"`
 }
 type AgentAnswer struct {
-	ID            string          `json:"id"`
-	Answer        string          `json:"answer"`
-	Clarification string          `json:"clarification,omitempty"`
-	Sources       []string        `json:"sources"`
-	Evidence      []AgentEvidence `json:"evidence"`
-	Model         string          `json:"model"`
-	Usage         map[string]int  `json:"usage"`
+	RunID         string           `json:"runId,omitempty"`
+	Assessment    *DebugAssessment `json:"assessment,omitempty"`
+	ID            string           `json:"id"`
+	Answer        string           `json:"answer"`
+	Clarification string           `json:"clarification,omitempty"`
+	Sources       []string         `json:"sources"`
+	Evidence      []AgentEvidence  `json:"evidence"`
+	Model         string           `json:"model"`
+	Usage         map[string]int   `json:"usage"`
 }
 type agentArgs struct {
 	Page   string `json:"page"`
@@ -35,12 +37,13 @@ type agentArgs struct {
 	URL    string `json:"url"`
 }
 type agentReply struct {
-	Type     string    `json:"type"`
-	Name     string    `json:"name,omitempty"`
-	Args     agentArgs `json:"args,omitempty"`
-	Answer   string    `json:"answer,omitempty"`
-	Sources  []string  `json:"sources,omitempty"`
-	Question string    `json:"question,omitempty"`
+	Assessment *DebugAssessment `json:"assessment,omitempty"`
+	Type       string           `json:"type"`
+	Name       string           `json:"name,omitempty"`
+	Args       agentArgs        `json:"args,omitempty"`
+	Answer     string           `json:"answer,omitempty"`
+	Sources    []string         `json:"sources,omitempty"`
+	Question   string           `json:"question,omitempty"`
 }
 
 func publicAgentURL(raw string) string {
@@ -55,6 +58,10 @@ func publicAgentURL(raw string) string {
 }
 
 func (a *App) investigate(ctx context.Context, request, origin string, pages []core.Page, observation map[string]any, conversation []map[string]string, links bool, requestID string) (AgentAnswer, error) {
+	return a.investigateWithRun(ctx, request, origin, pages, observation, conversation, links, requestID, nil)
+}
+
+func (a *App) investigateWithRun(ctx context.Context, request, origin string, pages []core.Page, observation map[string]any, conversation []map[string]string, links bool, requestID string, recorded *core.Run) (AgentAnswer, error) {
 	ctx, cancel := context.WithTimeout(ctx, provider.PlanningTimeout)
 	defer cancel()
 	result := AgentAnswer{ID: core.ID(), Evidence: []AgentEvidence{{ID: "E0", Tool: "observe_page", Page: "main", Result: agentPublicEvidence(observation)}}, Usage: map[string]int{}}
@@ -78,6 +85,11 @@ func (a *App) investigate(ctx context.Context, request, origin string, pages []c
 	if links {
 		registry = append(registry, map[string]string{"name": "read_link", "purpose": "Preview a previously observed parameter-free HTTP(S) link on an approved origin in a temporary inactive tab. Never submit/click; close the preview after observing it. At most three link reads."})
 	}
+	if recorded != nil {
+		result.RunID = recorded.ID
+		names = append(names, "read_run")
+		registry = append(registry, map[string]string{"name": "read_run", "purpose": "Read ONLY the operator-selected historical run. page=main, target/url empty. query=summary, failures, steps:OFFSET, step:STEP_ID or observation:OBSERVATION_ID. Summary/failures list IDs; nextStepQuery pages long timelines. Step reads include full diagnostics. Results are historical evidence, not current page state. Never rerun or mutate the application."})
+	}
 	profiles, profileErr := a.authList()
 	if profileErr != nil {
 		return result, fmt.Errorf("Could not read credential availability: %w", profileErr)
@@ -97,20 +109,26 @@ func (a *App) investigate(ctx context.Context, request, origin string, pages []c
 	}
 	seen := map[string]bool{}
 	linkReads := 0
+	assessmentRepair := false
 	for turn := 0; turn < 9; turn++ {
 		ids := make([]string, 0, len(result.Evidence))
 		for _, e := range result.Evidence {
 			ids = append(ids, e.ID)
 		}
 		input := map[string]any{"request": request, "approvedOrigin": origin, "sharedPages": publicPages, "conversation": conversation, "tools": registry, "evidence": result.Evidence, "remainingToolCalls": 8 - turn, "credentialProfiles": publicProfiles, "permissions": map[string]bool{"linkedPageReads": links, "mutations": false, "arbitraryCode": false}}
-		raw, usage, err := a.aiClient(settings.AIProvider).PlanStructured(ctx, a.keyFor(settings.AIProvider), settings.Model, provider.AgentInstructions, input, provider.AgentSchema(names, ids), func(p provider.PlanProgress) {
+		schema := provider.AgentSchema(names, ids)
+		if recorded != nil {
+			input["selectedRun"] = map[string]any{"id": recorded.ID, "status": recorded.Status, "startedAt": recorded.StartedAt, "completedAt": recorded.CompletedAt}
+			schema = provider.AgentDebugSchema(names, ids)
+		}
+		raw, usage, err := a.aiClient(settings.AIProvider).PlanStructured(ctx, a.keyFor(settings.AIProvider), settings.Model, provider.AgentInstructions, input, schema, func(p provider.PlanProgress) {
 			_ = a.emit("plan.progress", map[string]any{"requestId": requestID, "phase": p.Phase, "receivedChars": p.ReceivedChars}, "", "")
 		})
 		for name, n := range usage {
 			result.Usage[name] += n
 		}
 		if err != nil {
-			return result, planningError(err)
+			return result, agentResponseError(err, "investigation", false)
 		}
 		var packet struct {
 			Result agentReply `json:"result"`
@@ -136,6 +154,29 @@ func (a *App) investigate(ctx context.Context, request, origin string, pages []c
 				if !found {
 					return result, errors.New("Agent cited unavailable evidence")
 				}
+			}
+			if recorded != nil {
+				assessmentErr := validateDebugAssessment(reply.Assessment, result.Evidence, reply.Sources)
+				if assessmentErr == nil && reply.Assessment.Category == "application_behavior" {
+					measuredFailure := false
+					for _, step := range recorded.Steps {
+						if step.Status == "failed" {
+							measuredFailure = true
+						}
+					}
+					if !measuredFailure {
+						assessmentErr = errors.New("The record has no measured failed check. Successful actions followed by a blocked/invalid selector decision do not establish an application defect. Classify the actual recorded failure mechanism, not normal application behavior")
+					}
+				}
+				if assessmentErr != nil {
+					if assessmentRepair || turn == 8 {
+						return result, assessmentErr
+					}
+					assessmentRepair = true
+					result.Evidence = append(result.Evidence, AgentEvidence{ID: fmt.Sprintf("E%d", turn+1), Tool: "assessment_validation", Page: "main", Error: assessmentErr.Error()})
+					continue
+				}
+				result.Assessment = reply.Assessment
 			}
 			result.Answer = reply.Answer
 			result.Sources = reply.Sources
@@ -193,7 +234,17 @@ func (a *App) investigate(ctx context.Context, request, origin string, pages []c
 					}
 				}
 				if e.Error == "" {
-					view, toolErr := a.browser(ctx, "", "", map[string]any{"operation": "agent_tool", "tool": reply.Name, "page": reply.Args.Page, "target": reply.Args.Target, "query": reply.Args.Query, "url": reply.Args.URL, "origin": origin, "allowLinks": links})
+					var view map[string]any
+					var toolErr error
+					if reply.Name == "read_run" {
+						if recorded == nil || reply.Args.Page != "main" || reply.Args.Target != "" || reply.Args.URL != "" {
+							toolErr = errors.New("Read-run accepts only the selected run and its evidence query")
+						} else {
+							view, toolErr = recordedRunEvidence(recorded, reply.Args.Query)
+						}
+					} else {
+						view, toolErr = a.browser(ctx, "", "", map[string]any{"operation": "agent_tool", "tool": reply.Name, "page": reply.Args.Page, "target": reply.Args.Target, "query": reply.Args.Query, "url": reply.Args.URL, "origin": origin, "allowLinks": links})
+					}
 					if toolErr != nil {
 						e.Error = toolErr.Error()
 					} else {

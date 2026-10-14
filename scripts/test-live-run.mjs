@@ -9,11 +9,16 @@ import { DatabaseSync } from 'node:sqlite';
 import { execFileSync } from 'node:child_process';
 
 let plan = JSON.parse(await readFile(resolve(process.argv[2]), 'utf8'));
+const debugPath = process.argv
+  .find((arg) => arg.startsWith('--debug-run='))
+  ?.slice('--debug-run='.length);
+const debugRecord = debugPath ? JSON.parse(await readFile(resolve(debugPath), 'utf8')) : null;
 const automationUI = process.argv.includes('--automation-ui');
 const automationLive = process.argv.includes('--automation-live') || automationUI;
 const livePlanning = process.argv.includes('--plan-live') || automationLive;
 if (
-  (livePlanning ||
+  (debugRecord ||
+    livePlanning ||
     process.argv.includes('--followup') ||
     process.argv.includes('--investigate') ||
     process.argv.includes('--ask-ui')) &&
@@ -76,6 +81,12 @@ const operations = new Set([
   'security_audit',
 ]);
 if (!demoURL(url)) throw new Error('Plan starts outside the owned sandbox.');
+if (
+  debugRecord &&
+  (debugRecord.plan.origin !== origin ||
+    ['running', 'paused', 'queued'].includes(debugRecord.status))
+)
+  throw new Error('Debug acceptance requires a completed actual run from this owned origin.');
 for (const c of plan.cases)
   for (const a of c.steps) {
     if (
@@ -107,6 +118,7 @@ put.run(
   }),
 );
 put.run('plan', plan.id, JSON.stringify({ ...plan, confirmed: false }));
+if (debugRecord) put.run('run', debugRecord.id, JSON.stringify(debugRecord));
 db.close();
 const extension = join(work, 'extension');
 await cp(resolve('dist/extension'), extension, { recursive: true });
@@ -120,6 +132,7 @@ let context,
 const copiedKeys = ['openrouter-api-key.dpapi', 'api-key.dpapi'];
 try {
   if (
+    debugRecord ||
     livePlanning ||
     process.argv.includes('--followup') ||
     process.argv.includes('--investigate') ||
@@ -175,6 +188,16 @@ try {
   const panelErrors = [];
   panel.on('pageerror', (error) => panelErrors.push(error.message));
   await panel.addInitScript(() => {
+    globalThis.__recordedAnalyses = [];
+    const connect = chrome.runtime.connect.bind(chrome.runtime);
+    chrome.runtime.connect = (...args) => {
+      const port = connect(...args);
+      port.onMessage.addListener((message) => {
+        if (message.type === 'response' && message.result?.runId)
+          globalThis.__recordedAnalyses.push(message.result);
+      });
+      return port;
+    };
     globalThis.__voiceQAAnnouncements = 0;
     if (globalThis.speechSynthesis)
       globalThis.speechSynthesis.speak = () => {
@@ -253,298 +276,393 @@ try {
     url,
   );
   await rpc('bind', { tabId });
-  if (generic && (process.argv.includes('--investigate') || process.argv.includes('--ask-ui'))) {
-    const answer = await rpc('agent.query', {
-      request:
-        'Read the linked Workshop help page and report its cancellation window. Inspect the Attendee field and report its validation pattern and maximum length. Cite the evidence you used. Do not create a test plan, fill fields or submit a booking.',
-      readLinks: true,
-    });
-    await writeFile(join(work, 'investigation.json'), JSON.stringify(answer, null, 2));
-    if (
-      answer.clarification ||
-      !answer.answer ||
-      !answer.evidence.some((e) => e.tool === 'read_link' && !e.error) ||
-      !answer.evidence.some((e) => e.tool === 'inspect_element' && !e.error)
-    )
-      throw new Error('Actual investigation did not read linked evidence and inspect the control.');
-    console.log(
-      `Actual agent used ${answer.evidence.length - 1} browser tool calls and returned an evidence-backed answer.`,
-    );
-  }
-  if (workspace && process.argv.includes('--fixture-auth')) {
-    await rpc('auth.save', {
-      id: 'relay',
-      origin,
-      label: 'Isolated synthetic account',
-      username: 'qa@voiceqa.test',
-      password: 'fixture-only',
-      totpSecret: 'GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ',
-      algorithm: 'sha1',
-      digits: 6,
-      period: 30,
-    });
-  }
-  let runId;
-  if (automationUI) {
-    await panel
-      .getByRole('button', { name: 'Browser automation', exact: true })
-      .evaluate((button) => button.click());
+  if (debugRecord) {
+    const before = await target.locator('body').innerText();
+    await panel.getByRole('button', { name: 'History', exact: true }).click();
+    await panel.locator('.history-item').first().click();
+    await panel.getByRole('button', { name: 'Investigate with AI', exact: true }).click();
     await panel.waitForFunction(
       () =>
-        document.querySelector('.intent-picker option:checked')?.textContent.trim() ===
-        'Automate & execute',
-    );
-    for (const width of [360, 420]) {
-      await panel.setViewportSize({ width, height: 1000 });
-      const fits = await panel.evaluate(
-        () =>
-          document.documentElement.scrollWidth <= innerWidth &&
-          [...document.querySelectorAll('.workspace-switch button,.intent-picker')].every((el) => {
-            const r = el.getBoundingClientRect();
-            return r.left >= 0 && r.right <= innerWidth;
-          }),
-      );
-      if (!fits) throw new Error(`Automation controls overflow at ${width}px`);
-    }
-    await panel.evaluate((request) => {
-      const textarea = document.querySelector('#request');
-      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set.call(
-        textarea,
-        request,
-      );
-      textarea.dispatchEvent(new Event('input', { bubbles: true }));
-    }, plan.request);
-    await panel.waitForFunction(
-      () => !document.querySelector('[aria-label="Send test request"]').disabled,
-    );
-    await panel
-      .getByRole('button', { name: 'Send test request', exact: true })
-      .evaluate((button) => button.click());
-    await panel
-      .getByRole('button', { name: 'Approve mission and automate' })
-      .waitFor({ timeout: 480000 });
-    if (process.argv.includes('--review-permissions')) {
-      await panel.locator('.composer-options > summary').click();
-      await panel.getByLabel('Allow consequential actions').check();
-      await panel.locator('.composer-options > summary').click();
-      await panel.getByRole('button', { name: 'Approve mission and automate' }).click();
-      await panel.getByText('Automation permissions changed.', { exact: false }).first().waitFor();
-      if ((await rpc('state')).runId)
-        throw new Error('Changed permissions started the previously reviewed mission.');
-      await panel.locator('.composer-options > summary').click();
-      await panel.getByLabel('Allow consequential actions').uncheck();
-      await panel.locator('.composer-options > summary').click();
-      console.log('Actual UI blocked approval after permissions changed; no run started.');
-    }
-    await panel.screenshot({ path: join(work, 'mission-review.png'), fullPage: true });
-    await panel.getByRole('button', { name: 'Approve mission and automate' }).click();
-    const deadline = Date.now() + 15000;
-    while (Date.now() < deadline) {
-      const state = await rpc('state');
-      if (state.runId) {
-        runId = state.runId;
-        break;
-      }
-      await new Promise((done) => setTimeout(done, 100));
-    }
-    if (!runId) throw new Error('Automation mission did not start through UI approval');
-    plan = (await rpc('run.get', { id: runId })).plan;
-    await writeFile(join(work, 'live-extension-plan.json'), JSON.stringify(plan, null, 2));
-  } else if (livePlanning) {
-    console.log(`Planning through the real extension with ${plan.model}...`);
-    const started = Date.now();
-    plan = await rpc(automationLive ? 'automation.propose' : 'plan.propose', {
-      request: plan.request,
-      maxActions: 40,
-      allowConsequential: false,
-      discover: process.argv.includes('--discover'),
-      readLinks: true,
-      responsive: !plan.preserveViewport && plan.viewports.length > 1,
-      mode: plan.mode || 'qa',
-      securityAuthorized: Boolean(plan.securityAuthorized),
-      apiWritesAllowed: Boolean(plan.apiWritesAllowed),
-      visual: false,
-    });
-    await writeFile(join(work, 'live-extension-plan.json'), JSON.stringify(plan, null, 2));
-    console.log(
-      JSON.stringify({
-        liveExtensionPlan: true,
-        model: plan.model,
-        cases: plan.cases.length,
-        elapsedMs: Date.now() - started,
-      }),
-    );
-    if (plan.clarification) throw new Error(plan.clarification);
-  }
-  if (!runId) {
-    await rpc('plan.confirm', { id: plan.id, version: plan.version });
-    const started = await rpc('run.start', {
-      planId: plan.id,
-      version: plan.version,
-      key: crypto.randomUUID(),
-    });
-    runId = started.runId;
-  }
-  let run,
-    count = -1,
-    captured = false;
-  const deadline = Date.now() + 1200000;
-  while (Date.now() < deadline) {
-    run = await rpc('run.get', { id: runId });
-    if (run.steps.length !== count) {
-      count = run.steps.length;
-      const last = run.steps.at(-1);
-      console.log(`Step ${count}/${run.totalSteps}: ${last?.action.label || 'Starting'}`);
-    }
-    if (run.nextStep && !captured && run.steps.at(-1)?.action.operation === 'click') {
-      await panel.screenshot({ path: join(work, 'paced-run.png'), fullPage: true });
-      captured = true;
-    }
-    if (run.handoff) {
-      if (!workspace || run.handoff.kind !== 'captcha')
-        throw new Error('Unexpected operator checkpoint.');
-      // The tester supplies the operator action only on the synthetic fixture.
-      // The agent's following assertion must verify the application's result.
-      await target.getByTestId('challenge').check();
-      await rpc('handoff.complete', { id: run.handoff.id });
-    }
-    if (!['running', 'paused', 'queued'].includes(run.status)) break;
-    await new Promise((done) => setTimeout(done, 250));
-  }
-  await writeFile(join(work, 'run.json'), JSON.stringify(run, null, 2));
-  await panel.screenshot({ path: join(work, 'results.png'), fullPage: true });
-  const assertions = run.steps.filter((s) => ['assert', 'http_check'].includes(s.action.operation));
-  const gaps = run.steps
-    .slice(1)
-    .map((s, i) => Date.parse(s.startedAt) - Date.parse(run.steps[i].completedAt));
-  console.log(
-    JSON.stringify({
-      status: run.status,
-      recordedSteps: run.steps.length,
-      checks: assertions.length,
-      checksPassed: assertions.filter((s) => s.status === 'passed').length,
-      minimumGapMs: Math.min(...gaps),
-      evidence: join(work, 'run.json'),
-    }),
-  );
-  if (panelErrors.length || (await panel.evaluate(() => globalThis.__voiceQAAnnouncements !== 0)))
-    throw new Error('Chat produced a runtime error or unwanted voice announcement.');
-  await writeFile(
-    join(work, 'ui-checks.json'),
-    JSON.stringify(
-      { widths: [360, 420], reducedMotion: true, pageErrors: panelErrors, spokenAnnouncements: 0 },
+        globalThis.__recordedAnalyses.length > 0 ||
+        document.querySelector('article[data-kind=error]'),
       null,
-      2,
-    ),
-  );
-  if (generic && process.argv.includes('--followup') && run.status === 'passed') {
-    const revised = await rpc('plan.propose', {
-      request:
-        'Revise the booking check to use three Advanced seats instead. Calculate the new total from the earlier fee. Do not submit another booking; verify the preview total only.',
-      conversation: [
-        { role: 'user', text: plan.request },
-        { role: 'assistant', text: plan.summary },
-      ],
-      responsive: false,
-      mode: 'qa',
-      visual: false,
-    });
-    await writeFile(join(work, 'followup-plan.json'), JSON.stringify(revised, null, 2));
-    const steps = revised.cases.flatMap((c) => c.steps);
-    if (
-      revised.clarification ||
-      !steps.some((a) => a.operation === 'fill' && a.value === '3') ||
-      !steps.some(
-        (a) =>
-          a.operation === 'assert' && ['75', '$75.00', '75.00'].includes(a.assertion?.expected),
-      )
-    )
-      throw new Error('Actual AI follow-up did not preserve and revise the booking context.');
-    await rpc('plan.confirm', { id: revised.id, version: revised.version });
-    const next = await rpc('run.start', {
-      planId: revised.id,
-      version: revised.version,
-      key: crypto.randomUUID(),
-    });
-    let followupRun;
-    const followupDeadline = Date.now() + 180000;
-    while (Date.now() < followupDeadline) {
-      followupRun = await rpc('run.get', { id: next.runId });
-      if (!['running', 'paused', 'queued'].includes(followupRun.status)) break;
-      await new Promise((done) => setTimeout(done, 250));
+      {
+        timeout: 480000,
+      },
+    );
+    const answer = await panel.evaluate(() => globalThis.__recordedAnalyses.at(-1));
+    if (!answer) {
+      await panel.screenshot({ path: join(work, 'debug-error.png'), fullPage: true });
+      const failure = await panel.locator('article[data-kind=error]').first().innerText();
+      throw new Error(`Actual debugging failed: ${failure}`);
     }
-    await writeFile(join(work, 'followup-run.json'), JSON.stringify(followupRun, null, 2));
-    if (followupRun.status !== 'passed')
-      throw new Error('Actual AI follow-up execution did not pass.');
-    console.log(
-      'Actual AI follow-up revised three seats and verified the $75 preview in the browser.',
-    );
-  }
-  if (generic && process.argv.includes('--ask-ui') && run.status === 'passed') {
-    await panel.getByLabel('Request mode').selectOption('ask');
-    await panel.evaluate(() => {
-      const textarea = document.querySelector('#request');
-      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set.call(
-        textarea,
-        'Read Workshop help and tell me how far in advance I can cancel. Cite the evidence.',
+    await writeFile(join(work, 'debug-answer.json'), JSON.stringify(answer, null, 2));
+    if (!answer.assessment)
+      throw new Error(
+        `Actual debugging asked for clarification instead of analyzing the available record: ${answer.clarification || 'no assessment'}`,
       );
-      textarea.dispatchEvent(new Event('input', { bubbles: true }));
-    });
-    await panel.waitForFunction(
-      () => !document.querySelector('[aria-label="Send question"]').disabled,
-    );
-    await panel
-      .getByRole('button', { name: 'Send question', exact: true })
-      .evaluate((button) => button.click());
-    await panel
-      .getByText(/Cancellation.*24|cancel.*24|24 hours/i)
-      .last()
-      .waitFor({ timeout: 480000 });
-    await panel
-      .getByText(/Evidence and tool calls/)
-      .last()
-      .waitFor();
-    await panel.screenshot({ path: join(work, 'ask-answer.png'), fullPage: true });
-    if (panelErrors.length || (await panel.evaluate(() => globalThis.__voiceQAAnnouncements !== 0)))
-      throw new Error('Q&A chat failed runtime/silent-operation checks');
-    console.log(
-      'Actual Ask chat submitted the question and rendered the evidence-backed model answer.',
-    );
-  }
-  const expectedTotalDefect = process.argv.includes('--expect-total-defect');
-  if (expectedTotalDefect) {
-    if (!automationLive || origin !== 'http://127.0.0.1:4178')
-      throw new Error('The receipt-defect check is limited to the owned adaptive wizard.');
-    const receipt = await target.locator('#receipt').textContent();
-    const submitted = await target.locator('#submitted').textContent();
-    const failedTotal = assertions.some(
-      (s) => s.status === 'failed' && /410(?:\.00)?/.test(s.action.assertion?.expected || ''),
-    );
+    if (answer.model !== plan.model || !answer.usage?.total_tokens)
+      throw new Error('Debugging did not return usage from the selected actual model.');
+    await panel.screenshot({ path: join(work, 'debug-answer.png'), fullPage: true });
+    const category = process.argv
+      .find((arg) => arg.startsWith('--expect-category='))
+      ?.slice('--expect-category='.length);
     if (
-      run.status !== 'failed' ||
-      !failedTotal ||
-      !receipt.includes('$435.00') ||
-      submitted !== 'Reservations submitted: 1'
+      answer.runId !== debugRecord.id ||
+      !answer.sources.some((id) =>
+        answer.evidence.some((e) => e.id === id && e.tool === 'read_run' && !e.error),
+      ) ||
+      (category && answer.assessment.category !== category)
+    )
+      throw new Error('Actual debugging did not classify and cite the selected recorded evidence.');
+    if (
+      category === 'application_behavior' &&
+      (!JSON.stringify(answer.assessment).includes('410') ||
+        !JSON.stringify(answer.assessment).includes('435'))
     )
       throw new Error(
-        'Actual AI did not detect the incorrect receipt using the independently expected $410 total, or submitted more than once.',
+        'Actual debugging missed the recorded expected/observed pricing discrepancy.',
       );
+    if (
+      (await target.locator('body').innerText()) !== before ||
+      (await rpc('run.get', { id: debugRecord.id })).status !== debugRecord.status
+    )
+      throw new Error('Investigation mutated the page or rewrote the historical run verdict.');
+    if (panelErrors.length || (await panel.evaluate(() => globalThis.__voiceQAAnnouncements !== 0)))
+      throw new Error('Debugging chat produced runtime errors or unwanted voice.');
     console.log(
-      'Actual AI caught the incorrect $435 receipt against the $410 pricing oracle; exactly one reservation submitted.',
+      JSON.stringify({
+        recordedRun: answer.runId,
+        category: answer.assessment.category,
+        confidence: answer.assessment.confidence,
+        toolCalls: answer.evidence.filter(
+          (e) => e.id !== 'E0' && e.tool !== 'assessment_validation',
+        ).length,
+        evidence: join(work, 'debug-answer.json'),
+        currentPageUnchanged: true,
+        historicalVerdictUnchanged: true,
+      }),
     );
+  } else {
+    if (generic && (process.argv.includes('--investigate') || process.argv.includes('--ask-ui'))) {
+      const answer = await rpc('agent.query', {
+        request:
+          'Read the linked Workshop help page and report its cancellation window. Inspect the Attendee field and report its validation pattern and maximum length. Cite the evidence you used. Do not create a test plan, fill fields or submit a booking.',
+        readLinks: true,
+      });
+      await writeFile(join(work, 'investigation.json'), JSON.stringify(answer, null, 2));
+      if (
+        answer.clarification ||
+        !answer.answer ||
+        !answer.evidence.some((e) => e.tool === 'read_link' && !e.error) ||
+        !answer.evidence.some((e) => e.tool === 'inspect_element' && !e.error)
+      )
+        throw new Error(
+          'Actual investigation did not read linked evidence and inspect the control.',
+        );
+      console.log(
+        `Actual agent used ${answer.evidence.length - 1} browser tool calls and returned an evidence-backed answer.`,
+      );
+    }
+    if (workspace && process.argv.includes('--fixture-auth')) {
+      await rpc('auth.save', {
+        id: 'relay',
+        origin,
+        label: 'Isolated synthetic account',
+        username: 'qa@voiceqa.test',
+        password: 'fixture-only',
+        totpSecret: 'GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ',
+        algorithm: 'sha1',
+        digits: 6,
+        period: 30,
+      });
+    }
+    let runId;
+    if (automationUI) {
+      await panel
+        .getByRole('button', { name: 'Browser automation', exact: true })
+        .evaluate((button) => button.click());
+      await panel.waitForFunction(
+        () =>
+          document.querySelector('.intent-picker option:checked')?.textContent.trim() ===
+          'Automate & execute',
+      );
+      for (const width of [360, 420]) {
+        await panel.setViewportSize({ width, height: 1000 });
+        const fits = await panel.evaluate(
+          () =>
+            document.documentElement.scrollWidth <= innerWidth &&
+            [...document.querySelectorAll('.workspace-switch button,.intent-picker')].every(
+              (el) => {
+                const r = el.getBoundingClientRect();
+                return r.left >= 0 && r.right <= innerWidth;
+              },
+            ),
+        );
+        if (!fits) throw new Error(`Automation controls overflow at ${width}px`);
+      }
+      await panel.evaluate((request) => {
+        const textarea = document.querySelector('#request');
+        Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set.call(
+          textarea,
+          request,
+        );
+        textarea.dispatchEvent(new Event('input', { bubbles: true }));
+      }, plan.request);
+      await panel.waitForFunction(
+        () => !document.querySelector('[aria-label="Send automation request"]').disabled,
+      );
+      await panel
+        .getByRole('button', { name: 'Send automation request', exact: true })
+        .evaluate((button) => button.click());
+      await panel
+        .getByRole('button', { name: 'Start live automation' })
+        .waitFor({ timeout: 480000 });
+      if (process.argv.includes('--review-permissions')) {
+        await panel.locator('.composer-options > summary').click();
+        await panel.getByLabel('Allow consequential actions').check();
+        await panel.locator('.composer-options > summary').click();
+        await panel.getByRole('button', { name: 'Start live automation' }).click();
+        await panel
+          .getByText('Automation permissions changed.', { exact: false })
+          .first()
+          .waitFor();
+        if ((await rpc('state')).runId)
+          throw new Error('Changed permissions started the previously reviewed mission.');
+        await panel.locator('.composer-options > summary').click();
+        await panel.getByLabel('Allow consequential actions').uncheck();
+        await panel.locator('.composer-options > summary').click();
+        console.log('Actual UI blocked approval after permissions changed; no run started.');
+      }
+      await panel.screenshot({ path: join(work, 'mission-review.png'), fullPage: true });
+      await panel.getByRole('button', { name: 'Start live automation' }).click();
+      const deadline = Date.now() + 15000;
+      while (Date.now() < deadline) {
+        const state = await rpc('state');
+        if (state.runId) {
+          runId = state.runId;
+          break;
+        }
+        await new Promise((done) => setTimeout(done, 100));
+      }
+      if (!runId) throw new Error('Automation mission did not start through UI approval');
+      plan = (await rpc('run.get', { id: runId })).plan;
+      if (
+        !plan.automation?.live ||
+        plan.cases.length ||
+        plan.automation.criteria.length ||
+        Object.values(plan.usage || {}).some((value) => value !== 0)
+      )
+        throw new Error(
+          'Automation prepared an AI plan/checklist instead of starting the live tool loop.',
+        );
+      await writeFile(join(work, 'live-extension-plan.json'), JSON.stringify(plan, null, 2));
+    } else if (livePlanning) {
+      console.log(`Planning through the real extension with ${plan.model}...`);
+      const started = Date.now();
+      plan = await rpc(automationLive ? 'automation.propose' : 'plan.propose', {
+        request: plan.request,
+        maxActions: 40,
+        allowConsequential: false,
+        discover: process.argv.includes('--discover'),
+        readLinks: true,
+        responsive: !plan.preserveViewport && plan.viewports.length > 1,
+        mode: plan.mode || 'qa',
+        securityAuthorized: Boolean(plan.securityAuthorized),
+        apiWritesAllowed: Boolean(plan.apiWritesAllowed),
+        visual: false,
+      });
+      await writeFile(join(work, 'live-extension-plan.json'), JSON.stringify(plan, null, 2));
+      console.log(
+        JSON.stringify({
+          liveExtensionPlan: true,
+          model: plan.model,
+          cases: plan.cases.length,
+          elapsedMs: Date.now() - started,
+        }),
+      );
+      if (plan.clarification) throw new Error(plan.clarification);
+    }
+    if (!runId) {
+      await rpc('plan.confirm', { id: plan.id, version: plan.version });
+      const started = await rpc('run.start', {
+        planId: plan.id,
+        version: plan.version,
+        key: crypto.randomUUID(),
+      });
+      runId = started.runId;
+    }
+    let run,
+      count = -1,
+      captured = false;
+    const deadline = Date.now() + 1200000;
+    while (Date.now() < deadline) {
+      run = await rpc('run.get', { id: runId });
+      if (run.steps.length !== count) {
+        count = run.steps.length;
+        const last = run.steps.at(-1);
+        console.log(`Step ${count}/${run.totalSteps}: ${last?.action.label || 'Starting'}`);
+      }
+      if (run.nextStep && !captured && run.steps.at(-1)?.action.operation === 'click') {
+        await panel.screenshot({ path: join(work, 'paced-run.png'), fullPage: true });
+        captured = true;
+      }
+      if (run.handoff) {
+        if (!workspace || run.handoff.kind !== 'captcha')
+          throw new Error('Unexpected operator checkpoint.');
+        // The tester supplies the operator action only on the synthetic fixture.
+        // The agent's following assertion must verify the application's result.
+        await target.getByTestId('challenge').check();
+        await rpc('handoff.complete', { id: run.handoff.id });
+      }
+      if (!['running', 'paused', 'queued'].includes(run.status)) break;
+      await new Promise((done) => setTimeout(done, 250));
+    }
+    await writeFile(join(work, 'run.json'), JSON.stringify(run, null, 2));
+    await panel.screenshot({ path: join(work, 'results.png'), fullPage: true });
+    const assertions = run.steps.filter((s) =>
+      ['assert', 'http_check'].includes(s.action.operation),
+    );
+    const gaps = run.steps
+      .slice(1)
+      .map((s, i) => Date.parse(s.startedAt) - Date.parse(run.steps[i].completedAt));
+    console.log(
+      JSON.stringify({
+        status: run.status,
+        recordedSteps: run.steps.length,
+        checks: assertions.length,
+        checksPassed: assertions.filter((s) => s.status === 'passed').length,
+        minimumGapMs: Math.min(...gaps),
+        evidence: join(work, 'run.json'),
+      }),
+    );
+    if (panelErrors.length || (await panel.evaluate(() => globalThis.__voiceQAAnnouncements !== 0)))
+      throw new Error('Chat produced a runtime error or unwanted voice announcement.');
+    await writeFile(
+      join(work, 'ui-checks.json'),
+      JSON.stringify(
+        {
+          widths: [360, 420],
+          reducedMotion: true,
+          pageErrors: panelErrors,
+          spokenAnnouncements: 0,
+        },
+        null,
+        2,
+      ),
+    );
+    if (generic && process.argv.includes('--followup') && run.status === 'passed') {
+      const revised = await rpc('plan.propose', {
+        request:
+          'Revise the booking check to use three Advanced seats instead. Calculate the new total from the earlier fee. Do not submit another booking; verify the preview total only.',
+        conversation: [
+          { role: 'user', text: plan.request },
+          { role: 'assistant', text: plan.summary },
+        ],
+        responsive: false,
+        mode: 'qa',
+        visual: false,
+      });
+      await writeFile(join(work, 'followup-plan.json'), JSON.stringify(revised, null, 2));
+      const steps = revised.cases.flatMap((c) => c.steps);
+      if (
+        revised.clarification ||
+        !steps.some((a) => a.operation === 'fill' && a.value === '3') ||
+        !steps.some(
+          (a) =>
+            a.operation === 'assert' && ['75', '$75.00', '75.00'].includes(a.assertion?.expected),
+        )
+      )
+        throw new Error('Actual AI follow-up did not preserve and revise the booking context.');
+      await rpc('plan.confirm', { id: revised.id, version: revised.version });
+      const next = await rpc('run.start', {
+        planId: revised.id,
+        version: revised.version,
+        key: crypto.randomUUID(),
+      });
+      let followupRun;
+      const followupDeadline = Date.now() + 180000;
+      while (Date.now() < followupDeadline) {
+        followupRun = await rpc('run.get', { id: next.runId });
+        if (!['running', 'paused', 'queued'].includes(followupRun.status)) break;
+        await new Promise((done) => setTimeout(done, 250));
+      }
+      await writeFile(join(work, 'followup-run.json'), JSON.stringify(followupRun, null, 2));
+      if (followupRun.status !== 'passed')
+        throw new Error('Actual AI follow-up execution did not pass.');
+      console.log(
+        'Actual AI follow-up revised three seats and verified the $75 preview in the browser.',
+      );
+    }
+    if (generic && process.argv.includes('--ask-ui') && run.status === 'passed') {
+      await panel.getByLabel('Request mode').selectOption('ask');
+      await panel.evaluate(() => {
+        const textarea = document.querySelector('#request');
+        Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set.call(
+          textarea,
+          'Read Workshop help and tell me how far in advance I can cancel. Cite the evidence.',
+        );
+        textarea.dispatchEvent(new Event('input', { bubbles: true }));
+      });
+      await panel.waitForFunction(
+        () => !document.querySelector('[aria-label="Send question"]').disabled,
+      );
+      await panel
+        .getByRole('button', { name: 'Send question', exact: true })
+        .evaluate((button) => button.click());
+      await panel
+        .getByText(/Cancellation.*24|cancel.*24|24 hours/i)
+        .last()
+        .waitFor({ timeout: 480000 });
+      await panel
+        .getByText(/Evidence and tool calls/)
+        .last()
+        .waitFor();
+      await panel.screenshot({ path: join(work, 'ask-answer.png'), fullPage: true });
+      if (
+        panelErrors.length ||
+        (await panel.evaluate(() => globalThis.__voiceQAAnnouncements !== 0))
+      )
+        throw new Error('Q&A chat failed runtime/silent-operation checks');
+      console.log(
+        'Actual Ask chat submitted the question and rendered the evidence-backed model answer.',
+      );
+    }
+    const expectedTotalDefect = process.argv.includes('--expect-total-defect');
+    if (expectedTotalDefect) {
+      if (!automationLive || origin !== 'http://127.0.0.1:4178')
+        throw new Error('The receipt-defect check is limited to the owned adaptive wizard.');
+      const receipt = await target.locator('#receipt').textContent();
+      const submitted = await target.locator('#submitted').textContent();
+      const failedTotal = assertions.some(
+        (s) => s.status === 'failed' && /410(?:\.00)?/.test(s.action.assertion?.expected || ''),
+      );
+      if (
+        run.status !== 'failed' ||
+        !failedTotal ||
+        !receipt.includes('$435.00') ||
+        submitted !== 'Reservations submitted: 1'
+      )
+        throw new Error(
+          'Actual AI did not detect the incorrect receipt using the independently expected $410 total, or submitted more than once.',
+        );
+      console.log(
+        'Actual AI caught the incorrect $435 receipt against the $410 pricing oracle; exactly one reservation submitted.',
+      );
+    }
+    const expectedFailure = process.argv.includes('--expect-failed');
+    if (
+      (expectedTotalDefect
+        ? false
+        : expectedFailure
+          ? run.status !== 'failed' ||
+            !assertions.some((s) => s.status === 'failed') ||
+            !assertions.some((s) => s.status === 'passed')
+          : run.status !== 'passed') ||
+      (!process.argv.includes('--fast') && gaps.some((ms) => ms < 3900))
+    )
+      throw new Error('Paced workflow did not pass with the required gap.');
   }
-  const expectedFailure = process.argv.includes('--expect-failed');
-  if (
-    (expectedTotalDefect
-      ? false
-      : expectedFailure
-        ? run.status !== 'failed' ||
-          !assertions.some((s) => s.status === 'failed') ||
-          !assertions.some((s) => s.status === 'passed')
-        : run.status !== 'passed') ||
-    (!process.argv.includes('--fast') && gaps.some((ms) => ms < 3900))
-  )
-    throw new Error('Paced workflow did not pass with the required gap.');
 } finally {
   try {
     await context?.close();
@@ -562,6 +680,7 @@ try {
         ]);
     } finally {
       if (
+        debugRecord ||
         livePlanning ||
         process.argv.includes('--followup') ||
         process.argv.includes('--investigate') ||

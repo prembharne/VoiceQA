@@ -1,6 +1,6 @@
 # Advanced browser QA goal - active capability audit
 
-The requested goal remains broad: general end-to-end workflows, debugging, Q&A, authorized logical security checks, stronger Chrome isolation, more agent tools and outstanding real-model results across websites. Version 0.9.0 adds a verified adaptive browser automation workspace alongside QA & debugging. It is not completion of the entire goal, including the requested highest browser-automation capability.
+The requested goal remains broad: general end-to-end workflows, debugging, Q&A, authorized logical security checks, stronger Chrome isolation, more agent tools and outstanding real-model results across websites. The user's latest correction specifically requires browser automation to use live tools from the current page/request, without preplanning. Version 0.10.0 removes the initial AI mission-planning call/checklist and adds scoped historical debugging. It is not completion of the entire highest-capability goal.
 
 ## Current implementation and evidence
 
@@ -17,9 +17,11 @@ The requested goal remains broad: general end-to-end workflows, debugging, Q&A, 
 
 ## Still incomplete for the full goal
 
+Latest verified progress: direct live tools passed the Osaka journey in 9 steps/2 checks with no initial AI plan, and caught the intentionally incorrect Tokyo receipt using $410 versus $435. Actual historical debugging distinguished the pricing discrepancy from a blocked selector after local correction. See `BROWSER_AUTOMATION.md` and `RECORDED_DEBUGGING.md` for evidence. This does not close the broader requirements below.
+
 1. Adaptive automation now passes an unseen multi-stage wizard through a reviewed mission and independently verified completion. More complex tasks, adaptive QA testing, temporal assertions, recovery and multiple application categories still need validation. See `BROWSER_AUTOMATION.md` for evidence and limits.
 2. Broader tool/action coverage for downloads/uploads, custom widgets, drag-and-drop, semantic outcome verification, browser timing/performance and scaled/transformed frame geometry. Existing same-origin frame/shadow-root support is not proof of all frame/widget compatibility.
-3. Model-assisted debugging grounded in complete scoped run evidence, including explicit distinctions between faulty expectations, selector problems, transient backend failures and reproducible application defects. Runtime collection cannot reconstruct events that occurred before attachment.
+3. Recorded-run model-assisted debugging now reads scoped evidence and distinguishes the tested pricing/selector cases. More categories (faulty expectations, transient backend failures, session/scope errors and reproducibility), larger recordings and adversarial privacy still need real acceptance. Runtime collection cannot reconstruct events before attachment, and model hypotheses are not proven root causes.
 4. Fresh generic-planner logical security validation: account/resource ownership, server roles, price authority, CSRF and duplicate submission with positive controls and real model-generated requests. Earlier release fixture results do not validate the new general agent.
 5. Repeatable multi-application acceptance matrix: different application categories, complex stateful journeys, independent intentional defects, multiple origins/tabs, session recovery and legitimate MFA/human challenges. One booking site plus help page does not prove "any website" or outstanding results across the full scope.
 6. Further adversarial and long-running hardening: injected website instructions, scope changes during tool calls, stale evidence, privacy in nested documents, renderer restarts and sustained tool/transport failures.

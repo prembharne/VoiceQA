@@ -48,46 +48,11 @@ func (a *App) proposeAutomation(ctx context.Context, m native.Message) (any, err
 		return nil, err
 	}
 	s := a.getSettings()
-	raw, usage, err := a.aiClient(s.AIProvider).PlanStructured(ctx, a.keyFor(s.AIProvider), s.Model, provider.AutomationProposalInstructions, map[string]any{"request": p.Request, "observation": agentPublicEvidence(obs), "conversation": p.Conversation, "permissions": map[string]any{"allowConsequential": p.AllowConsequential, "apiWritesAllowed": p.APIWritesAllowed, "maxActions": p.MaxActions}, "sharedPages": agentPublicEvidence(map[string]any{"pages": p.Pages})["pages"]}, provider.AutomationProposalSchema(), func(pr provider.PlanProgress) {
-		_ = a.emit("plan.progress", map[string]any{"requestId": m.ID, "phase": pr.Phase, "receivedChars": pr.ReceivedChars}, "", "")
-	})
-	if err != nil {
-		return nil, planningError(err)
-	}
-	var draft struct {
-		Summary  string   `json:"summary"`
-		Criteria []string `json:"criteria"`
-		Question string   `json:"question"`
-	}
-	if err = json.Unmarshal(raw, &draft); err != nil {
+	// This is a local scope/permission record. No AI call or action plan is
+	// generated before the live tool loop starts.
+	plan := core.Plan{Conversation: p.Conversation, ID: core.ID(), Version: 1, Request: p.Request, URL: p.URL, Origin: p.Origin, Pages: p.Pages, Mode: "automation", PreserveViewport: true, Viewports: []core.Viewport{observedViewport(obs)}, Summary: trim(p.Request, 1800), AIProvider: s.AIProvider, Model: s.Model, CreatedAt: core.Now(), Usage: map[string]int{}, Cases: []core.Case{}, APIWritesAllowed: p.APIWritesAllowed, Automation: &core.AutomationPolicy{Live: true, MaxActions: p.MaxActions, AllowConsequential: p.AllowConsequential, Criteria: []string{}}}
+	if err = core.ValidatePlan(plan); err != nil {
 		return nil, err
-	}
-	plan := core.Plan{ID: core.ID(), Version: 1, Request: p.Request, URL: p.URL, Origin: p.Origin, Pages: p.Pages, Mode: "automation", PreserveViewport: true, Viewports: []core.Viewport{observedViewport(obs)}, Summary: draft.Summary, Clarification: draft.Question, AIProvider: s.AIProvider, Model: s.Model, CreatedAt: core.Now(), Usage: usage, Cases: []core.Case{}, APIWritesAllowed: p.APIWritesAllowed, Automation: &core.AutomationPolicy{MaxActions: p.MaxActions, AllowConsequential: p.AllowConsequential, Criteria: draft.Criteria}}
-	if plan.Clarification == "" {
-		if err = core.ValidatePlan(plan); err != nil {
-			input := map[string]any{"request": p.Request, "observation": agentPublicEvidence(obs), "previousProposal": draft, "validationError": err.Error(), "rule": "Replace interaction instructions with final-state outcome criteria. Preserve the complete requested goal."}
-			fixed, extraUsage, fixErr := a.aiClient(s.AIProvider).PlanStructured(ctx, a.keyFor(s.AIProvider), s.Model, provider.AutomationProposalInstructions, input, provider.AutomationProposalSchema(), nil)
-			if plan.Usage == nil {
-				plan.Usage = map[string]int{}
-			}
-			for key, n := range extraUsage {
-				plan.Usage[key] += n
-			}
-			if fixErr != nil {
-				return nil, fixErr
-			}
-			if fixErr = json.Unmarshal(fixed, &draft); fixErr != nil {
-				return nil, fixErr
-			}
-			plan.Summary = draft.Summary
-			plan.Clarification = draft.Question
-			plan.Automation.Criteria = draft.Criteria
-			if draft.Question == "" {
-				if err = core.ValidatePlan(plan); err != nil {
-					return nil, err
-				}
-			}
-		}
 	}
 	if err = ctx.Err(); err != nil {
 		return nil, err
@@ -96,6 +61,7 @@ func (a *App) proposeAutomation(ctx context.Context, m native.Message) (any, err
 }
 
 type automationCheck struct {
+	Requirement string      `json:"requirement,omitempty"`
 	CriterionID int         `json:"criterionId"`
 	Action      core.Action `json:"action"`
 }
@@ -194,12 +160,15 @@ func (a *App) executeAutomation(ctx context.Context, r *core.Run) {
 				history = history[len(history)-12:]
 			}
 			schema := provider.AutomationStepSchema(len(r.Plan.Automation.Criteria))
-			raw, usage, e := a.aiClient(r.Plan.AIProvider).PlanStructured(ctx, a.keyFor(r.Plan.AIProvider), r.Plan.Model, provider.AutomationInstructions, map[string]any{"goal": r.Plan.Request, "successCriteria": r.Plan.Automation.Criteria, "permissions": r.Plan.Automation, "apiWritesAllowed": r.Plan.APIWritesAllowed, "scope": scope, "observation": public, "observedStateHistory": r.Observations, "earlierEvidenceOmitted": r.EvidenceOmitted, "recentSteps": agentPublicEvidence(map[string]any{"steps": history})["steps"], "publicValues": r.Values, "credentialProfiles": allowedProfiles, "remainingActions": r.Plan.Automation.MaxActions - len(r.Steps), "validationError": validation}, schema, nil)
+			if r.Plan.Automation.Live {
+				schema = provider.AutomationLiveStepSchema()
+			}
+			raw, usage, e := a.aiClient(r.Plan.AIProvider).PlanStructured(ctx, a.keyFor(r.Plan.AIProvider), r.Plan.Model, provider.AutomationInstructions, map[string]any{"goal": r.Plan.Request, "conversation": r.Plan.Conversation, "successCriteria": r.Plan.Automation.Criteria, "permissions": r.Plan.Automation, "apiWritesAllowed": r.Plan.APIWritesAllowed, "scope": scope, "observation": public, "observedStateHistory": r.Observations, "earlierEvidenceOmitted": r.EvidenceOmitted, "recentSteps": agentPublicEvidence(map[string]any{"steps": history})["steps"], "publicValues": r.Values, "credentialProfiles": allowedProfiles, "remainingActions": r.Plan.Automation.MaxActions - len(r.Steps), "validationError": validation}, schema, nil)
 			for key, n := range usage {
 				r.Usage[key] += n
 			}
 			if e != nil {
-				a.setInterrupted(r, planningError(e))
+				a.setInterrupted(r, agentResponseError(e, "next tool decision", true))
 				return
 			}
 			var packet struct {
@@ -245,6 +214,9 @@ func (a *App) executeAutomation(ctx context.Context, r *core.Run) {
 					normalizeAutomationCheckTargets(decision.Checks, obs)
 					e = validateAutomationCompletion(r.Plan, scope, decision.Checks)
 				}
+				if e == nil && r.Plan.Automation.Live {
+					e = a.auditLiveCompletion(ctx, r, public, decision.Checks)
+				}
 			} else if e == nil && decision.Type != "blocked" {
 				e = errors.New("choose action, complete or blocked")
 			}
@@ -278,11 +250,18 @@ func (a *App) executeAutomation(ctx context.Context, r *core.Run) {
 				return
 			}
 			for _, check := range decision.Checks {
-				criterionLabel := []rune(r.Plan.Automation.Criteria[check.CriterionID-1])
+				criterion := check.Requirement
+				if !r.Plan.Automation.Live {
+					criterion = r.Plan.Automation.Criteria[check.CriterionID-1]
+				}
+				criterionLabel := []rune(criterion)
 				if len(criterionLabel) > 180 {
 					criterionLabel = append(criterionLabel[:180], '…')
 				}
 				check.Action.Label = fmt.Sprintf("Verify criterion %d: %s", check.CriterionID, string(criterionLabel))
+				if r.Plan.Automation.Live {
+					check.Action.Label = "Verify outcome: " + string(criterionLabel)
+				}
 				if err = a.runAutomationAction(ctx, r, check.Action, label); err != nil {
 					a.setAutomationFailure(r, err)
 					return
@@ -346,6 +325,23 @@ func rememberAutomationObservation(r *core.Run, public map[string]any) {
 }
 
 func validateAutomationCompletion(plan core.Plan, scope *core.Scope, checks []automationCheck) error {
+	if plan.Automation.Live {
+		if len(checks) < 1 || len(checks) > 20 {
+			return errors.New("live completion requires 1-20 independent outcome checks covering the full request")
+		}
+		seen := map[string]bool{}
+		for _, check := range checks {
+			key := strings.ToLower(strings.TrimSpace(check.Requirement))
+			if key == "" || len(key) > 500 || seen[key] || check.Action.Operation != "assert" {
+				return errors.New("live completion needs unique requested-outcome descriptions and assertions")
+			}
+			seen[key] = true
+			if err := core.ValidateAutomationAction(plan, scope.Clone(), check.Action); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
 	if len(checks) != len(plan.Automation.Criteria) {
 		return errors.New("completion must independently verify every approved success criterion")
 	}

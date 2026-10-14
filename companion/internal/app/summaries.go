@@ -13,6 +13,7 @@ func trim(value string, n int) string {
 	return value
 }
 func planSummary(p core.Plan) core.Plan {
+	p.Conversation = nil
 	p.Cases = nil
 	p.Dataset = nil
 	p.Pages = nil

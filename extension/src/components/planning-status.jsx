@@ -10,7 +10,7 @@ const labels = {
   validating: 'Checking the plan before review…',
   repairing: 'Correcting the draft after validation…',
 };
-export function PlanningStatus({ planning }) {
+export function PlanningStatus({ planning, live = false }) {
   const [startedAt, setStartedAt] = useState(() => Date.now());
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
@@ -25,11 +25,17 @@ export function PlanningStatus({ planning }) {
     <div className="thinking-message">
       <LoaderCircle className="spinner" size={16} aria-hidden="true" />
       <div>
-        <span role="status">{labels[planning?.phase] || labels.reading}</span>
+        <span role="status">
+          {live
+            ? 'Preparing access for live automation…'
+            : labels[planning?.phase] || labels.reading}
+        </span>
         <small>
-          {planning?.tools?.length
-            ? `Latest tool: ${planning.tools.at(-1).tool.replaceAll('_', ' ')} · ${planning.tools.length} calls`
-            : 'AI work can take up to 6 minutes. Stop cancels it.'}
+          {live
+            ? 'No AI plan is generated. Tools start after your approval.'
+            : planning?.tools?.length
+              ? `Latest tool: ${planning.tools.at(-1).tool.replaceAll('_', ' ')} · ${planning.tools.length} calls`
+              : 'AI work can take up to 6 minutes. Stop cancels it.'}
         </small>
       </div>
       <span className="planning-elapsed" aria-hidden="true">

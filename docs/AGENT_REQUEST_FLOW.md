@@ -1,6 +1,6 @@
 # Website-independent browser agent
 
-VoiceQA 0.9.0 has separate QA/debugging and adaptive browser-automation workspaces, plus evidence-backed Q&A in either workspace. RelayDesk contracts, reset URLs, validation rules and workflow splitting are not injected into normal AI requests. Explicit deterministic fixture suites remain separate developer tools.
+VoiceQA 0.10.0 has separate QA/debugging and direct live-tool browser-automation workspaces, plus evidence-backed Q&A in either workspace. Automation does not ask AI for an initial plan/checklist. RelayDesk contracts, reset URLs, validation rules and workflow splitting are not injected into normal AI requests. Explicit deterministic fixture suites remain separate developer tools.
 
 The request method selects the system contract and response schema:
 
@@ -8,7 +8,7 @@ The request method selects the system contract and response schema:
 | --- | --- | --- |
 | QA & debugging | `plan.propose` | Optional discovery tool loop, then a complete reviewed test plan; local assertions verify execution. |
 | Ask & investigate | `agent.query` | Repeated scoped read-only tool calls followed by an answer with evidence references. |
-| Browser automation | `automation.propose` | Reviewed mission and final-state criteria; after approval, fresh observations drive one typed action at a time. |
+| Browser automation | `automation.propose` | Local request/permission record, no AI call; after approval, live page state and the current request drive one typed tool action at a time. |
 
 The system contract defines stable behavior and boundaries. The JSON user message supplies the actual goal, live page evidence, permissions and context. The model's reply cannot grant permissions. In automation, later requests also include a sanitized observed-state history (at most 12 snapshots/96 KiB), recent action results, public captures and remaining budget. This matters because provider requests are stateless: action labels alone do not retain pricing or other rules from earlier pages.
 
@@ -18,8 +18,8 @@ The system contract defines stable behavior and boundaries. The JSON user messag
 2. The MV3 service worker checks the shared tab and supplies its actual URL, approved origin and shared page aliases.
 3. The Go companion reads fresh, redacted DOM observations from those already shared tabs. Observations contain accessible control names, selectors, safe link paths, dropdown options, field constraints and viewport dimensions. Link query strings and fragments are omitted to avoid sending URL-carried tokens; these destinations may require clarification.
 4. The provider adapter sends a system instruction followed by a JSON user message containing the request, evidence, public credential references and budgets. OpenRouter/NIM use Chat Completions; the configured OpenAI adapter uses its supported structured endpoint. The selected model is never silently changed.
-5. QA returns a JSON plan, Q&A returns a scoped tool request/answer, and automation initially returns a mission summary and criteria. The companion validates operations, origins, aliases, credential references, variables and assertion semantics. One invalid-draft repair is allowed with the same model and deadline.
-6. Executable tasks require review and confirmation of the exact version. QA executes the reviewed steps; automation repeatedly observes the current page, includes earlier evidence, calls the selected model, validates one proposed action and dispatches it. Completion requires an assertion for every approved criterion. Assertions determine whether the supplied expectations match actual outcomes; correct expectations still require evidence and live defect testing. Exact text/value/URL assertions retain case sensitivity; semantic `text_contains` checks ignore case. Control locators prefer exact names and only fall back to case-insensitive resolution. Native-dropdown compilation uses observed options on the exact document.
+5. QA returns a JSON plan and Q&A returns a scoped tool request/answer. Automation initially returns only the local request/permission record; its first AI call happens after approval and selects the next tool. The companion validates operations, origins, aliases, credential references, variables and assertion semantics.
+6. QA executes reviewed steps. Automation repeatedly observes the current page, includes earlier evidence/conversation, calls the selected model, validates one tool action and dispatches it. No action sequence is generated in advance. At completion, a separate late review checks request coverage and grounded expectations, then local assertions verify outcomes. Correct expectations still require evidence and live defect testing. Exact text/value/URL assertions retain case sensitivity; semantic `text_contains` checks ignore case. Control locators prefer exact names and only fall back to case-insensitive resolution. Native-dropdown compilation uses observed options on the exact document.
 
 The JSON inside the user message is data, not an additional system prompt. A simplified example (credentials omitted) is:
 

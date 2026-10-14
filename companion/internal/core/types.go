@@ -56,11 +56,13 @@ type Case struct {
 	Steps  []Action `json:"steps"`
 }
 type AutomationPolicy struct {
+	Live               bool     `json:"live,omitempty"`
 	MaxActions         int      `json:"maxActions"`
 	AllowConsequential bool     `json:"allowConsequential"`
 	Criteria           []string `json:"criteria"`
 }
 type Plan struct {
+	Conversation       []map[string]string `json:"conversation,omitempty"`
 	Automation         *AutomationPolicy   `json:"automation,omitempty"`
 	APIWritesAllowed   bool                `json:"apiWritesAllowed,omitempty"`
 	Mode               string              `json:"mode,omitempty"`
@@ -137,6 +139,14 @@ func AllowedURL(raw, origin string) bool {
 	return err == nil && (u.Scheme == "http" || u.Scheme == "https") && u.Scheme+"://"+u.Host == origin && u.User == nil
 }
 func validateResolvedPlan(p Plan) error {
+	if len(p.Conversation) > 6 {
+		return errors.New("conversation context exceeds six turns")
+	}
+	for _, turn := range p.Conversation {
+		if (turn["role"] != "user" && turn["role"] != "assistant") || len(turn["text"]) > 8000 {
+			return errors.New("invalid conversation reference data")
+		}
+	}
 	if len(p.URL) > 2000 || len(p.Request) > 8000 || len(p.Summary) > 2000 {
 		return errors.New("plan URL, request or summary exceeds its size limit")
 	}

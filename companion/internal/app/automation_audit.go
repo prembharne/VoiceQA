@@ -1,0 +1,45 @@
+package app
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"strings"
+	"voiceqa/companion/internal/core"
+	"voiceqa/companion/internal/provider"
+)
+
+// Review coverage only after the live agent reaches outcomes. This is never an
+// action plan, and does not dispatch browser tools or rewrite expectations.
+func (a *App) auditLiveCompletion(ctx context.Context, r *core.Run, current map[string]any, checks []automationCheck) error {
+	r.AgentPhase = "Checking the full request against recorded outcomes"
+	a.update(r)
+	if r.Status == "error" {
+		return errors.New(r.Error)
+	}
+	history := r.Steps
+	if len(history) > 12 {
+		history = history[len(history)-12:]
+	}
+	raw, usage, err := a.aiClient(r.Plan.AIProvider).PlanStructured(ctx, a.keyFor(r.Plan.AIProvider), r.Plan.Model, provider.AutomationAuditInstructions, map[string]any{"request": r.Plan.Request, "conversation": r.Plan.Conversation, "candidateChecks": checks, "observedStateHistory": r.Observations, "earlierEvidenceOmitted": r.EvidenceOmitted, "currentObservation": current, "publicCaptures": r.Values, "recentActions": agentPublicEvidence(map[string]any{"steps": history})["steps"]}, provider.AutomationAuditSchema(), nil)
+	for key, n := range usage {
+		r.Usage[key] += n
+	}
+	if err != nil {
+		return agentResponseError(err, "outcome coverage review", true)
+	}
+	var audit struct {
+		Covered  bool     `json:"covered"`
+		Missing  []string `json:"missingRequirements"`
+		Invalid  []string `json:"invalidExpectations"`
+		Question string   `json:"essentialQuestion"`
+	}
+	if err = json.Unmarshal(raw, &audit); err != nil {
+		return err
+	}
+	if !audit.Covered || len(audit.Missing) > 0 || len(audit.Invalid) > 0 || audit.Question != "" {
+		return fmt.Errorf("Completion is not yet supported for the whole request. Missing: %s. Unsupported expectations: %s. Essential question: %s. Add grounded outcome checks or continue with live tools; never change an expectation just to match an incorrect result.", recordedText(strings.Join(audit.Missing, "; "), 1500), recordedText(strings.Join(audit.Invalid, "; "), 1500), recordedText(audit.Question, 1000))
+	}
+	return nil
+}

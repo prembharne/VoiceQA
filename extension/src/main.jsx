@@ -24,6 +24,7 @@ function App() {
   const [messages, setMessages] = useState([]);
   const [drafting, setDrafting] = useState(false);
   const [intent, setIntent] = useState('test');
+  const [recordContext, setRecordContext] = useState(null);
   const [workspace, setWorkspace] = useState('qa');
   const [allowConsequential, setAllowConsequential] = useState(false);
   const [readLinks, setReadLinks] = useState(true);
@@ -263,6 +264,7 @@ function App() {
               : 'plan.propose',
           {
             request: demo ? 'Run the local demo fixture suite' : prompt,
+            runId: !demo && intent === 'ask' ? recordContext?.id : undefined,
             conversation: messages
               .filter((m) => ['user', 'plan', 'text', 'answer'].includes(m.kind))
               .slice(-6)
@@ -324,7 +326,7 @@ function App() {
           Boolean(selected.apiWritesAllowed) !== apiWrites)
       )
         throw new Error(
-          'Automation permissions changed. Propose a new mission so you can review the current permissions before running.',
+          'Automation permissions changed. Prepare this request again to review the current permissions before running.',
         );
       if (!selected.automation && !responsive && !selected.preserveViewport) {
         const current = await rpc('plan.fork', { id: selected.id, preserveViewport: true });
@@ -353,6 +355,55 @@ function App() {
       upsertRun(r);
       setPage('console');
     });
+  }
+  async function investigateRun(record) {
+    setIntent('ask');
+    setRecordContext({ id: record.id, origin: record.plan.origin });
+    const token = ++generation.current;
+    const prompt =
+      'Investigate this recorded run. Explain what happened, whether its expectations are supported by the recorded rules, and what to check next. Separate recorded facts from hypotheses. Do not rerun any actions.';
+    follow.current = true;
+    setPage('console');
+    setDrafting(true);
+    setMessages((items) => [
+      ...items,
+      {
+        id: crypto.randomUUID(),
+        kind: 'user',
+        text: 'Investigate the recorded run and explain its outcome.',
+      },
+    ]);
+    await perform(
+      async () => {
+        const answer = await rpc('agent.query', {
+          request: prompt,
+          runId: record.id,
+          readLinks: false,
+        });
+        if (token !== generation.current) return;
+        setMessages((items) => [
+          ...items,
+          {
+            id: answer.id,
+            kind: 'answer',
+            text: answer.answer || answer.clarification,
+            evidence: answer.evidence,
+            sources: answer.sources,
+            assessment: answer.assessment,
+            runId: answer.runId,
+          },
+        ]);
+      },
+      (e) => {
+        if (token === generation.current)
+          setMessages((items) => [
+            ...items,
+            { id: crypto.randomUUID(), kind: 'error', text: e.message },
+          ]);
+      },
+      () => token === generation.current,
+    );
+    if (token === generation.current) setDrafting(false);
   }
   async function cancel() {
     generation.current++;
@@ -419,6 +470,7 @@ function App() {
     setVoiceMode(false);
 
     setRequest('');
+    setRecordContext(null);
     setAllowConsequential(false);
     setPlan(null);
     setRun(null);
@@ -493,18 +545,29 @@ function App() {
       return (
         <section className="mission-review">
           <span className="eyebrow">REVIEW THE GOAL AND PERMISSIONS</span>
-          <h2>Browser automation mission</h2>
-          <p>{plan.summary}</p>
+          <h2>
+            {plan.automation.live ? 'Ready for live automation' : 'Browser automation mission'}
+          </h2>
+          <p>{plan.automation.live ? plan.request : plan.summary}</p>
           {plan.clarification ? (
             <p>{plan.clarification}</p>
           ) : (
             <>
-              <h3>Success criteria</h3>
-              <ol>
-                {plan.automation.criteria.map((criterion, i) => (
-                  <li key={i}>{criterion}</li>
-                ))}
-              </ol>
+              {plan.automation.live ? (
+                <p>
+                  No action sequence is preplanned. The agent uses tools from the current page and
+                  your request, then verifies the resulting outcomes.
+                </p>
+              ) : (
+                <>
+                  <h3>Success criteria</h3>
+                  <ol>
+                    {plan.automation.criteria.map((criterion, i) => (
+                      <li key={i}>{criterion}</li>
+                    ))}
+                  </ol>
+                </>
+              )}
               <p>
                 Adapts after each action · current browser width · up to{' '}
                 {plan.automation.maxActions} actions.
@@ -519,7 +582,7 @@ function App() {
                 disabled={busy || Boolean(state.runId) || state.target?.origin !== plan.origin}
                 onClick={() => start(plan)}
               >
-                Approve mission and automate
+                {plan.automation.live ? 'Start live automation' : 'Approve mission and automate'}
               </Button>
             </>
           )}
@@ -701,6 +764,20 @@ function App() {
                 <h3>Failure triage · {pretty(run.diagnosis.category)}</h3>
                 <p>{run.diagnosis.summary}</p>
                 <p className="small">Next check: {run.diagnosis.nextCheck}</p>
+              </div>
+            )}
+            {terminal(run.status) && (
+              <div className="triage-card">
+                <Button
+                  className="secondary full"
+                  disabled={busy || !state.connected || !state.target || Boolean(state.runId)}
+                  onClick={() => investigateRun(run)}
+                >
+                  <Sparkles size={16} aria-hidden="true" /> Investigate with AI
+                </Button>
+                <p className="small">
+                  Reads this recorded run and the shared page. No actions are rerun.
+                </p>
               </div>
             )}
             {run.securityFindings?.length > 0 && (
@@ -1200,25 +1277,52 @@ function App() {
                             {message.text}
                           </p>
                           {message.kind === 'answer' && (
-                            <details className="answer-evidence">
-                              <summary>
-                                Evidence and tool calls ({message.evidence?.length || 0})
-                              </summary>
-                              <ul>
-                                {message.evidence?.map((e) => (
-                                  <li key={e.id}>
-                                    <strong>
-                                      {e.id} · {e.tool.replaceAll('_', ' ')}
-                                    </strong>
-                                    <span>
-                                      {e.page}
-                                      {e.error ? ` · ${e.error}` : ''}
-                                      {message.sources?.includes(e.id) ? ' · cited' : ''}
-                                    </span>
-                                  </li>
-                                ))}
-                              </ul>
-                            </details>
+                            <>
+                              {message.assessment && (
+                                <details className="answer-evidence" open>
+                                  <summary>
+                                    Assessment · {pretty(message.assessment.category)} ·{' '}
+                                    {pretty(message.assessment.confidence)}
+                                  </summary>
+                                  {[
+                                    ['Recorded facts', message.assessment.facts],
+                                    ['Hypotheses', message.assessment.hypotheses],
+                                    ['Next checks', message.assessment.nextChecks],
+                                  ].map(
+                                    ([title, items]) =>
+                                      items?.length > 0 && (
+                                        <section key={title}>
+                                          <strong>{title}</strong>
+                                          <ul>
+                                            {items.map((item, index) => (
+                                              <li key={index}>{item}</li>
+                                            ))}
+                                          </ul>
+                                        </section>
+                                      ),
+                                  )}
+                                </details>
+                              )}
+                              <details className="answer-evidence">
+                                <summary>
+                                  Evidence and tool calls ({message.evidence?.length || 0})
+                                </summary>
+                                <ul>
+                                  {message.evidence?.map((e) => (
+                                    <li key={e.id}>
+                                      <strong>
+                                        {e.id} · {e.tool.replaceAll('_', ' ')}
+                                      </strong>
+                                      <span>
+                                        {e.page}
+                                        {e.error ? ` · ${e.error}` : ''}
+                                        {message.sources?.includes(e.id) ? ' · cited' : ''}
+                                      </span>
+                                    </li>
+                                  ))}
+                                </ul>
+                              </details>
+                            </>
                           )}
                         </>
                       )}
@@ -1227,7 +1331,12 @@ function App() {
                 )}
               </div>
             )}
-            {drafting && <PlanningStatus planning={state.planning} />}
+            {drafting && (
+              <PlanningStatus
+                planning={state.planning}
+                live={workspace === 'automation' && intent !== 'ask'}
+              />
+            )}
           </>
         )}
         {page === 'history' && state.connected && renderHistory()}
@@ -1236,6 +1345,8 @@ function App() {
       </main>
       {chat && (
         <ChatComposer
+          recordContext={intent === 'ask' ? recordContext : null}
+          onDetachRecord={() => setRecordContext(null)}
           apiWrites={apiWrites}
           onAPIWrites={setAPIWrites}
           intent={intent}

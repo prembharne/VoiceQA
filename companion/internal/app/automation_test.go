@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 	"voiceqa/companion/internal/core"
@@ -26,6 +27,47 @@ func TestAutomationCompletionCannotSkipCriteriaOrUseMutationAsProof(t *testing.T
 	other.Action = core.Action{Operation: "assert", Target: "#count", Assertion: &core.Assertion{Kind: "number", Expected: "1"}}
 	if err := validateAutomationCompletion(p, scope, []automationCheck{check, other}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestLiveCompletionRequiresOutcomeAssertionsInsteadOfActionPlans(t *testing.T) {
+	p := core.Plan{Mode: "automation", URL: "https://app.test/", Origin: "https://app.test", Automation: &core.AutomationPolicy{Live: true, MaxActions: 20}}
+	scope, _ := core.NewScope(p, "main")
+	check := automationCheck{Requirement: "Requested record was saved", Action: core.Action{Operation: "assert", Target: "#status", Assertion: &core.Assertion{Kind: "text_contains", Expected: "Saved"}}}
+	if err := validateAutomationCompletion(p, scope, []automationCheck{check}); err != nil {
+		t.Fatal(err)
+	}
+	if validateAutomationCompletion(p, scope, nil) == nil || validateAutomationCompletion(p, scope, []automationCheck{check, check}) == nil {
+		t.Fatal("missing/duplicate outcomes accepted")
+	}
+	check.Action.Operation = "click"
+	if validateAutomationCompletion(p, scope, []automationCheck{check}) == nil {
+		t.Fatal("mutation used as completion proof")
+	}
+}
+
+func TestLiveRequestPreparationDoesNotCallAIOrGenerateAPlan(t *testing.T) {
+	a := newTestApp(t)
+	a.Send = func(m native.Message) error {
+		if m.Type == "browser.request" {
+			a.Handle(message("browser.result", map[string]any{"requestId": m.ID, "result": map[string]any{"viewport": map[string]any{"width": 1280, "height": 720}}}))
+		}
+		return nil
+	}
+	raw, err := a.proposeAutomation(context.Background(), message("automation.propose", map[string]any{"request": "Save the requested setting using the current page", "url": "https://app.test/", "origin": "https://app.test"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := raw.(core.Plan)
+	if !p.Automation.Live || len(p.Cases) != 0 || len(p.Automation.Criteria) != 0 || len(p.Usage) != 0 {
+		t.Fatal("local preparation generated a plan or used AI", p)
+	}
+}
+
+func TestLiveDecisionTimeoutDoesNotClaimNoActionsRan(t *testing.T) {
+	err := agentResponseError(context.DeadlineExceeded, "next tool decision", true)
+	if !errors.Is(err, context.DeadlineExceeded) || !strings.Contains(err.Error(), "completed actions remain") || strings.Contains(err.Error(), "No tests were run") || strings.Contains(err.Error(), "building the plan") {
+		t.Fatal("live timeout lost partial-action meaning or cancellation identity", err)
 	}
 }
 

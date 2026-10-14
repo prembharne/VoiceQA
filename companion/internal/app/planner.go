@@ -28,6 +28,22 @@ func planningError(err error) error {
 	return err
 }
 
+func agentResponseError(err error, operation string, live bool) error {
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+		message := "The " + operation + " was stopped."
+		if errors.Is(err, context.DeadlineExceeded) {
+			message = fmt.Sprintf("The AI provider did not finish the %s within %d minutes.", operation, int(provider.PlanningTimeout.Minutes()))
+		}
+		if live {
+			message += " Any completed actions remain recorded. The unfinished response was not executed and no dispatched action was replayed."
+		} else {
+			message += " This investigation did not rerun automation actions."
+		}
+		return &planningFailure{err, message}
+	}
+	return err
+}
+
 // Preserve cancellation identity without exposing Go's transport error in chat.
 type planningFailure struct {
 	cause   error

@@ -25,6 +25,19 @@ func TestAutomationNeedsReviewedOutcomeCriteriaAndBoundedPolicy(t *testing.T) {
 		t.Fatal("unbounded mission accepted")
 	}
 }
+
+func TestLiveAutomationStartsWithoutPreplannedStepsOrCriteria(t *testing.T) {
+	p := automationPlan()
+	p.Automation.Live = true
+	p.Automation.Criteria = nil
+	if err := ValidatePlan(p); err != nil {
+		t.Fatal(err)
+	}
+	p.Automation.Criteria = []string{"Precomputed outcome"}
+	if ValidatePlan(p) == nil {
+		t.Fatal("live mode accepted preplanned criteria")
+	}
+}
 func TestAutomationActionCannotExpandOriginOrCloseUserPages(t *testing.T) {
 	p := automationPlan()
 	scope, _ := NewScope(p, "main")

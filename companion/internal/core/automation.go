@@ -15,8 +15,11 @@ func ValidateAutomationPlan(p Plan) error {
 	if policy == nil || p.Mode != "automation" || len(p.Cases) != 0 || len(p.Dataset) != 0 || p.Visual || !p.PreserveViewport || len(p.Viewports) != 1 {
 		return errors.New("automation uses a reviewed goal, one current viewport and no fixed cases, data replay or baselines")
 	}
-	if policy.MaxActions < 1 || policy.MaxActions > 120 || len(policy.Criteria) < 1 || len(policy.Criteria) > 10 {
+	if policy.MaxActions < 1 || policy.MaxActions > 120 || (!policy.Live && len(policy.Criteria) < 1) || len(policy.Criteria) > 10 {
 		return errors.New("automation requires 1-10 success criteria and an action budget of 1-120")
+	}
+	if policy.Live && len(policy.Criteria) != 0 {
+		return errors.New("live automation starts from the request, without preplanned criteria or actions")
 	}
 	for _, criterion := range policy.Criteria {
 		if viewportPolicyCriterion.MatchString(criterion) {
