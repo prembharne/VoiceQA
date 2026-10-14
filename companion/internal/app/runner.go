@@ -61,6 +61,9 @@ func (a *App) start(m native.Message) (any, error) {
 		rows = 1
 	}
 	totalSteps *= rows
+	if plan.Automation != nil {
+		totalSteps = plan.Automation.MaxActions
+	}
 	r := core.Run{ID: core.ID(), Plan: plan, Status: "running", StartedAt: core.Now(), Steps: []core.Step{}, Usage: map[string]int{}, StepDelayMS: a.settings.StepDelayMS, TotalSteps: totalSteps}
 	for key, value := range plan.Usage {
 		r.Usage[key] = value
@@ -81,7 +84,11 @@ func (a *App) start(m native.Message) (any, error) {
 		cancel()
 		return nil, e
 	}
-	go a.execute(ctx, &r)
+	if plan.Automation != nil {
+		go a.executeAutomation(ctx, &r)
+	} else {
+		go a.execute(ctx, &r)
+	}
 	return result, nil
 }
 func (a *App) update(r *core.Run) {

@@ -55,7 +55,13 @@ type Case struct {
 	Source string   `json:"source"`
 	Steps  []Action `json:"steps"`
 }
+type AutomationPolicy struct {
+	MaxActions         int      `json:"maxActions"`
+	AllowConsequential bool     `json:"allowConsequential"`
+	Criteria           []string `json:"criteria"`
+}
 type Plan struct {
+	Automation         *AutomationPolicy   `json:"automation,omitempty"`
 	APIWritesAllowed   bool                `json:"apiWritesAllowed,omitempty"`
 	Mode               string              `json:"mode,omitempty"`
 	SecurityAuthorized bool                `json:"securityAuthorized,omitempty"`
@@ -96,6 +102,9 @@ type Step struct {
 	CompletedAt string         `json:"completedAt,omitempty"`
 }
 type Run struct {
+	Observations     []map[string]any  `json:"observations,omitempty"`
+	EvidenceOmitted  bool              `json:"evidenceOmitted,omitempty"`
+	AgentPhase       string            `json:"agentPhase,omitempty"`
 	RecordedSteps    int               `json:"recordedSteps,omitempty"`
 	PassedSteps      int               `json:"passedSteps,omitempty"`
 	FailedSteps      int               `json:"failedSteps,omitempty"`
@@ -131,8 +140,11 @@ func validateResolvedPlan(p Plan) error {
 	if len(p.URL) > 2000 || len(p.Request) > 8000 || len(p.Summary) > 2000 {
 		return errors.New("plan URL, request or summary exceeds its size limit")
 	}
-	if p.Mode != "" && p.Mode != "qa" && p.Mode != "security" {
+	if p.Mode != "" && p.Mode != "qa" && p.Mode != "security" && p.Mode != "automation" {
 		return errors.New("choose QA or logical security mode")
+	}
+	if p.Mode == "automation" && p.Automation == nil {
+		return errors.New("automation mode requires a reviewed automation policy")
 	}
 	if p.Mode == "security" && !p.SecurityAuthorized {
 		return errors.New("confirm authorization for the shared test systems before security testing")
@@ -145,6 +157,9 @@ func validateResolvedPlan(p Plan) error {
 	}
 	if p.Clarification != "" {
 		return errors.New("answer the clarification before confirming")
+	}
+	if p.Automation != nil {
+		return ValidateAutomationPlan(p)
 	}
 	if len(p.Cases) == 0 || len(p.Cases) > 10 {
 		return errors.New("plan must contain 1–10 test cases")
@@ -185,66 +200,14 @@ func validateResolvedPlan(p Plan) error {
 		}
 		for stepIndex, a := range c.Steps {
 			n++
-			if !operations[a.Operation] || len(a.Target) > 500 || len(a.Value) > 4000 || len(a.Label) > 300 {
-				return errors.New("invalid test action")
+			if err := ValidateScopedAction(p, scope, a); err != nil {
+				return fmt.Errorf("case %d step %d: %w", caseIndex+1, stepIndex+1, err)
 			}
-			if a.Operation != "http_check" && a.HTTP != nil {
-				return errors.New("HTTP details belong only to HTTP check actions")
-			}
-			if e := scope.Advance(a); e != nil {
-				return fmt.Errorf("case %d, step %d: %w", caseIndex+1, stepIndex+1, e)
-			}
-			if a.Operation == "security_audit" && p.Mode != "security" {
-				return errors.New("security audit requires logical security mode")
-			}
-			if a.Operation == "capture_value" && !ValidVariable(a.Value) {
-				return errors.New("capture requires a public variable name")
+			if a.Operation == "assert" || a.Operation == "http_check" {
+				checks++
 			}
 			if a.Operation == "http_check" {
 				httpCount++
-				mode := p.Mode
-				if p.APIWritesAllowed {
-					mode = "security"
-				}
-				if e := ValidateHTTP(a.HTTP, mode, scope); e != nil {
-					return fmt.Errorf("case %d, step %d (http_check): %w", caseIndex+1, stepIndex+1, e)
-				}
-				checks++
-			}
-			if a.Operation == "key" && !strings.Contains("|Tab|Enter|Escape|ArrowDown|ArrowUp|Space|", "|"+a.Value+"|") {
-				return errors.New("unsupported key")
-			}
-			if strings.HasPrefix(a.Target, "role:") {
-				role, name, ok := strings.Cut(strings.TrimPrefix(a.Target, "role:"), "|")
-				if !ok || strings.TrimSpace(role) == "" || strings.TrimSpace(name) == "" {
-					return fmt.Errorf("case %d, step %d: malformed role target %q; use an observed selector or role:ROLE|EXACT ACCESSIBLE NAME", caseIndex+1, stepIndex+1, a.Target)
-				}
-			}
-			if a.Operation == "assert" || a.Operation == "wait_for" {
-				if a.Assertion == nil || !assertions[a.Assertion.Kind] || a.Assertion.Tolerance < 0 {
-					return fmt.Errorf("case %d, step %d (%s): assertion must contain a supported kind, string expected and nonnegative tolerance; wait_for requires a readiness condition too", caseIndex+1, stepIndex+1, a.Operation)
-				}
-				if strings.TrimSpace(a.Target) == "" && a.Assertion.Kind != "url" && a.Assertion.Kind != "url_contains" && a.Assertion.Kind != "no_overflow" {
-					return fmt.Errorf("case %d, step %d (%s): %s requires a nonempty element target; use an observed result selector, heading or status target", caseIndex+1, stepIndex+1, a.Operation, a.Assertion.Kind)
-				}
-				if a.Operation == "assert" {
-					checks++
-				}
-				if a.Assertion.Kind == "number" {
-					n, e := strconv.ParseFloat(a.Assertion.Expected, 64)
-					if e != nil || math.IsNaN(n) || math.IsInf(n, 0) {
-						return errors.New("numeric assertion requires a finite expected number")
-					}
-				}
-				if a.Assertion.Kind == "count" {
-					count, e := strconv.Atoi(a.Assertion.Expected)
-					if e != nil || count < 0 {
-						return fmt.Errorf("case %d, step %d (count): expected must be a nonnegative integer string", caseIndex+1, stepIndex+1)
-					}
-				}
-				if (a.Assertion.Kind == "visible" || a.Assertion.Kind == "hidden" || a.Assertion.Kind == "enabled" || a.Assertion.Kind == "selected" || a.Assertion.Kind == "focus" || a.Assertion.Kind == "no_overflow") && a.Assertion.Expected != "true" && a.Assertion.Expected != "false" {
-					return fmt.Errorf("case %d, step %d (%s): boolean assertion requires the string true or false", caseIndex+1, stepIndex+1, a.Assertion.Kind)
-				}
 			}
 		}
 		if checks == 0 {
@@ -268,6 +231,66 @@ func validateResolvedPlan(p Plan) error {
 	b, _ := json.Marshal(p)
 	if len(b) > 128*1024 {
 		return errors.New("plan exceeds encoded size limit")
+	}
+	return nil
+}
+
+func ValidateScopedAction(p Plan, scope *Scope, a Action) error {
+	if !operations[a.Operation] || len(a.Target) > 500 || len(a.Value) > 4000 || len(a.Label) > 300 {
+		return errors.New("invalid test action")
+	}
+	if a.Operation != "http_check" && a.HTTP != nil {
+		return errors.New("HTTP details belong only to HTTP check actions")
+	}
+	if e := scope.Advance(a); e != nil {
+		return e
+	}
+	if a.Operation == "security_audit" && p.Mode != "security" {
+		return errors.New("security audit requires logical security mode")
+	}
+	if a.Operation == "capture_value" && !ValidVariable(a.Value) {
+		return errors.New("capture requires a public variable name")
+	}
+	if a.Operation == "http_check" {
+		mode := p.Mode
+		if p.APIWritesAllowed {
+			mode = "security"
+		}
+		if e := ValidateHTTP(a.HTTP, mode, scope); e != nil {
+			return fmt.Errorf("http_check: %w", e)
+		}
+	}
+	if a.Operation == "key" && !strings.Contains("|Tab|Enter|Escape|ArrowDown|ArrowUp|Space|", "|"+a.Value+"|") {
+		return errors.New("unsupported key")
+	}
+	if strings.HasPrefix(a.Target, "role:") {
+		role, name, ok := strings.Cut(strings.TrimPrefix(a.Target, "role:"), "|")
+		if !ok || strings.TrimSpace(role) == "" || strings.TrimSpace(name) == "" {
+			return fmt.Errorf("malformed role target %q; use an observed selector or role:ROLE|EXACT ACCESSIBLE NAME", a.Target)
+		}
+	}
+	if a.Operation == "assert" || a.Operation == "wait_for" {
+		if a.Assertion == nil || !assertions[a.Assertion.Kind] || a.Assertion.Tolerance < 0 {
+			return fmt.Errorf("%s: assertion must contain a supported kind, string expected and nonnegative tolerance; wait_for requires a readiness condition too", a.Operation)
+		}
+		if strings.TrimSpace(a.Target) == "" && a.Assertion.Kind != "url" && a.Assertion.Kind != "url_contains" && a.Assertion.Kind != "no_overflow" {
+			return fmt.Errorf("%s: %s requires a nonempty element target; use an observed result selector, heading or status target", a.Operation, a.Assertion.Kind)
+		}
+		if a.Assertion.Kind == "number" {
+			n, e := strconv.ParseFloat(a.Assertion.Expected, 64)
+			if e != nil || math.IsNaN(n) || math.IsInf(n, 0) {
+				return errors.New("numeric assertion requires a finite expected number")
+			}
+		}
+		if a.Assertion.Kind == "count" {
+			count, e := strconv.Atoi(a.Assertion.Expected)
+			if e != nil || count < 0 {
+				return fmt.Errorf("count: expected must be a nonnegative integer string")
+			}
+		}
+		if (a.Assertion.Kind == "visible" || a.Assertion.Kind == "hidden" || a.Assertion.Kind == "enabled" || a.Assertion.Kind == "selected" || a.Assertion.Kind == "focus" || a.Assertion.Kind == "no_overflow") && a.Assertion.Expected != "true" && a.Assertion.Expected != "false" {
+			return fmt.Errorf("%s: boolean assertion requires the string true or false", a.Assertion.Kind)
+		}
 	}
 	return nil
 }

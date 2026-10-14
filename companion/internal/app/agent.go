@@ -219,7 +219,8 @@ func agentPublicEvidence(view map[string]any) map[string]any {
 		switch v := value.(type) {
 		case map[string]any:
 			for key, entry := range v {
-				if key == "url" || key == "href" {
+				navigationValue := key == "value" && (v["operation"] == "navigate" || v["operation"] == "open_tab")
+				if key == "url" || key == "href" || navigationValue {
 					if raw, ok := entry.(string); ok && (strings.HasPrefix(raw, "http://") || strings.HasPrefix(raw, "https://")) {
 						v[key] = publicAgentURL(raw)
 					}

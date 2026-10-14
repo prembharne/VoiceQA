@@ -211,6 +211,14 @@ func PlanSchema(pages ...core.Page) map[string]any {
 			aliases = append(aliases, p.Alias)
 		}
 	}
+	action := ActionSchema()
+	test := Object(map[string]any{"page": map[string]any{"type": "string", "enum": aliases}, "name": String(), "goal": String(), "source": String(), "steps": map[string]any{"type": "array", "items": action}})
+	ready := Object(map[string]any{"type": map[string]any{"type": "string", "enum": []string{"plan"}}, "cases": map[string]any{"type": "array", "items": test}})
+	question := Object(map[string]any{"type": map[string]any{"type": "string", "enum": []string{"clarification"}}, "question": map[string]any{"type": "string", "description": "A specific question about a missing requirement. Never explanatory notes, None, a status message, or permission to run."}})
+	return Object(map[string]any{"summary": String(), "result": map[string]any{"anyOf": []any{ready, question}}})
+}
+
+func ActionSchema() map[string]any {
 	booleanCheck := Object(map[string]any{
 		"kind":      map[string]any{"type": "string", "enum": []string{"visible", "hidden", "enabled", "selected", "focus", "no_overflow"}},
 		"expected":  map[string]any{"type": "string", "enum": []string{"true", "false"}, "description": "The literal string true or false, never prose, yes/no, or an empty string."},
@@ -222,11 +230,7 @@ func PlanSchema(pages ...core.Page) map[string]any {
 		"tolerance": map[string]any{"type": "number", "description": "Nonnegative numeric comparison tolerance. Use 0 for text, count and url."},
 	})
 	httpCheck := Object(map[string]any{"authSource": String(), "authPointer": String(), "csrfSource": String(), "csrfHeader": String(), "csrfBodyField": String(), "expectedType": map[string]any{"type": "string", "enum": []string{"", "string", "number", "boolean", "null"}}, "tolerance": map[string]any{"type": "number"}, "method": map[string]any{"type": "string", "enum": []string{"GET", "HEAD", "POST", "PUT", "PATCH", "DELETE"}}, "url": String(), "body": String(), "expectedStatus": map[string]any{"type": "integer"}, "jsonPointer": String(), "expectedValue": String(), "saveAs": String(), "idempotencyKey": String()})
-	action := Object(map[string]any{"http": map[string]any{"anyOf": []any{httpCheck, map[string]any{"type": "null"}}}, "operation": map[string]any{"type": "string", "enum": []string{"navigate", "click", "fill", "select", "scroll", "key", "assert", "open_tab", "switch_tab", "close_tab", "wait_for", "fill_secret", "fill_totp", "human_checkpoint", "capture_value", "http_check", "security_audit"}}, "target": String(), "value": map[string]any{"type": "string", "description": "capture_value: a bare public variable alias matching ^[a-z][a-z0-9_-]{0,31}$, for example order-id; never a selector, dot path, ${placeholder}, secret name or actual captured value. Other operations use the requested action value."}, "label": String(), "timeoutMs": map[string]any{"type": "integer", "description": "0 for default, or 500–30000 milliseconds for a condition wait."}, "assertion": map[string]any{"anyOf": []any{booleanCheck, valueCheck, map[string]any{"type": "null"}}}})
-	test := Object(map[string]any{"page": map[string]any{"type": "string", "enum": aliases}, "name": String(), "goal": String(), "source": String(), "steps": map[string]any{"type": "array", "items": action}})
-	ready := Object(map[string]any{"type": map[string]any{"type": "string", "enum": []string{"plan"}}, "cases": map[string]any{"type": "array", "items": test}})
-	question := Object(map[string]any{"type": map[string]any{"type": "string", "enum": []string{"clarification"}}, "question": map[string]any{"type": "string", "description": "A specific question about a missing requirement. Never explanatory notes, None, a status message, or permission to run."}})
-	return Object(map[string]any{"summary": String(), "result": map[string]any{"anyOf": []any{ready, question}}})
+	return Object(map[string]any{"http": map[string]any{"anyOf": []any{httpCheck, map[string]any{"type": "null"}}}, "operation": map[string]any{"type": "string", "enum": []string{"navigate", "click", "fill", "select", "scroll", "key", "assert", "open_tab", "switch_tab", "close_tab", "wait_for", "fill_secret", "fill_totp", "human_checkpoint", "capture_value", "http_check", "security_audit"}}, "target": String(), "value": map[string]any{"type": "string", "description": "capture_value: a bare public variable alias matching ^[a-z][a-z0-9_-]{0,31}$, for example order-id; never a selector, dot path, ${placeholder}, secret name or actual captured value. Other operations use the requested action value."}, "label": String(), "timeoutMs": map[string]any{"type": "integer", "description": "0 for default, or 500–30000 milliseconds for a condition wait."}, "assertion": map[string]any{"anyOf": []any{booleanCheck, valueCheck, map[string]any{"type": "null"}}}})
 }
 
 const PlanInstructions = `You are VoiceQA, an evidence-driven browser automation and quality engineering agent. Translate the user's goal into a concise, executable, reviewable plan for the shared application, regardless of its brand or framework.

@@ -24,6 +24,8 @@ function App() {
   const [messages, setMessages] = useState([]);
   const [drafting, setDrafting] = useState(false);
   const [intent, setIntent] = useState('test');
+  const [workspace, setWorkspace] = useState('qa');
+  const [allowConsequential, setAllowConsequential] = useState(false);
   const [readLinks, setReadLinks] = useState(true);
   const [discover, setDiscover] = useState(true);
   const scroll = useRef(null);
@@ -249,29 +251,38 @@ function App() {
     setPlan(null);
     await perform(
       async () => {
-        if (intent !== 'ask' && mode === 'security' && !authorized)
+        if (workspace === 'qa' && intent !== 'ask' && mode === 'security' && !authorized)
           throw new Error(
             'Confirm that you are authorized to test the shared systems in Test options.',
           );
-        const p = await rpc(!demo && intent === 'ask' ? 'agent.query' : 'plan.propose', {
-          request: demo ? 'Run the local demo fixture suite' : prompt,
-          conversation: messages
-            .filter((m) => ['user', 'plan', 'text', 'answer'].includes(m.kind))
-            .slice(-6)
-            .map((m) => ({
-              role: m.kind === 'user' ? 'user' : 'assistant',
-              text: String(m.text || m.plan?.summary || '').slice(0, 2000),
-            })),
-          demo,
-          readLinks,
-          discover,
-          responsive,
-          visual,
-          mode,
-          securityAuthorized: authorized,
-          apiWritesAllowed: apiWrites,
-          dataset: parseTestData(testData),
-        });
+        const p = await rpc(
+          !demo && intent === 'ask'
+            ? 'agent.query'
+            : !demo && workspace === 'automation'
+              ? 'automation.propose'
+              : 'plan.propose',
+          {
+            request: demo ? 'Run the local demo fixture suite' : prompt,
+            conversation: messages
+              .filter((m) => ['user', 'plan', 'text', 'answer'].includes(m.kind))
+              .slice(-6)
+              .map((m) => ({
+                role: m.kind === 'user' ? 'user' : 'assistant',
+                text: String(m.text || m.plan?.summary || '').slice(0, 2000),
+              })),
+            demo,
+            readLinks,
+            allowConsequential,
+            maxActions: 60,
+            discover,
+            responsive,
+            visual,
+            mode,
+            securityAuthorized: authorized,
+            apiWritesAllowed: apiWrites,
+            dataset: parseTestData(testData),
+          },
+        );
         if (token !== generation.current) return;
         if (!demo && intent === 'ask') {
           setMessages((items) => [
@@ -307,14 +318,22 @@ function App() {
     if (!selected) return;
     follow.current = true;
     await perform(async () => {
-      if (!responsive && !selected.preserveViewport) {
+      if (
+        selected.automation &&
+        (Boolean(selected.automation.allowConsequential) !== allowConsequential ||
+          Boolean(selected.apiWritesAllowed) !== apiWrites)
+      )
+        throw new Error(
+          'Automation permissions changed. Propose a new mission so you can review the current permissions before running.',
+        );
+      if (!selected.automation && !responsive && !selected.preserveViewport) {
         const current = await rpc('plan.fork', { id: selected.id, preserveViewport: true });
         setPlan(current);
         setRun(null);
         setMessages((items) => [...items, { id: current.id, kind: 'plan', plan: current }]);
         return;
       }
-      if (responsive && selected.preserveViewport)
+      if (!selected.automation && responsive && selected.preserveViewport)
         throw new Error(
           'The width option changed. Propose a new plan to review desktop/mobile replay before running.',
         );
@@ -400,6 +419,7 @@ function App() {
     setVoiceMode(false);
 
     setRequest('');
+    setAllowConsequential(false);
     setPlan(null);
     setRun(null);
     setMessages([]);
@@ -469,6 +489,43 @@ function App() {
       scroll.current.scrollTop = 0;
   }, [page]);
   function renderPlan(plan) {
+    if (plan?.automation)
+      return (
+        <section className="mission-review">
+          <span className="eyebrow">REVIEW THE GOAL AND PERMISSIONS</span>
+          <h2>Browser automation mission</h2>
+          <p>{plan.summary}</p>
+          {plan.clarification ? (
+            <p>{plan.clarification}</p>
+          ) : (
+            <>
+              <h3>Success criteria</h3>
+              <ol>
+                {plan.automation.criteria.map((criterion, i) => (
+                  <li key={i}>{criterion}</li>
+                ))}
+              </ol>
+              <p>
+                Adapts after each action · current browser width · up to{' '}
+                {plan.automation.maxActions} actions.
+              </p>
+              <p>
+                {plan.automation.allowConsequential
+                  ? 'Consequential actions explicitly allowed.'
+                  : 'Payments, publishing, sending and deletion are restricted.'}
+              </p>
+              <Button
+                className="primary full"
+                disabled={busy || Boolean(state.runId) || state.target?.origin !== plan.origin}
+                onClick={() => start(plan)}
+              >
+                Approve mission and automate
+              </Button>
+            </>
+          )}
+        </section>
+      );
+
     return (
       <>
         <div className="section-heading">
@@ -603,7 +660,7 @@ function App() {
       <>
         <div className="section-heading">
           <span className="eyebrow">INDEPENDENT CHECKS. RECORDED EVIDENCE.</span>
-          <h2>Test results</h2>
+          <h2>{run?.plan?.automation ? 'Automation results' : 'Test results'}</h2>
         </div>
         {!run ? (
           <EmptyState
@@ -659,6 +716,11 @@ function App() {
                   </article>
                 ))}
               </section>
+            )}
+            {run.agentPhase && (
+              <p className="notice" role="status">
+                {run.agentPhase}
+              </p>
             )}
             <RunProgress run={run} paused={state.paused} />
             <div className="stats">
@@ -778,7 +840,7 @@ function App() {
                 </div>
                 <Button
                   className="secondary full"
-                  disabled={busy || Boolean(state.runId)}
+                  disabled={busy || Boolean(state.runId) || Boolean(run.plan.automation)}
                   onClick={() =>
                     perform(async () => {
                       const p = await rpc('plan.fork', {
@@ -805,8 +867,9 @@ function App() {
               </>
             )}
             <p className="small">
-              Coverage: selected tab, DOM controls, named screenshots, and automated accessibility
-              rules. Native dialogs and cross-origin frames require separate tests.
+              {run.plan.automation
+                ? 'Automation adapts across approved tabs and independently verifies the reviewed success criteria.'
+                : 'Coverage: selected tab, DOM controls, named screenshots, and automated accessibility rules. Native dialogs and cross-origin frames require separate tests.'}
             </p>
           </>
         )}
@@ -1033,13 +1096,41 @@ function App() {
           <Button
             className="header-icon"
             aria-label="Open settings"
-            title="API and voice settings"
+            title="API settings"
             onClick={() => setPage('setup')}
           >
             <Icon name="settings" size={20} />
           </Button>
         </nav>
       </header>
+      <div className="workspace-switch" role="group" aria-label="Workspace mode">
+        <button
+          aria-pressed={workspace === 'qa'}
+          disabled={busy || active}
+          onClick={() => {
+            setWorkspace('qa');
+            setIntent('test');
+            newChat();
+          }}
+        >
+          QA &amp; debugging
+        </button>
+        <button
+          aria-pressed={workspace === 'automation'}
+          disabled={busy || active}
+          onClick={() => {
+            setWorkspace('automation');
+            setResponsive(false);
+            setMode('qa');
+            setAuthorized(false);
+            setAPIWrites(false);
+            setIntent('test');
+            newChat();
+          }}
+        >
+          Browser automation
+        </button>
+      </div>
       <main
         ref={scroll}
         className={chat ? 'conversation' : 'utility-content'}
@@ -1151,6 +1242,9 @@ function App() {
           onIntent={setIntent}
           discover={discover}
           onDiscover={setDiscover}
+          workspace={workspace}
+          allowConsequential={allowConsequential}
+          onAllowConsequential={setAllowConsequential}
           readLinks={readLinks}
           onReadLinks={setReadLinks}
           mode={mode}

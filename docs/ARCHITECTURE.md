@@ -5,7 +5,7 @@ flowchart LR
   P[React side panel] <--> W[Manifest V3 worker]
   W <--> N[Go native host]
   N <--> M[OpenAI / OpenRouter / NVIDIA NIM]
-  P <--> S[Chrome speech recognition / browser playback]
+  P <--> S[Chrome speech dictation]
   N --> D[SQLite + artifact files]
   W <--> C[Content observations / assertions]
   W <--> B[Chrome debugger / CDP input]
@@ -17,8 +17,8 @@ flowchart LR
 
 1. **Go owns durable state.** Runs, plans, baselines, and reports survive extension-worker restarts. Native Messaging avoids a public local HTTP endpoint.
 2. **JavaScript owns browser execution.** Fixed content handlers observe and assert; CDP dispatches browser input. No model-generated code is evaluated.
-3. **Planning is separate from verification.** Model-compatible JSON creates a proposal that must pass local validation. An exact plan version must be confirmed. Each case must contain an independent assertion.
-4. **AI is bounded.** Model calls occur during planning and only when a target cannot be resolved. Known selectors replay without a model call, reducing cost and latency. Only a `target_missing` failure in click/fill/select permits re-grounding; ambiguous submissions never retry.
+3. **Planning is separate from verification.** QA produces a locally validated test suite; browser automation produces a mission with final-state criteria and permission flags. Both require exact-version review. Assertions compare expectations with actual results. Deriving the right expectations requires retained business-rule evidence and negative acceptance tests.
+4. **AI is bounded by mode.** QA replays known selectors without another model call; only a missing target permits re-grounding. Investigation chooses scoped read tools. Adaptive automation calls the model after each fresh observation, choosing one validated action at a time. Earlier public page rules/results are retained in a bounded state ledger, separate from action history, so stateless requests do not lose their verification context. Ambiguous dispatched actions never retry. Budgets, cancellation and origin checks apply in every mode.
 5. **Evidence is local and chunked.** Screenshots are redacted before transfer. Browser dictation updates only the unsent composer. Legacy audio uploads are deleted after transcription. Native messages stay under 512 KiB.
 6. **One active tab and one run.** A page registry tracks up to five explicitly approved pages and run-created tabs. Generation tokens bind actions to the run and current tab. Planned switches detach/reattach the debugger and restore viewport metrics; unrelated focus changes pause actions. Host loss or unexpected debugger detachment stops execution.
 7. **Protocol interruption does not imply an action failed.** Journal states distinguish dispatch from completion. Unknown outcomes require review.

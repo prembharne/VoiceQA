@@ -9,7 +9,9 @@ import { DatabaseSync } from 'node:sqlite';
 import { execFileSync } from 'node:child_process';
 
 let plan = JSON.parse(await readFile(resolve(process.argv[2]), 'utf8'));
-const livePlanning = process.argv.includes('--plan-live');
+const automationUI = process.argv.includes('--automation-ui');
+const automationLive = process.argv.includes('--automation-live') || automationUI;
+const livePlanning = process.argv.includes('--plan-live') || automationLive;
 if (
   (livePlanning ||
     process.argv.includes('--followup') ||
@@ -20,7 +22,7 @@ if (
   throw new Error('Live extension planning is restricted to the selected free OpenRouter model.');
 const security = plan.mode === 'security';
 const workspace = plan.origin === 'http://127.0.0.1:4176';
-const generic = plan.origin === 'http://127.0.0.1:4177';
+const generic = ['http://127.0.0.1:4177', 'http://127.0.0.1:4178'].includes(plan.origin);
 const origin = generic
   ? plan.origin
   : workspace
@@ -235,7 +237,7 @@ try {
             tasks.delete(id);
             fail(new Error('RPC timed out'));
           },
-          ['plan.propose', 'agent.query'].includes(method) ? 480000 : 130000,
+          ['plan.propose', 'agent.query', 'automation.propose'].includes(method) ? 480000 : 130000,
         );
         tasks.set(id, { done, fail, timer });
         port.postMessage({ type: 'request', id, method, payload });
@@ -282,11 +284,79 @@ try {
       period: 30,
     });
   }
-  if (livePlanning) {
+  let runId;
+  if (automationUI) {
+    await panel
+      .getByRole('button', { name: 'Browser automation', exact: true })
+      .evaluate((button) => button.click());
+    await panel.waitForFunction(
+      () =>
+        document.querySelector('.intent-picker option:checked')?.textContent.trim() ===
+        'Automate & execute',
+    );
+    for (const width of [360, 420]) {
+      await panel.setViewportSize({ width, height: 1000 });
+      const fits = await panel.evaluate(
+        () =>
+          document.documentElement.scrollWidth <= innerWidth &&
+          [...document.querySelectorAll('.workspace-switch button,.intent-picker')].every((el) => {
+            const r = el.getBoundingClientRect();
+            return r.left >= 0 && r.right <= innerWidth;
+          }),
+      );
+      if (!fits) throw new Error(`Automation controls overflow at ${width}px`);
+    }
+    await panel.evaluate((request) => {
+      const textarea = document.querySelector('#request');
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set.call(
+        textarea,
+        request,
+      );
+      textarea.dispatchEvent(new Event('input', { bubbles: true }));
+    }, plan.request);
+    await panel.waitForFunction(
+      () => !document.querySelector('[aria-label="Send test request"]').disabled,
+    );
+    await panel
+      .getByRole('button', { name: 'Send test request', exact: true })
+      .evaluate((button) => button.click());
+    await panel
+      .getByRole('button', { name: 'Approve mission and automate' })
+      .waitFor({ timeout: 480000 });
+    if (process.argv.includes('--review-permissions')) {
+      await panel.locator('.composer-options > summary').click();
+      await panel.getByLabel('Allow consequential actions').check();
+      await panel.locator('.composer-options > summary').click();
+      await panel.getByRole('button', { name: 'Approve mission and automate' }).click();
+      await panel.getByText('Automation permissions changed.', { exact: false }).first().waitFor();
+      if ((await rpc('state')).runId)
+        throw new Error('Changed permissions started the previously reviewed mission.');
+      await panel.locator('.composer-options > summary').click();
+      await panel.getByLabel('Allow consequential actions').uncheck();
+      await panel.locator('.composer-options > summary').click();
+      console.log('Actual UI blocked approval after permissions changed; no run started.');
+    }
+    await panel.screenshot({ path: join(work, 'mission-review.png'), fullPage: true });
+    await panel.getByRole('button', { name: 'Approve mission and automate' }).click();
+    const deadline = Date.now() + 15000;
+    while (Date.now() < deadline) {
+      const state = await rpc('state');
+      if (state.runId) {
+        runId = state.runId;
+        break;
+      }
+      await new Promise((done) => setTimeout(done, 100));
+    }
+    if (!runId) throw new Error('Automation mission did not start through UI approval');
+    plan = (await rpc('run.get', { id: runId })).plan;
+    await writeFile(join(work, 'live-extension-plan.json'), JSON.stringify(plan, null, 2));
+  } else if (livePlanning) {
     console.log(`Planning through the real extension with ${plan.model}...`);
     const started = Date.now();
-    plan = await rpc('plan.propose', {
+    plan = await rpc(automationLive ? 'automation.propose' : 'plan.propose', {
       request: plan.request,
+      maxActions: 40,
+      allowConsequential: false,
       discover: process.argv.includes('--discover'),
       readLinks: true,
       responsive: !plan.preserveViewport && plan.viewports.length > 1,
@@ -306,12 +376,15 @@ try {
     );
     if (plan.clarification) throw new Error(plan.clarification);
   }
-  await rpc('plan.confirm', { id: plan.id, version: plan.version });
-  const { runId } = await rpc('run.start', {
-    planId: plan.id,
-    version: plan.version,
-    key: crypto.randomUUID(),
-  });
+  if (!runId) {
+    await rpc('plan.confirm', { id: plan.id, version: plan.version });
+    const started = await rpc('run.start', {
+      planId: plan.id,
+      version: plan.version,
+      key: crypto.randomUUID(),
+    });
+    runId = started.runId;
+  }
   let run,
     count = -1,
     captured = false;
@@ -438,13 +511,37 @@ try {
       'Actual Ask chat submitted the question and rendered the evidence-backed model answer.',
     );
   }
+  const expectedTotalDefect = process.argv.includes('--expect-total-defect');
+  if (expectedTotalDefect) {
+    if (!automationLive || origin !== 'http://127.0.0.1:4178')
+      throw new Error('The receipt-defect check is limited to the owned adaptive wizard.');
+    const receipt = await target.locator('#receipt').textContent();
+    const submitted = await target.locator('#submitted').textContent();
+    const failedTotal = assertions.some(
+      (s) => s.status === 'failed' && /410(?:\.00)?/.test(s.action.assertion?.expected || ''),
+    );
+    if (
+      run.status !== 'failed' ||
+      !failedTotal ||
+      !receipt.includes('$435.00') ||
+      submitted !== 'Reservations submitted: 1'
+    )
+      throw new Error(
+        'Actual AI did not detect the incorrect receipt using the independently expected $410 total, or submitted more than once.',
+      );
+    console.log(
+      'Actual AI caught the incorrect $435 receipt against the $410 pricing oracle; exactly one reservation submitted.',
+    );
+  }
   const expectedFailure = process.argv.includes('--expect-failed');
   if (
-    (expectedFailure
-      ? run.status !== 'failed' ||
-        !assertions.some((s) => s.status === 'failed') ||
-        !assertions.some((s) => s.status === 'passed')
-      : run.status !== 'passed') ||
+    (expectedTotalDefect
+      ? false
+      : expectedFailure
+        ? run.status !== 'failed' ||
+          !assertions.some((s) => s.status === 'failed') ||
+          !assertions.some((s) => s.status === 'passed')
+        : run.status !== 'passed') ||
     (!process.argv.includes('--fast') && gaps.some((ms) => ms < 3900))
   )
     throw new Error('Paced workflow did not pass with the required gap.');

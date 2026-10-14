@@ -48,3 +48,19 @@ func TestAgentEvidenceDropsURLCredentialsAndBoundsLargeResults(t *testing.T) {
 		t.Fatal("Sanitization mutated original browser evidence")
 	}
 }
+
+func TestAgentHistoryRedactsNavigationParametersWithoutChangingTypedInput(t *testing.T) {
+	view := map[string]any{"steps": []any{
+		map[string]any{"action": map[string]any{"operation": "navigate", "value": "https://app.test/orders?session=private-token#secret"}},
+		map[string]any{"action": map[string]any{"operation": "open_tab", "value": "https://user:password@app.test/invoice?token=private-token"}},
+		map[string]any{"action": map[string]any{"operation": "fill", "value": "https://example.test/?campaign=public-example"}},
+	}}
+	public := agentPublicEvidence(view)
+	raw, _ := json.Marshal(public)
+	if strings.Contains(string(raw), "private-token") || strings.Contains(string(raw), "password") || strings.Contains(string(raw), "#secret") {
+		t.Fatal("navigation credentials leaked into agent history")
+	}
+	if !strings.Contains(string(raw), "campaign=public-example") {
+		t.Fatal("ordinary user input was rewritten")
+	}
+}

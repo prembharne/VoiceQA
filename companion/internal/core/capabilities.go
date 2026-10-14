@@ -135,3 +135,17 @@ func (p Plan) UsesPageScopes() bool {
 	}
 	return false
 }
+
+func (s *Scope) Clone() *Scope {
+	copy := &Scope{Current: s.Current, Origins: map[string]string{}, Created: map[string]bool{}, Approved: map[string]bool{}}
+	for key, value := range s.Origins {
+		copy.Origins[key] = value
+	}
+	for key, value := range s.Created {
+		copy.Created[key] = value
+	}
+	for key, value := range s.Approved {
+		copy.Approved[key] = value
+	}
+	return copy
+}

@@ -55,6 +55,9 @@ export function ChatComposer({
   onReadLinks,
   discover,
   onDiscover,
+  workspace,
+  allowConsequential,
+  onAllowConsequential,
   mode,
   apiWrites,
   onAPIWrites,
@@ -173,7 +176,9 @@ export function ChatComposer({
             disabled={busy || running}
             onChange={(e) => onIntent(e.target.value)}
           >
-            <option value="test">Test & automate</option>
+            <option value="test">
+              {workspace === 'automation' ? 'Automate & execute' : 'Test & verify'}
+            </option>
             <option value="ask">Ask & investigate</option>
           </select>
           <details
@@ -187,6 +192,17 @@ export function ChatComposer({
             </summary>
             <div className="options-popover">
               <strong>Workspace options</strong>
+              {workspace === 'automation' && (
+                <label className="option-check">
+                  <input
+                    type="checkbox"
+                    checked={allowConsequential}
+                    disabled={busy || running}
+                    onChange={(e) => onAllowConsequential(e.target.checked)}
+                  />
+                  Allow consequential actions (send, publish, pay, delete)
+                </label>
+              )}
               <label className="option-check">
                 <input
                   type="checkbox"

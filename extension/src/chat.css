@@ -947,3 +947,39 @@ body::before {
   min-width: 0;
   max-width: 100%;
 }
+
+.workspace-switch {
+  display: flex;
+  gap: 8px;
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--border);
+}
+.workspace-switch button {
+  flex: 1;
+  min-height: 40px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--muted);
+  font-size: 12px;
+  cursor: pointer;
+}
+.workspace-switch button[aria-pressed='true'] {
+  background: #33465f;
+  color: var(--text);
+  border-color: var(--accent);
+}
+.workspace-switch button:disabled {
+  opacity: 0.6;
+}
+.mission-review {
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  padding: 16px;
+  background: var(--surface);
+  margin: 16px 0;
+}
+.mission-review li {
+  line-height: 1.6;
+  margin-top: 8px;
+}

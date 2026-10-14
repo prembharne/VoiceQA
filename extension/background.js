@@ -255,7 +255,7 @@ async function handlePanel(method, payload) {
     const uploaded = await native.upload(bytes, payload.mime);
     return native.rpc('audio.complete', { artifactId: uploaded.artifactId, mime: payload.mime });
   }
-  if (method === 'plan.propose' || method === 'agent.query') {
+  if (method === 'plan.propose' || method === 'agent.query' || method === 'automation.propose') {
     if (!state.target) throw new Error('Select a target tab first');
     if (state.runId) throw new Error('Finish the current run first');
     if (stopping || state.planning)
@@ -315,6 +315,7 @@ async function handlePanel(method, payload) {
     registry.ensure();
     const planned = await native.rpc('plan.get', { id: payload.planId });
     state.testMode = planned.mode || 'qa';
+    state.automationPolicy = planned.automation || null;
     state.securityAuthorized = planned.securityAuthorized === true;
     state.apiWritesAllowed = planned.apiWritesAllowed === true;
     state.httpCount = 0;
@@ -608,6 +609,26 @@ async function execute(action, token, secureOrigin = '') {
   const secure = Boolean(secureOrigin);
   validateAction(action);
   await waitForTarget(token);
+  if (
+    state.automationPolicy &&
+    !state.automationPolicy.allowConsequential &&
+    (action.operation === 'click' ||
+      (action.operation === 'key' && ['Enter', 'Space'].includes(action.value)))
+  ) {
+    const context = await content(
+      {
+        type: 'vqa.action-context',
+        target: action.target || '',
+        focused: action.operation === 'key',
+      },
+      token,
+    );
+    if (context.consequential)
+      throw fault(
+        'This control may send, publish, pay, transfer or delete. Consequential-action permission was not granted in mission review.',
+        'needs_review',
+      );
+  }
   switch (action.operation) {
     case 'open_tab':
       return registry.open(action.target, action.value, token);
@@ -1027,6 +1048,9 @@ async function onNative(message) {
         result = { viewport: views[0].result, mode: 'current-width', page: state.currentPage };
         break;
       }
+      case 'resolve_target':
+        result = await resolveReady(p.target, token);
+        break;
       case 'execute':
         await attach(token);
         result = await execute(p.action, token, p.secure === true ? p.secureOrigin : '');

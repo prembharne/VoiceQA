@@ -21,7 +21,9 @@ export function RunProgress({ run, paused }) {
     <section className="run-progress" aria-label="Live test progress">
       <div className="run-progress-heading">
         <span className="eyebrow">
-          STEP {index} OF {run.totalSteps || '?'}
+          {run.plan?.automation
+            ? `ACTION ${index} · BUDGET ${run.plan.automation.maxActions}`
+            : `STEP ${index} OF ${run.totalSteps || '?'}`}
         </span>
         <span className="run-progress-state">
           {waiting ? (

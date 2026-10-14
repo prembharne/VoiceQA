@@ -1,6 +1,6 @@
 # Advanced browser QA goal - active capability audit
 
-The requested goal remains broad: general end-to-end workflows, debugging, Q&A, authorized logical security checks, stronger Chrome isolation, more agent tools and outstanding real-model results across websites. Version 0.8.0 is a verified investigation foundation, not completion of that entire goal.
+The requested goal remains broad: general end-to-end workflows, debugging, Q&A, authorized logical security checks, stronger Chrome isolation, more agent tools and outstanding real-model results across websites. Version 0.9.0 adds a verified adaptive browser automation workspace alongside QA & debugging. It is not completion of the entire goal, including the requested highest browser-automation capability.
 
 ## Current implementation and evidence
 
@@ -12,10 +12,12 @@ The requested goal remains broad: general end-to-end workflows, debugging, Q&A, 
 - Fresh real-model discovery + plan + browser execution passed 25 steps and 4 independent checks. Evidence: `.tools/live-checks/paced-live-run-plMBZb/run.json`. Earlier investigation-assisted runs exposed a prose-as-literal expectation and a shortened heading locator; the generic prompt and evidence-bound locator compilation were corrected.
 - Actual chat mode selection/submission/rendering, not only direct RPC, passed. Latest evidence: `.tools/live-checks/paced-live-run-5y8FSh/ask-answer.png`; accompanying run passed 27 steps/4 checks. Composer controls and both popovers fit at 360px and 420px. Reduced-motion and zero-spoken-announcement checks remain enabled.
 - Supplementary guards cover scope/parameter/action-route rejection, encoded action paths, console-value exclusion, undeclared mutation tool requests and bounded sanitized evidence. These are not substitutes for the real-model/browser evidence.
+- A real adaptive negative test initially falsely passed a $435 receipt because previous $410 pricing observations were absent from later model requests. The runner now persists/supplies bounded sanitized state memory. A new real-model replay correctly recorded expected $410 versus observed $435 after one submission: `.tools/live-checks/paced-live-run-7Gr3kK/run.json`. This proves that particular discrepancy is detected; it does not establish universally correct model-generated oracles. Keyboard Space, nested icons and encoded actual control/form routes also receive consequential-action checks.
+- Fresh adaptive Osaka/three-traveller acceptance passed 13 steps and 6 checks with a correctly derived $460 total, one submission and a real UI permission-change rejection before launch: `.tools/live-checks/paced-live-run-CfeS5a/`. The preceding blocked attempt exposed malformed unnamed-role absence checks and an invented viewport criterion; local compilation/validation now handles those cases without changing expected application outcomes.
 
 ## Still incomplete for the full goal
 
-1. Adaptive execution/replanning of previously unseen multi-stage interfaces after each approved mutation. Initial investigation cannot reveal every state of a wizard. Fresh actions must remain bound to reviewed intent and permissions; dispatched mutations must never be silently replayed.
+1. Adaptive automation now passes an unseen multi-stage wizard through a reviewed mission and independently verified completion. More complex tasks, adaptive QA testing, temporal assertions, recovery and multiple application categories still need validation. See `BROWSER_AUTOMATION.md` for evidence and limits.
 2. Broader tool/action coverage for downloads/uploads, custom widgets, drag-and-drop, semantic outcome verification, browser timing/performance and scaled/transformed frame geometry. Existing same-origin frame/shadow-root support is not proof of all frame/widget compatibility.
 3. Model-assisted debugging grounded in complete scoped run evidence, including explicit distinctions between faulty expectations, selector problems, transient backend failures and reproducible application defects. Runtime collection cannot reconstruct events that occurred before attachment.
 4. Fresh generic-planner logical security validation: account/resource ownership, server roles, price authority, CSRF and duplicate submission with positive controls and real model-generated requests. Earlier release fixture results do not validate the new general agent.

@@ -10,7 +10,15 @@ Replies use `rpc.result` with `payload.requestId`, `result`, and optional `error
 
 `plan.progress` events carry `requestId`, `phase` (waiting/adapting/analyzing/generating/validating/repairing) and `receivedChars`, a UTF-8 output byte count. These are transient planning metadata, never raw output or reasoning. The worker accepts only the active planning ID and clears it on Stop, completion, restart or disconnect. `plan.propose` has a seven-minute companion deadline, with six minutes shared by AI generation and its optional single validation repair. Native/panel bridges wait 7.5/eight minutes; all other method limits remain unchanged.
 
-Supported RPCs: `hello`, `settings.get/save`, `project.configure`, `plan.propose/confirm/get/list/fork`, `run.start/cancel/get/list/compare`, `upload.begin/chunk/complete`, `artifact.get`, `audio.complete`, `baseline.approve`, and `report.export`.
+Supported RPCs include `hello`, `settings.get/save`, `project.configure`, `plan.propose/confirm/get/list/fork`, `agent.query`, `automation.propose`, `run.start/cancel/get/list/compare`, `upload.begin/chunk/complete`, `artifact.get`, `audio.complete`, `baseline.approve`, and `report.export`.
+
+## Investigation and adaptive automation (0.8/0.9)
+
+`agent.query` uses the same guarded planning transport/deadline to return a source-linked answer or an essential clarification. Its model loop selects bounded read-only browser tools; tool names/arguments, source IDs and approved origins are checked locally.
+
+`automation.propose` accepts `request`, bounded conversation, trusted `allowConsequential`, `apiWritesAllowed` and `maxActions`. The worker supplies URL/origin/shared pages. It returns a Plan with `mode: automation`, no fixed cases, one preserved viewport and `automation: {maxActions, allowConsequential, criteria}`. `plan.confirm` and `run.start` still require the exact reviewed version. Changed UI permissions require a fresh mission proposal.
+
+During execution, each model decision is `action`, `complete` (one assert per criterion ID) or `blocked`. Fresh public observations, retained state evidence, recent results and remaining budget are included. `browser.request` also supports the read-only `resolve_target` preflight. Run snapshots add `agentPhase`, bounded sanitized `observations` and `evidenceOmitted`; history summaries omit observation bodies. Control/form consequence checks precede Click, Enter and Space, independently of model labels. No automatic speech announcement accompanies events.
 
 Speech RPCs: `speech.synthesize` takes `text` (1–4096 characters) and a unique `speechId`, returning a temporary MP3 artifact ID. `speech.cancel` cancels a specific synthesis without stopping a test run. `speech.release` deletes only a marked temporary speech artifact; it cannot delete test evidence. Existing chunked `artifact.get` transfers audio to the panel. The panel uses generation checks to suppress late playback after cancellation.
 

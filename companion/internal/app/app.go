@@ -19,7 +19,7 @@ import (
 	"voiceqa/companion/internal/store"
 )
 
-const HostVersion = "0.8.0"
+const HostVersion = "0.9.0"
 
 type browserReply struct {
 	Result map[string]any
@@ -127,7 +127,7 @@ func (a *App) Handle(m native.Message) {
 		return
 	}
 	var generation *uint64
-	if m.Type == "plan.propose" || m.Type == "agent.query" || m.Type == "audio.complete" {
+	if m.Type == "plan.propose" || m.Type == "agent.query" || m.Type == "automation.propose" || m.Type == "audio.complete" {
 		a.mu.Lock()
 		value := a.workGeneration
 		generation = &value
@@ -236,12 +236,12 @@ func (a *App) dispatch(m native.Message) (any, error) {
 }
 func (a *App) dispatchWork(m native.Message, generation *uint64) (any, error) {
 	timeout := 2 * time.Minute
-	if m.Type == "plan.propose" || m.Type == "agent.query" {
+	if m.Type == "plan.propose" || m.Type == "agent.query" || m.Type == "automation.propose" {
 		timeout = provider.PlanningTimeout + time.Minute
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
-	if m.Type == "plan.propose" || m.Type == "agent.query" || m.Type == "audio.complete" {
+	if m.Type == "plan.propose" || m.Type == "agent.query" || m.Type == "automation.propose" || m.Type == "audio.complete" {
 		a.mu.Lock()
 		if a.closing || (generation != nil && *generation != a.workGeneration) {
 			a.mu.Unlock()
@@ -345,6 +345,8 @@ func (a *App) dispatchWork(m native.Message, generation *uint64) (any, error) {
 			return nil, errors.New("invalid project origin")
 		}
 		return p, a.Store.Put("project", p.Origin, p)
+	case "automation.propose":
+		return a.proposeAutomation(ctx, m)
 	case "agent.query":
 		var p struct {
 			Request      string              `json:"request"`

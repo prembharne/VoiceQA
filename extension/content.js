@@ -4,7 +4,7 @@
   const overlays = [];
   const requests = new Set();
   const mandatoryPrivate =
-    'input[type=password],input[autocomplete=one-time-code],[data-voiceqa-secret],input[name*=csrf i],input[name*=xsrf i],meta[name*=csrf i],meta[name*=xsrf i],input[name=__RequestVerificationToken],[name=cf-turnstile-response],[name=g-recaptcha-response],[name=h-captcha-response]';
+    'input[type=password],input[autocomplete^=cc-],input[autocomplete=one-time-code],[data-voiceqa-secret],input[name*=csrf i],input[name*=xsrf i],meta[name*=csrf i],meta[name*=xsrf i],input[name=__RequestVerificationToken],[name=cf-turnstile-response],[name=g-recaptcha-response],[name=h-captcha-response]';
   let maskSelectors = 'input[type=password], input[type=email], [data-private]';
   const privateSelectors = () => (maskSelectors ? maskSelectors + ',' : '') + mandatoryPrivate;
   const normalize = (s) =>
@@ -188,6 +188,7 @@
       y,
       target,
       tag: el.tagName,
+      text: privateElement(el) ? '[redacted]' : publicText(el).slice(0, 1000),
       privateField: privateElement(el),
       secretField: Boolean(el.matches(mandatoryPrivate) || el.closest('[data-private]')),
       inputType: el.type,
@@ -235,6 +236,11 @@
             : [],
         name: name(el),
         disabled: Boolean(el.disabled),
+        checked: Boolean(el.checked),
+        focused: el.getRootNode().activeElement === el || el.ownerDocument.activeElement === el,
+        selectedIndex: typeof el.selectedIndex === 'number' ? el.selectedIndex : null,
+        expanded: el.getAttribute('aria-expanded'),
+        pressed: el.getAttribute('aria-pressed'),
         text: privateElement(el) ? '[redacted]' : publicText(el).slice(0, 180),
         value: privateElement(el) ? '[redacted]' : String(el.value ?? '').slice(0, 100),
       }))
@@ -258,7 +264,9 @@
       title: document.title,
       fixture: document.querySelector('meta[name=voiceqa-fixture]')?.content || '',
       controls,
-      results: query('output,h1,h2,h3,[role=status],[role=alert],[aria-live],table,summary')
+      results: query(
+        'output,h1,h2,h3,p[id],span[id],[role=status],[role=alert],[aria-live],table,summary',
+      )
         .filter(
           (el) =>
             visible(el) ||
@@ -697,6 +705,52 @@
                 .map((f) => ({ action: f.action, method: f.method })),
             };
             break;
+          case 'vqa.action-context': {
+            let el;
+            if (message.focused) {
+              el = document.activeElement;
+              while (
+                el?.shadowRoot?.activeElement ||
+                (el?.tagName === 'IFRAME' && el.contentDocument?.activeElement)
+              )
+                el = el.shadowRoot?.activeElement || el.contentDocument.activeElement;
+            } else el = unique(message.target);
+            if (!el) throw new Error('No focused control to inspect');
+            // A selector can hit an icon inside a button. Inspect the actual
+            // activating ancestor rather than letting its empty label hide risk.
+            el = el.closest('button,a,input[type=submit],input[type=button],[role=button]') || el;
+            const form = el.form || el.closest('form');
+            const labels = form
+              ? [
+                  ...form.querySelectorAll(
+                    'button[type=submit],input[type=submit],button:not([type])',
+                  ),
+                ]
+                  .filter(visible)
+                  .map(name)
+                  .join(' ')
+              : '';
+            const text = [name(el), message.focused ? labels : ''].join(' ');
+            const actionRoute = [el.href, form?.action].filter(Boolean).some((raw) => {
+              try {
+                let path = new URL(raw, location.href).pathname;
+                for (let n = 0; n < 2; n++) path = decodeURIComponent(path);
+                return /\/(?:delete|remove|logout|signout|pay|purchase|transfer|publish|send|reset)(?:\/|$)/i.test(
+                  path,
+                );
+              } catch {
+                return true;
+              }
+            });
+            const consequential =
+              actionRoute ||
+              /\b(?:delete|erase|destroy|remove account|publish|send|pay|purchase|buy|transfer|place order|confirm payment)\b/i.test(
+                text,
+              ) ||
+              Boolean(form?.querySelector('[autocomplete^=cc-]'));
+            result = { consequential, control: name(el) };
+            break;
+          }
           case 'vqa.inspect':
             result = inspectElement(message.target);
             break;
