@@ -91,5 +91,6 @@ const AutomationTemporalAuditInstructions = `Also review potentialRegressions. E
 
 func AutomationAuditSchema() map[string]any {
 	list := func() map[string]any { return map[string]any{"type": "array", "items": String()} }
-	return Object(map[string]any{"covered": map[string]any{"type": "boolean"}, "missingRequirements": list(), "invalidExpectations": list(), "essentialQuestion": String(), "confirmedRegressionIds": list()})
+	question := map[string]any{"type": "string", "description": "Empty string when no essential user answer is needed, including every covered=true verdict. Only a specific unanswered business-rule QUESTION belongs here; never a summary, approval, explanation, or statement that checks are comprehensive."}
+	return Object(map[string]any{"covered": map[string]any{"type": "boolean"}, "missingRequirements": list(), "invalidExpectations": list(), "essentialQuestion": question, "confirmedRegressionIds": list()})
 }

@@ -1,0 +1,11 @@
+{
+  "id": "travelforge-live-request",
+  "version": 1,
+  "origin": "http://127.0.0.1:4178",
+  "url": "http://127.0.0.1:4178/",
+  "request": "Complete the reservation wizard for QA Traveller, Tokyo, and 2 travellers. Verify the total from the displayed pricing and that the final reservation matches these details. Submit exactly one synthetic reservation. Preserve browser width.",
+  "model": "dots-studio/dots-3-note-preview:free",
+  "aiProvider": "openrouter",
+  "preserveViewport": true,
+  "mode": "automation"
+}

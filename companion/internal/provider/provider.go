@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/textproto"
 	"os"
+	"sort"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -218,6 +219,7 @@ func Object(properties map[string]any) map[string]any {
 	for k := range properties {
 		required = append(required, k)
 	}
+	sort.Strings(required)
 	return map[string]any{"type": "object", "additionalProperties": false, "properties": properties, "required": required}
 }
 func String() map[string]any { return map[string]any{"type": "string"} }

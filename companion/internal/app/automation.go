@@ -619,6 +619,11 @@ func (a *App) preflightAutomationAssertion(ctx context.Context, r *core.Run, act
 	if err != nil {
 		return fmt.Errorf("Verification target is not present in current state; select an actual observed result target without changing the expected outcome: %w", err)
 	}
+	if text, ok := meta["text"].(string); ok {
+		if err := validateQuotedOutcome(r, action, text); err != nil {
+			return err
+		}
+	}
 	if action.Assertion.Kind == "number" {
 		text, _ := meta["text"].(string)
 		if text != "" && len(observedNumberPattern.FindAllString(text, -1)) != 1 {

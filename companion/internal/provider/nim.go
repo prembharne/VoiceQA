@@ -62,6 +62,7 @@ func (c *Client) chatStructured(ctx context.Context, key, model, instructions st
 	}
 	mode := "json-schema"
 	toolTransport := false
+	var resultContracts map[string]functionContract
 	name := "NVIDIA NIM"
 	var capabilities routerModel
 	if c.Router {
@@ -94,7 +95,7 @@ func (c *Client) chatStructured(ctx context.Context, key, model, instructions st
 	// Some compatible endpoints advertise strict output but do not expose the
 	// format contract to the model. Put the schema in the prompt as well; local
 	// validation remains authoritative even with native structured output.
-	{
+	if !toolTransport {
 		if c.Router && mode != "json-schema" {
 			schema = compactJSONContract(schema)
 			instructions += "\nCOMPACT JSON MODE: omit unused optional action and HTTP fields rather than emitting empty strings or nulls. Omitted values use local defaults. Include every field needed by the chosen operation and actual assertion."
@@ -123,9 +124,9 @@ func (c *Client) chatStructured(ctx context.Context, key, model, instructions st
 		// unavailable. This function only returns data; it never executes tools.
 		delete(body, "response_format")
 		body["stream"] = false
-		body["tools"] = []any{map[string]any{"type": "function", "function": map[string]any{"name": "submit_result", "description": "Submit the result matching the supplied contract. No browser action is executed by this function.", "parameters": compactJSONContract(schema)}}}
+		body["tools"], resultContracts = nativeResultFunctions(schema)
 		messages := body["messages"].([]map[string]string)
-		messages[0]["content"] += "\nTRANSPORT: Return the complete result as arguments of the submit_result function exactly once. Do not output a separate text JSON object or call any other function."
+		messages[0]["content"] += "\nFUNCTION TRANSPORT: Choose exactly ONE of the declared functions for your next decision. Its argument schema replaces the JSON reply wrapper described above: do not include result/type/operation fields unless explicitly declared in the chosen function. The controller restores those fixed discriminators from the function you choose. Do not output a separate text reply or call multiple functions. These declarations grant no permission beyond the trusted scope and policy."
 	}
 	if c.Router {
 		body["provider"] = map[string]any{"require_parameters": true}
@@ -246,12 +247,16 @@ func (c *Client) chatStructured(ctx context.Context, key, model, instructions st
 		return nil, nil, e
 	}
 	if toolTransport {
-		return parseToolStructured(raw, budget)
+		return parseDeclaredToolStructured(raw, budget, resultContracts)
 	}
 	return parseChatStructuredMode(raw, budget, c.Router && mode != "json-schema")
 }
 
 func parseToolStructured(raw []byte, budget int) (json.RawMessage, map[string]int, error) {
+	return parseDeclaredToolStructured(raw, budget, map[string]functionContract{"submit_result": {}})
+}
+
+func parseDeclaredToolStructured(raw []byte, budget int, contracts map[string]functionContract) (json.RawMessage, map[string]int, error) {
 	var packet struct {
 		Choices []struct {
 			Index   int    `json:"index"`
@@ -289,23 +294,44 @@ func parseToolStructured(raw []byte, budget int) (json.RawMessage, map[string]in
 	// Auto tool selection is portable across endpoints that reject named
 	// tool_choice. A complete plain JSON reply still follows the same contract.
 	if choice.Finish == "stop" && len(choice.Message.Calls) == 0 && choice.Message.Refusal == "" && (len(packet.Error) == 0 || string(packet.Error) == "null") {
-		return parseChatStructuredMode(raw, budget, true)
+		result, usage, err := parseChatStructuredMode(raw, budget, true)
+		if err != nil {
+			return result, usage, err
+		}
+		result, restored, err := restoreUniqueFunctionReply(result, contracts)
+		if restored {
+			usage["typed_json_replies"] = 1
+		}
+		return result, usage, err
 	}
 	if choice.Finish != "tool_calls" || choice.Message.Refusal != "" || strings.TrimSpace(choice.Message.Content) != "" || len(choice.Message.Calls) != 1 || (len(packet.Error) > 0 && string(packet.Error) != "null") {
-		return nil, usage, errors.New("AI function response is incomplete, refused or ambiguous; no action was dispatched")
+		finish := "other"
+		switch choice.Finish {
+		case "stop", "tool_calls", "content_filter":
+			finish = choice.Finish
+		}
+		return nil, usage, fmt.Errorf("AI function response is incomplete, refused or ambiguous (finish=%s, calls=%d, textBytes=%d, refused=%t, providerError=%t); no action was dispatched", finish, len(choice.Message.Calls), len(choice.Message.Content), choice.Message.Refusal != "", len(packet.Error) > 0 && string(packet.Error) != "null")
 	}
 	call := choice.Message.Calls[0]
 	arguments := normalizedJSON([]byte(call.Function.Arguments))
 	name := strings.TrimPrefix(call.Function.Name, "functions.")
-	if call.Type != "function" || name != "submit_result" || len(arguments) == 0 || arguments[0] != '{' || !json.Valid(arguments) {
+	contract, declared := contracts[name]
+	if call.Type != "function" || !declared || len(arguments) == 0 || arguments[0] != '{' || !json.Valid(arguments) {
 		// Metadata only: never include generated arguments or filled values.
 		nameClass := "unexpected"
-		if name == "submit_result" {
+		if declared {
 			nameClass = "expected"
 		}
 		return nil, usage, fmt.Errorf("AI function contract rejected (function=%s, typeValid=%t, JSONValid=%t, object=%t, argumentBytes=%d); no action was dispatched", nameClass, call.Type == "function", json.Valid(arguments), len(arguments) > 0 && arguments[0] == '{', len(arguments))
 	}
-	return json.RawMessage(arguments), usage, nil
+	result, err := contract.decode(arguments)
+	if err == nil {
+		usage["function_calls"] = 1
+		if contract.Kind != "" {
+			usage["typed_function_calls"] = 1
+		}
+	}
+	return result, usage, err
 }
 
 // Normalize exact presentation/encoding wrappers, never prose or malformed JSON.
@@ -411,9 +437,30 @@ func parseChatStructuredMode(raw []byte, budget int, allowFence bool) (json.RawM
 		choice.Message.Content = string(normalizedJSON([]byte(choice.Message.Content)))
 	}
 	if !json.Valid([]byte(choice.Message.Content)) {
-		return nil, usage, errors.New("AI provider did not return valid JSON; no tests were run")
+		return nil, usage, structuredFormatError([]byte(choice.Message.Content))
 	}
 	return json.RawMessage(choice.Message.Content), usage, nil
+}
+
+// Classify formatting failures without including model text, captured page
+// values or credentials in error messages. This distinguishes an empty reply
+// from an exact presentation wrapper or genuinely malformed JSON.
+func structuredFormatError(raw []byte) error {
+	text := bytes.TrimSpace(raw)
+	format := "text"
+	switch {
+	case len(text) == 0:
+		format = "empty"
+	case bytes.HasPrefix(text, []byte("```")):
+		format = "markdown-fence"
+	case text[0] == '{':
+		format = "malformed-object"
+	case text[0] == '[':
+		format = "malformed-array"
+	case text[0] == '"':
+		format = "quoted-text"
+	}
+	return fmt.Errorf("AI provider did not return valid JSON (format=%s, bytes=%d); no tests were run", format, len(raw))
 }
 
 type chatLimitError struct{}
