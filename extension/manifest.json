@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "VoiceQA — QA from your voice",
-  "version": "0.12.0",
+  "version": "0.12.1",
   "description": "Plan, execute, and verify website tests from a Chrome side panel, with a local Go companion.",
   "minimum_chrome_version": "125",
   "permissions": [

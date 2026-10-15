@@ -15,6 +15,7 @@ import { AuthSettings } from './components/auth-settings.jsx';
 import { RunProgress } from './components/run-progress.jsx';
 import { PlanningStatus } from './components/planning-status.jsx';
 import { parseTestData } from './components/workflow-options.jsx';
+import { AI_PROVIDERS } from '../../shared/ai-providers.js';
 
 const terminal = (status) => !['running', 'paused', 'queued'].includes(status);
 const pretty = (s) => String(s || '').replaceAll('_', ' ');
@@ -50,8 +51,8 @@ function App() {
   const [compareAfter, setCompareAfter] = useState('');
   const [comparison, setComparison] = useState(null);
   const [settings, setSettings] = useState({
-    aiProvider: 'openai',
-    model: 'gpt-5.6-sol',
+    aiProvider: 'openrouter',
+    model: AI_PROVIDERS.openrouter.model,
     transcriptionModel: 'gpt-4o-mini-transcribe',
     maskSelectors: 'input[type=password], input[type=email], [data-private]',
     apiKey: '',

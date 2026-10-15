@@ -3,10 +3,10 @@ import { AI_PROVIDERS } from '../../../shared/ai-providers.js';
 import { Button } from './ui.jsx';
 
 export function APISettings({ settings, disabled, busy, onSave }) {
-  const [provider, setProvider] = useState(settings.aiProvider || 'openai');
+  const [provider, setProvider] = useState(settings.aiProvider || 'openrouter');
   const [key, setKey] = useState('');
   useEffect(() => {
-    setProvider(settings.aiProvider || 'openai');
+    setProvider(settings.aiProvider || 'openrouter');
     setKey('');
   }, [settings.aiProvider, settings.hasApiKey]);
   const selected = AI_PROVIDERS[provider];

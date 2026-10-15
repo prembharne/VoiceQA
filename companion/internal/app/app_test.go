@@ -26,7 +26,11 @@ func newTestApp(t *testing.T) *App {
 		t.Fatal(e)
 	}
 	t.Cleanup(func() { s.Close() })
-	return New(s, func(native.Message) error { return nil })
+	a := New(s, func(native.Message) error { return nil })
+	// These protocol fixtures use the OpenAI transport explicitly; product
+	// defaults are verified separately from transport-specific test setup.
+	a.settings.AIProvider, a.settings.Model = "openai", "gpt-5.6-sol"
+	return a
 }
 func message(typ string, p any) native.Message {
 	b, _ := json.Marshal(p)

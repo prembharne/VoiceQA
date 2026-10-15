@@ -19,7 +19,7 @@ import (
 	"voiceqa/companion/internal/store"
 )
 
-const HostVersion = "0.12.0"
+const HostVersion = "0.12.1"
 
 type browserReply struct {
 	Result map[string]any
@@ -59,10 +59,17 @@ func New(s *store.Store, send func(native.Message) error) *App {
 	_ = s.Get("settings", "default", &a.settings)
 	var savedSettings map[string]json.RawMessage
 	_ = s.Get("settings", "default", &savedSettings)
-	if len(savedSettings["aiProvider"]) == 0 && a.settings.AIProvider == "openai" && strings.HasPrefix(a.storedKey("api-key.dpapi"), "sk-or-") {
+	if len(savedSettings["aiProvider"]) == 0 && strings.HasPrefix(a.storedKey("api-key.dpapi"), "sk-or-") {
 		a.settings.AIProvider = "openrouter"
-		a.settings.Model = "openai/gpt-4o"
+		a.settings.Model = dotsModel
 		_ = s.Put("settings", "default", a.settings)
+	} else if len(savedSettings) > 0 && len(savedSettings["aiProvider"]) == 0 {
+		// Records written before provider selection used OpenAI. Preserve that
+		// interpretation instead of routing their existing models to OpenRouter.
+		a.settings.AIProvider = "openai"
+		if len(savedSettings["model"]) == 0 {
+			a.settings.Model = "gpt-5.6-sol"
+		}
 	}
 	a.cleanSpeechArtifacts()
 	runs, _ := s.List("run")
