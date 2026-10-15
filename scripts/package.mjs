@@ -36,11 +36,20 @@ for (const name of [
       `${root}/licenses/${name.replaceAll('/', '-')}-${file}`,
     );
 }
-const modules = execFileSync('go', ['list', '-m', '-f', '{{.Path}}|{{.Version}}|{{.Dir}}', 'all'], {
-  encoding: 'utf8',
-})
-  .trim()
-  .split(/\r?\n/);
+// License the modules actually linked into the host. Enumerating the entire
+// module graph also fetches unused upstream test dependencies during packaging.
+const modules = [
+  ...new Set(
+    execFileSync(
+      'go',
+      ['list', '-deps', '-f', '{{with .Module}}{{.Path}}|{{.Version}}|{{.Dir}}{{end}}', './companion/cmd/voiceqa'],
+      { encoding: 'utf8' },
+    )
+      .trim()
+      .split(/\r?\n/)
+      .filter(Boolean),
+  ),
+];
 const notices = [
   'VoiceQA includes the following open-source components. Their licenses are included in this folder.',
   'JavaScript runtime: React, React DOM, axe-core, Motion, Lucide React. Local font: Inter (Fontsource). Build-time schema generation: Ajv.',
