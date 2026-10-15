@@ -18,6 +18,9 @@ func canReground(operation string) bool {
 
 func (a *App) executeAdvanced(ctx context.Context, r *core.Run, idx int, action core.Action) (map[string]any, error) {
 	payload := map[string]any{"operation": "execute", "action": action, "origin": r.Plan.Origin, "mode": r.Plan.Mode}
+	if action.Visual != nil {
+		payload["operation"], payload["visual"] = "execute_visual", action.Visual
+	}
 	secure := action.Operation == "fill_secret" || action.Operation == "fill_totp"
 	if secure {
 		location, e := a.browser(ctx, r.ID, "", map[string]any{"operation": "location", "origin": r.Plan.Origin})

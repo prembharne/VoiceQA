@@ -1,0 +1,17 @@
+{
+  "id": "visual-live-acceptance",
+  "version": 1,
+  "origin": "http://127.0.0.1:4181",
+  "url": "http://127.0.0.1:4181/",
+  "request": "Create a new contract file named RouterProbe.sol in contracts. Put exactly this source in the editor: pragma solidity ^0.8.20; contract RouterProbe { uint public count = 7; }. Click Compile contract and verify Compilation succeeded. Then click the blue Run checks button inside the canvas panel and verify Canvas checks passed. Preserve the current browser width.",
+  "summary": "Owned visual routing acceptance",
+  "clarification": "",
+  "cases": [],
+  "viewports": [{ "width": 1280, "height": 720 }],
+  "preserveViewport": true,
+  "confirmed": false,
+  "visual": false,
+  "model": "dots-studio/dots-3-note-preview:free",
+  "aiProvider": "openrouter",
+  "createdAt": "2026-10-15T00:00:00Z"
+}

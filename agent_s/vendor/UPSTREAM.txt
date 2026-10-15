@@ -1,0 +1,5 @@
+Simular Agent S3
+https://github.com/simular-ai/Agent-S
+Commit 15776a8dc659658b1963816ea006f7af1978e595
+Apache-2.0
+Unmodified s3 modules; VoiceQA adapter overrides execution at runtime.

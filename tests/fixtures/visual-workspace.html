@@ -1,0 +1,184 @@
+<!doctype html>
+<html lang="en">
+  <meta charset="UTF-8" /><title>Atlas Studio — Visual QA workspace</title>
+  <style>
+    * {
+      box-sizing: border-box;
+    }
+    body {
+      margin: 0;
+      font: 14px system-ui;
+      background: #121923;
+      color: #e9eff8;
+    }
+    header {
+      height: 68px;
+      display: flex;
+      align-items: center;
+      gap: 18px;
+      padding: 0 22px;
+      border-bottom: 1px solid #344157;
+    }
+    header strong {
+      font-size: 19px;
+    }
+    button,
+    input {
+      font: inherit;
+    }
+    button {
+      cursor: pointer;
+      border: 1px solid #52627e;
+      border-radius: 6px;
+      background: #27374f;
+      color: white;
+      padding: 9px 16px;
+    }
+    button:focus,
+    input:focus,
+    textarea:focus {
+      outline: 2px solid #79bbff;
+    }
+    header span {
+      color: #8ea5c6;
+      margin-right: auto;
+    }
+    .layout {
+      display: grid;
+      grid-template-columns: 250px 1fr;
+      height: calc(100vh - 68px);
+    }
+    aside {
+      padding: 20px;
+      background: #192332;
+      border-right: 1px solid #344157;
+    }
+    aside h2 {
+      font-size: 11px;
+      letter-spacing: 2px;
+      color: #8ea5c6;
+    }
+    aside button {
+      width: 100%;
+      text-align: left;
+      margin: 9px 0;
+    }
+    #tree {
+      padding: 18px 0;
+      line-height: 2.5;
+      color: #a7c3ef;
+    }
+    main {
+      padding: 24px;
+    }
+    #filename-form {
+      display: none;
+      gap: 8px;
+      align-items: center;
+      margin: 18px 0;
+    }
+    input {
+      background: #0b131f;
+      color: white;
+      border: 1px solid #687c9c;
+      border-radius: 5px;
+      padding: 10px;
+      width: 180px;
+    }
+    textarea {
+      display: block;
+      width: 100%;
+      height: calc(100vh - 265px);
+      resize: none;
+      background: #0c131e;
+      color: #b6dec6;
+      padding: 20px;
+      font: 14px monospace;
+      border: 1px solid #344157;
+      border-radius: 8px;
+    }
+    #output {
+      color: #b8dcbf;
+      padding: 16px 0;
+    }
+    canvas {
+      border: 1px solid #344157;
+      position: absolute;
+      right: 36px;
+      bottom: 18px;
+      background: #172334;
+      border-radius: 6px;
+    }
+  </style>
+  <header>
+    <strong>Atlas Studio</strong><span>Local Solidity workspace</span
+    ><button id="compile">Compile contract</button><button id="deploy">Deploy to local VM</button>
+  </header>
+  <div class="layout">
+    <aside>
+      <h2>FILE EXPLORER</h2>
+      <button id="new-file">＋ New file</button><button id="new-folder">＋ New folder</button>
+      <div id="tree">▾ contracts<br />　Example.sol<br />▸ artifacts<br />▸ dependencies</div>
+      <h2>TOOLS</h2>
+      <button id="search">Search workspace</button><button id="settings">Preferences</button>
+    </aside>
+    <main>
+      <div id="path">contracts / <span id="active-file">No file selected</span></div>
+      <form id="filename-form">
+        <label for="filename">File name</label><input id="filename" autocomplete="off" /><button>
+          Create file
+        </button>
+      </form>
+      <textarea
+        id="editor"
+        aria-label="Contract source editor"
+        placeholder="Create a contract file to begin"
+      ></textarea
+      ><span id="build-status" role="status">Not compiled</span>
+      <div id="output" role="status">Ready</div>
+      <canvas id="canvas" width="230" height="65"></canvas>
+    </main>
+  </div>
+  <script>
+    const byId = (id) => document.getElementById(id);
+    let last = '';
+    const mark = (v) => {
+      last = v;
+      document.body.dataset.lastAction = v;
+      byId('output').textContent = v;
+    };
+    byId('new-file').onclick = () => {
+      byId('filename-form').style.display = 'flex';
+      byId('filename').focus();
+      mark('Filename input opened');
+    };
+    byId('filename-form').onsubmit = (e) => {
+      e.preventDefault();
+      byId('active-file').textContent = byId('filename').value;
+      byId('filename-form').style.display = 'none';
+      byId('editor').focus();
+      mark('File created: ' + byId('filename').value);
+    };
+    byId('compile').onclick = () => {
+      const result = byId('editor').value.includes('contract')
+        ? 'Compilation succeeded'
+        : 'No contract source';
+      byId('build-status').textContent = result;
+      mark(result);
+    };
+    byId('deploy').onclick = () => mark('Local VM deployment confirmed');
+    const ctx = byId('canvas').getContext('2d');
+    ctx.fillStyle = '#428ae3';
+    ctx.fillRect(14, 14, 94, 37);
+    ctx.fillStyle = '#cb7240';
+    ctx.fillRect(122, 14, 94, 37);
+    ctx.fillStyle = 'white';
+    ctx.font = '13px system-ui';
+    ctx.fillText('Run checks', 25, 38);
+    ctx.fillText('Clear log', 139, 38);
+    byId('canvas').onclick = (e) => {
+      const r = e.currentTarget.getBoundingClientRect();
+      mark(e.clientX - r.left < 115 ? 'Canvas checks passed' : 'Log cleared');
+    };
+  </script>
+</html>

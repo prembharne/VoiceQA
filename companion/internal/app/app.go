@@ -19,7 +19,7 @@ import (
 	"voiceqa/companion/internal/store"
 )
 
-const HostVersion = "0.12.1"
+const HostVersion = "0.13.0"
 
 type browserReply struct {
 	Result map[string]any

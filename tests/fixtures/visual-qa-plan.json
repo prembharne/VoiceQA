@@ -1,0 +1,50 @@
+{
+  "id": "visual-qa-acceptance",
+  "version": 1,
+  "origin": "http://127.0.0.1:4181",
+  "url": "http://127.0.0.1:4181/",
+  "request": "Open the New file dialog and verify the filename input is visible.",
+  "summary": "Reviewed QA visual target recovery",
+  "clarification": "",
+  "mode": "qa",
+  "cases": [
+    {
+      "name": "Missing DOM target recovery",
+      "goal": "Recover only the approved click and preserve the assertion",
+      "source": "test",
+      "steps": [
+        {
+          "operation": "navigate",
+          "value": "http://127.0.0.1:4181/",
+          "label": "Open the owned workspace"
+        },
+        {
+          "operation": "click",
+          "target": "#missing-original-target",
+          "label": "Open the New file dialog using the New file button"
+        },
+        {
+          "operation": "assert",
+          "target": "#filename",
+          "label": "Verify the filename field is visible",
+          "assertion": {
+            "kind": "visible",
+            "expected": "true"
+          }
+        }
+      ]
+    }
+  ],
+  "viewports": [
+    {
+      "width": 1280,
+      "height": 720
+    }
+  ],
+  "preserveViewport": true,
+  "confirmed": false,
+  "visual": false,
+  "model": "dots-studio/dots-3-note-preview:free",
+  "aiProvider": "openrouter",
+  "createdAt": "2026-10-15T00:00:00Z"
+}

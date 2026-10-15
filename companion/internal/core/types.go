@@ -40,13 +40,22 @@ type Assertion struct {
 	Tolerance float64 `json:"tolerance,omitempty"`
 }
 type Action struct {
-	HTTP      *HTTPCheck `json:"http,omitempty"`
-	Operation string     `json:"operation"`
-	Target    string     `json:"target,omitempty"`
-	Value     string     `json:"value,omitempty"`
-	Assertion *Assertion `json:"assertion,omitempty"`
-	Label     string     `json:"label"`
-	TimeoutMS int        `json:"timeoutMs,omitempty"`
+	// Controller-only attachment. Model JSON cannot supply visual privileges.
+	Visual    *VisualPoint `json:"-"`
+	HTTP      *HTTPCheck   `json:"http,omitempty"`
+	Operation string       `json:"operation"`
+	Target    string       `json:"target,omitempty"`
+	Value     string       `json:"value,omitempty"`
+	Assertion *Assertion   `json:"assertion,omitempty"`
+	Label     string       `json:"label"`
+	TimeoutMS int          `json:"timeoutMs,omitempty"`
+}
+type VisualPoint struct {
+	Snapshot string `json:"snapshot"`
+	X        int    `json:"x"`
+	Y        int    `json:"y"`
+	Width    int    `json:"width"`
+	Height   int    `json:"height"`
 }
 type Case struct {
 	Page   string   `json:"page,omitempty"`

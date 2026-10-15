@@ -23,7 +23,7 @@ func agentToolVariants(tools []string) []any {
 		switch name {
 		case "inspect_element":
 			fields["target"] = String()
-		case "search_page", "read_run":
+		case "search_page", "read_run", "visual_inspect":
 			fields["query"] = String()
 		case "read_link":
 			fields["url"] = map[string]any{"type": "string", "description": "Exact absolute URL of an observed public link on an approved origin. Never a selector, label or new page alias."}

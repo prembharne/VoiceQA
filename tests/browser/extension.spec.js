@@ -146,7 +146,7 @@ test('empty history gives a clear next step before the first run', async () => {
   await expect(control.getByRole('button', { name: 'Start your first test' })).toBeVisible();
   await control.screenshot({ path: resolve(work, 'empty-history.png'), fullPage: true });
   await control.getByRole('button', { name: 'Start your first test' }).click();
-  await expect(control.getByRole('heading', { name: 'What should we test?' })).toBeVisible();
+  await expect(control.getByRole('heading', { name: 'From intention to verified action.' })).toBeVisible();
 });
 test('website URL is readable before site access and Test this tab selects the active website', async () => {
   // Unlike 127.0.0.1, localhost has no pre-granted host permission in this fixture.
@@ -423,7 +423,7 @@ test('chat shows planning phases and elapsed time, restores a failed request and
   });
   try {
     await panel.goto(`chrome-extension://${extensionId}/panel.html`);
-    const composer = panel.getByPlaceholder('Ask VoiceQA to test this page…');
+    const composer = panel.getByRole('textbox', { name: 'Test request', exact: true });
     const prompt = 'Discover and test the complete order workflow.';
     await composer.fill(prompt);
     await panel.getByRole('button', { name: 'Send test request', exact: true }).click();
@@ -506,7 +506,7 @@ test('side panel renders offline-safe UI without remote code or JavaScript error
   await control.bringToFront();
   await control.getByRole('button', { name: 'New chat', exact: true }).click();
   await control.setViewportSize({ width: 420, height: 1000 });
-  await expect(control.getByRole('heading', { name: 'What should we test?' })).toBeVisible();
+  await expect(control.getByRole('heading', { name: 'From intention to verified action.' })).toBeVisible();
   await control.screenshot({ path: resolve(work, 'side-panel.png'), fullPage: true });
   expect(errors).toEqual([]);
 });
@@ -525,7 +525,7 @@ test('the panel recovers from its disconnected port without reopening the page',
   await control.getByRole('button', { name: 'Retry connection', exact: true }).click();
   await expect(control.locator('.engine-dot.connected')).toBeVisible();
   await control.getByRole('button', { name: 'New chat', exact: true }).click();
-  await expect(control.getByRole('heading', { name: 'What should we test?' })).toBeVisible();
+  await expect(control.getByRole('heading', { name: 'From intention to verified action.' })).toBeVisible();
 });
 test('polished views fit narrow and wide panels and respect reduced motion', async () => {
   await control.bringToFront();
@@ -628,7 +628,7 @@ test('microphone transcribes editable text without an API key or automatic submi
   });
   try {
     await panel.goto(`chrome-extension://${extensionId}/panel.html`);
-    const composer = panel.getByPlaceholder('Ask VoiceQA to test this page…');
+    const composer = panel.getByRole('textbox', { name: 'Test request', exact: true });
     await composer.fill('Please');
     const plansBefore = (await invoke('plan.list')).length;
     await panel.getByRole('button', { name: 'Transcribe request', exact: true }).click();

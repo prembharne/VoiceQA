@@ -9,4 +9,6 @@ playwright-report/
 *.log
 *.exe
 *.dpapi
+__pycache__/
+*.pyc
 shared/envelope-validator.js

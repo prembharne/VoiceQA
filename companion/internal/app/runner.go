@@ -266,6 +266,14 @@ func (a *App) execute(ctx context.Context, r *core.Run) {
 					var be *BrowserError
 					if e != nil && errors.As(e, &be) && be.Code == "target_missing" && r.Plan.Model != "fixture-demo" && canReground(action.Operation) {
 						for attempt := 0; attempt < 2; attempt++ {
+							if action.Operation != "select" && a.visualAvailable(r.Plan.AIProvider, r.Plan.Model) {
+								var recovered core.Action
+								recovered, e = a.groundVisual(ctx, r, action)
+								if e == nil {
+									result, e = a.browser(ctx, r.ID, core.ID(), map[string]any{"operation": "execute_visual", "action": recovered, "visual": recovered.Visual, "origin": r.Plan.Origin})
+								}
+								break
+							}
 							grounded, ge := a.ground(ctx, r, action)
 							if ge != nil {
 								e = ge

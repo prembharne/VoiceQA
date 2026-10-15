@@ -24,6 +24,7 @@ if (paidQwen && (plan.aiProvider !== 'openrouter' || plan.model !== 'qwen/qwen3.
   throw new Error('Paid acceptance permits only the explicitly authorized Qwen 3.7 Flash.');
 if (
   (debugRecord ||
+    process.argv.includes('--visual-qa') ||
     livePlanning ||
     process.argv.includes('--followup') ||
     process.argv.includes('--investigate') ||
@@ -35,12 +36,14 @@ const security = plan.mode === 'security';
 const workspace = plan.origin === 'http://127.0.0.1:4176';
 const multiWorkspace = plan.origin === 'http://127.0.0.1:4179';
 const parcelWorkspace = plan.origin === 'http://127.0.0.1:4180';
+const visualWorkspace = plan.origin === 'http://127.0.0.1:4181';
 const expectedStale = multiWorkspace && process.argv.includes('--expect-stale-original');
 const generic = [
   'http://127.0.0.1:4177',
   'http://127.0.0.1:4178',
   'http://127.0.0.1:4179',
   'http://127.0.0.1:4180',
+  'http://127.0.0.1:4181',
 ].includes(plan.origin);
 const origin = generic
   ? plan.origin
@@ -160,6 +163,7 @@ const copiedKeys = ['openrouter-api-key.dpapi', 'api-key.dpapi'];
 try {
   if (
     debugRecord ||
+    process.argv.includes('--visual-qa') ||
     livePlanning ||
     process.argv.includes('--followup') ||
     process.argv.includes('--investigate') ||
@@ -176,11 +180,19 @@ try {
   context = await chromium.launchPersistentContext(join(work, 'profile'), {
     channel: 'chromium',
     headless: true,
-    args: [`--disable-extensions-except=${extension}`, `--load-extension=${extension}`],
+    ...(visualWorkspace ? { viewport: null } : {}),
+    args: [
+      `--disable-extensions-except=${extension}`,
+      `--load-extension=${extension}`,
+      ...(visualWorkspace ? ['--window-size=1440,1000'] : []),
+    ],
     env: {
       ...process.env,
       VOICEQA_DATA_DIR: data,
       VOICEQA_ACCEPTANCE_QWEN: paidQwen ? '1' : '',
+      VOICEQA_AGENT_S_DIAGNOSTICS: process.argv.includes('--visual-agent')
+        ? join(work, 'visual-error.json')
+        : '',
       VOICEQA_ACCEPTANCE_QWEN_LOW_TOKENS: lowTokens ? '1' : '',
       OPENAI_API_KEY: '',
       OPENROUTER_API_KEY: '',
@@ -528,7 +540,7 @@ try {
         request: plan.request,
         conversation: plan.conversation || [],
         maxActions: 40,
-        allowConsequential: false,
+        allowConsequential: visualWorkspace && process.argv.includes('--visual-agent'),
         discover: process.argv.includes('--discover'),
         readLinks: true,
         responsive: !automationLive && !plan.preserveViewport && plan.viewports.length > 1,
@@ -1059,6 +1071,68 @@ try {
       );
     }
     const expectedFailure = process.argv.includes('--expect-failed');
+    if (visualWorkspace && process.argv.includes('--visual-qa')) {
+      if (
+        !run.agentEvents?.some((e) => e.kind === 'agent_route' && e.name === 'agent-s3') ||
+        !run.steps.some((s) => s.result?.agent === 'agent-s3') ||
+        !assertions.some(
+          (s) =>
+            s.action.assertion?.kind === 'visible' &&
+            s.action.assertion.expected === 'true' &&
+            s.status === 'passed',
+        )
+      )
+        throw new Error(
+          'Reviewed QA did not use actual visual recovery and preserve the original assertion',
+        );
+    }
+    if (visualWorkspace && process.argv.includes('--visual-agent')) {
+      const state = {
+        file: await target.locator('#active-file').textContent(),
+        source: await target.locator('#editor').inputValue(),
+        build: await target.locator('#build-status').textContent(),
+        output: await target.locator('#output').textContent(),
+        viewport: await target.evaluate(() => ({ width: innerWidth, height: innerHeight })),
+      };
+      await writeFile(join(work, 'visual-state.json'), JSON.stringify(state, null, 2));
+      if (
+        state.file !== 'RouterProbe.sol' ||
+        state.source !==
+          'pragma solidity ^0.8.20; contract RouterProbe { uint public count = 7; }' ||
+        state.build !== 'Compilation succeeded' ||
+        state.output !== 'Canvas checks passed' ||
+        state.viewport.width !== plan.viewports[0].width ||
+        !run.steps.some((s) => s.result?.agent === 'agent-s3') ||
+        !run.agentEvents?.some((e) => e.kind === 'agent_route' && e.name === 'agent-s3') ||
+        !assertions.length
+      )
+        throw new Error(
+          'Actual hybrid workflow did not satisfy independent state, routing and assertion checks',
+        );
+      console.log(
+        'Actual Dots → Agent S/Qwen → DOM verification passed; file, source, fixture build, canvas and current viewport independently checked.',
+      );
+      if (process.argv.includes('--visual-investigate')) {
+        const before = await target.locator('body').innerText();
+        const answer = await rpc('agent.query', {
+          request:
+            'Inspect the rendered canvas panel and report the two button labels and their colors. DOM text does not expose their labels. Use visual inspection and cite evidence. Do not click, type, scroll or change the application.',
+          readLinks: false,
+        });
+        await writeFile(join(work, 'visual-investigation.json'), JSON.stringify(answer, null, 2));
+        if (
+          !answer.evidence?.some(
+            (e) =>
+              e.tool === 'visual_inspect' && !e.error && e.result?.model === 'qwen/qwen3.7-flash',
+          ) ||
+          before !== (await target.locator('body').innerText())
+        )
+          throw new Error('Actual read-only Agent S investigation failed or changed the page');
+        console.log(
+          'Actual Dots → Agent S/Qwen read-only canvas investigation passed; page unchanged.',
+        );
+      }
+    }
     if (
       (expectedTotalDefect || expectedStale || expectedStatusDefect
         ? false
@@ -1130,6 +1204,7 @@ try {
     } finally {
       if (
         debugRecord ||
+        process.argv.includes('--visual-qa') ||
         livePlanning ||
         process.argv.includes('--followup') ||
         process.argv.includes('--investigate') ||

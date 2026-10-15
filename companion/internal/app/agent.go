@@ -10,6 +10,7 @@ import (
 	"strings"
 	"voiceqa/companion/internal/core"
 	"voiceqa/companion/internal/provider"
+	"voiceqa/companion/internal/visualagent"
 )
 
 type AgentEvidence struct {
@@ -81,6 +82,9 @@ func (a *App) investigateWithRun(ctx context.Context, request, origin string, pa
 	}
 	settings := a.getSettings()
 	result.Model = settings.Model
+	visualEnabled := recorded == nil && a.visualAvailable(settings.AIProvider, settings.Model)
+	visual := &visualSession{}
+	defer visual.close()
 	names := []string{"observe_page", "inspect_element", "search_page", "diagnostics", "accessibility"}
 	if links {
 		names = append(names, "read_link")
@@ -91,6 +95,10 @@ func (a *App) investigateWithRun(ctx context.Context, request, origin string, pa
 		{"name": "search_page", "purpose": "Search visible public page text for a phrase; return bounded matching elements and selectors."},
 		{"name": "diagnostics", "purpose": "Read captured network status/timing and sanitized runtime exception locations on the primary shared page. Collection starts on demand; absent events do not establish health."},
 		{"name": "accessibility", "purpose": "Read automated accessibility findings on the primary shared page. Rule checks are partial accessibility coverage."},
+	}
+	if visualEnabled {
+		names = append(names, "visual_inspect")
+		registry = append(registry, map[string]string{"name": "visual_inspect", "purpose": "Use Agent S/Qwen screenshot inspection when DOM evidence cannot explain canvas controls, code editors or complex visual UI. Read-only: never clicks or enters text. page=main, query=short inspection objective, target/url empty. Visual interpretation is not an assertion."})
 	}
 	if links {
 		registry = append(registry, map[string]string{"name": "read_link", "purpose": "Preview a previously observed parameter-free HTTP(S) link on an approved origin in a temporary inactive tab. Never submit/click; close the preview after observing it. At most three link reads."})
@@ -276,6 +284,18 @@ func (a *App) investigateWithRun(ctx context.Context, request, origin string, pa
 							toolErr = errors.New("Read-run accepts only the selected run and its evidence query")
 						} else {
 							view, toolErr = recordedRunEvidence(recorded, reply.Args.Query)
+						}
+					} else if reply.Name == "visual_inspect" {
+						if !visualEnabled || reply.Args.Page != "main" || reply.Args.Target != "" || reply.Args.URL != "" {
+							toolErr = errors.New("Visual investigation accepts only a read objective on the primary shared page")
+						} else {
+							var visualReply visualagent.Reply
+							var image map[string]any
+							visualReply, image, toolErr = visual.call(ctx, a, "", origin, "Read the current screenshot without any interaction. Report only observable facts relevant to: "+request+". Inspection objective: "+reply.Args.Query+". Use agent.report for the factual observation; no clicks, typing, navigation or success claims.", "", true, result.Usage)
+							if toolErr == nil && visualReply.Result.Operation != "report" {
+								toolErr = errors.New("Visual investigator returned no factual report")
+							}
+							view = map[string]any{"agent": "agent-s3", "model": fallbackModel, "observation": visualReply.Result.Text, "capture": image, "limitation": "Screenshot interpretation only; independently verify application state"}
 						}
 					} else {
 						view, toolErr = a.browser(ctx, "", "", map[string]any{"operation": "agent_tool", "tool": reply.Name, "page": reply.Args.Page, "target": reply.Args.Target, "query": reply.Args.Query, "url": reply.Args.URL, "origin": origin, "allowLinks": links})

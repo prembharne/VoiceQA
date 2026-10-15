@@ -2,6 +2,10 @@
 
 This document records current evidence, not projected reliability.
 
+## Hybrid visual routing - 2026-10-15
+
+Actual Qwen grounding passed eight screenshot targets at two viewport sizes. Final-build extension/Eino acceptance `paced-live-run-Yb7Ye4` passed fifteen steps and nine assertions in 75.7 seconds after Dots handed a canvas interaction to Agent S/Qwen, preserving browser width. Read-only investigation identified canvas labels/colors without changing the page. Reviewed QA acceptance `paced-live-run-RFgUW9` recovered a missing target with actual Qwen grounding and passed the unchanged assertion. A separate real Remix screenshot check located the actual preferences control without clicking it. These do not establish Solidity compilation/deployment or a complete Remix journey. Go race, 51 JavaScript, three restricted-dispatch and seven targeted Chrome checks passed; the complete 54-test browser suite is not claimed. See [the hybrid integration record](HYBRID_AGENT_ROUTER.md).
+
 ## Eino live agent runtime - 2026-10-15
 
 Version 0.12.0 pins Eino ADK v0.9.21 and reuses VoiceQA's typed tools behind the existing origin, permission, credential and outcome guards. Live calls prefer advertised native tools and forward completed call/result pairs, including actual read results. Fresh Dots-only negative acceptance `paced-live-run-NLaXQp` correctly failed on expected Ready versus observed Archived after one save and refresh (eight steps, 99.7 seconds). Fresh healthy Dots-first acceptance `paced-live-run-WjCqBA` attempted Dots, encountered a provider failure, then passed ten steps and three assertions using the authorized Qwen fallback (87.3 seconds), with actual constraint inspection and exactly one saved release. Earlier incomplete/error runs remain rejected rather than treated as success; their integration fixes and limitations are in [the Eino integration record](EINO_AGENT_HARNESS.md). The Go race suite and all 51 JavaScript checks passed. Dependency checks found no npm findings or reachable Go vulnerabilities.

@@ -14,15 +14,23 @@ import (
 	"voiceqa/companion/internal/agentharness"
 	"voiceqa/companion/internal/core"
 	"voiceqa/companion/internal/provider"
+	"voiceqa/companion/internal/visualagent"
 
 	"github.com/cloudwego/eino/schema"
 )
 
 const repairTool = "voiceqa_response_repair"
+const visualTool = "voiceqa_visual_step"
 const dotsModel = "dots-studio/dots-3-note-preview:free"
 const fallbackModel = "qwen/qwen3.7-flash"
 
 type automationSession struct {
+	router                progressRouter
+	visual                visualSession
+	visualReply           visualagent.Reply
+	visualImage           map[string]any
+	visualTicket          string
+	visualTotal           int
 	app                   *App
 	run                   *core.Run
 	scope                 *core.Scope
@@ -54,6 +62,7 @@ func (a *App) runAutomationHarness(ctx context.Context, r *core.Run) error {
 	}
 	v := observedViewport(view)
 	s := &automationSession{app: a, run: r, scope: scope, viewport: fmt.Sprintf("%dx%d", v.Width, v.Height), seen: map[string]bool{}, readSeen: map[string]bool{}, model: r.Plan.Model}
+	defer s.visual.close()
 	for _, profile := range profiles {
 		if scope.Approved[profile.Origin] {
 			s.profiles = append(s.profiles, profile)
@@ -70,6 +79,7 @@ func (a *App) runAutomationHarness(ctx context.Context, r *core.Run) error {
 		tools = append(tools, agentharness.Tool{Name: def.Name, Parameters: def.Parameters})
 	}
 	tools = append(tools, agentharness.Tool{Name: repairTool, Parameters: provider.Object(map[string]any{"error": provider.String()})})
+	tools = append(tools, agentharness.Tool{Name: visualTool, Parameters: provider.Object(map[string]any{"ticket": provider.String()})})
 	cfg := agentharness.Config{Instructions: provider.AutomationInstructions, Request: r.Plan.Request,
 		MaxIterations: 3 * (r.Plan.Automation.MaxActions + automationReadBudget + 1), Tools: tools,
 		Decide: func(ctx context.Context, messages []*schema.Message) (agentharness.Call, error) {
@@ -161,6 +171,28 @@ func (s *automationSession) decide(ctx context.Context, messages []*schema.Messa
 	}
 	s.observation, s.public = obs, agentPublicEvidence(obs)
 	rememberAutomationObservation(r, s.public)
+	s.router.observe(s.public)
+	reason := s.router.reason(a.visualAvailable(r.Plan.AIProvider, r.Plan.Model), s.rejections > 0, automationReadBudget-s.readCalls)
+	if s.router.visual || reason != "" {
+		if s.router.visualTurns >= 6 {
+			s.router.visual = false
+			s.router.unchanged = 0
+			s.router.reads = 0
+			s.router.visualTurns = 0
+		} else {
+			if s.visualTotal >= 16 {
+				return agentharness.Call{}, &BrowserError{Code: "blocked", Message: "Visual recovery budget exhausted; inspect the recorded handoffs before continuing"}
+			}
+			s.visualTotal++
+			s.router.visual = true
+			ticket, visualErr := s.visualDecision(ctx, reason)
+			if visualErr != nil {
+				return agentharness.Call{}, visualErr
+			}
+			args, _ := json.Marshal(map[string]string{"ticket": ticket})
+			return agentharness.Call{Name: visualTool, Arguments: string(args)}, nil
+		}
+	}
 	history := r.Steps
 	if len(history) > 12 {
 		history = history[len(history)-12:]
@@ -249,6 +281,9 @@ func (s *automationSession) invoke(ctx context.Context, call agentharness.Call) 
 	if err := ctx.Err(); err != nil {
 		return agentharness.Outcome{}, err
 	}
+	if call.Name == visualTool {
+		return s.invokeVisual(ctx, call)
+	}
 	if call.Name == repairTool {
 		var body struct {
 			Error string `json:"error"`
@@ -271,6 +306,14 @@ func (s *automationSession) invoke(ctx context.Context, call agentharness.Call) 
 		return s.reject(automationDecision{}, err)
 	}
 	d := packet.Result
+	if d.Type == "action" && (d.Action.Operation == "assert" || d.Action.Operation == "wait_for") {
+		s.router.unchanged = -1
+	}
+	if d.Type == "tool" {
+		s.router.reads++
+	} else {
+		s.router.reads = 0
+	}
 	r.AgentPhase = "Validating AI decision"
 	a.update(r)
 	if r.Status == "error" {

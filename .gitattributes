@@ -1,2 +1,4 @@
 * text=auto eol=lf
 *.ps1 text eol=crlf
+# Keep pinned third-party source unchanged, including upstream trailing spaces.
+agent_s/vendor/** whitespace=-blank-at-eol

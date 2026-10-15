@@ -6,6 +6,8 @@ The side panel is a conversational workspace: share the current website from the
 
 For the proposed hosted product and commercial rollout, see [the micro-SaaS roadmap](docs/MICRO_SAAS.md). Hosted accounts, collaboration and billing are future work.
 
+Version 0.13.0 adds hybrid routing: Dots 3 handles normal DOM automation; Agent S3 with Qwen 3.7 Flash handles visual recovery when DOM execution stalls. Reviewed QA can recover missing targets, and current-page debugging can inspect screenshots without interacting. Go/Eino retains scope, execution and outcome checks. Install the optional runtime using `scripts/install-agent-s.ps1`, then reload the extension. It shares your encrypted OpenRouter key; Qwen charges can apply. See [setup, boundaries and actual AI acceptance](docs/HYBRID_AGENT_ROUTER.md).
+
 Version 0.12.1 defaults new installs and OpenRouter provider selection to Dots 3 (`dots-studio/dots-3-note-preview:free`). Live automation uses Qwen 3.7 Flash (`qwen/qwen3.7-flash`) only after a Dots availability failure or empty result, using the same saved OpenRouter key. Existing explicit provider/model selections are preserved.
 
 Version 0.12.0 embeds Eino ADK v0.9.21 as the live browser automation runtime. It uses the existing typed browser tools and permission boundaries, supplies bounded correction feedback, rejects native-invalid submissions before dispatch, records the actual model/runtime, and supports the authorized Dots-to-Qwen fallback on transient provider failures. See [Eino integration and acceptance](docs/EINO_AGENT_HARNESS.md). Existing QA planning and read-only investigations retain their controllers.

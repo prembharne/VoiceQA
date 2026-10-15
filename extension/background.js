@@ -522,8 +522,10 @@ async function key(value, modifiers = 0, token) {
       .catch(() => {});
   }
 }
-async function click(target, token) {
-  const r = await resolveReady(target, token);
+async function click(target, token, visual = null) {
+  const r = visual
+    ? await resolveVisual(visual, token, visual.operation || 'click', target)
+    : await resolveReady(target, token);
   await command('Input.dispatchMouseEvent', { type: 'mouseMoved', x: r.x, y: r.y }, token);
   await command(
     'Input.dispatchMouseEvent',
@@ -620,7 +622,7 @@ async function assertion(action, token) {
   e.result = last;
   throw e;
 }
-async function execute(action, token, secureOrigin = '') {
+async function execute(action, token, secureOrigin = '', visual = null) {
   const secure = Boolean(secureOrigin);
   validateAction(action);
   await waitForTarget(token);
@@ -638,9 +640,9 @@ async function execute(action, token, secureOrigin = '') {
       },
       token,
     );
-    if (context.consequential && !state.automationPolicy.allowConsequential)
+    if ((context.consequential || context.opaque) && !state.automationPolicy.allowConsequential)
       throw fault(
-        'This control may send, publish, pay, transfer or delete. Consequential-action permission was not granted in mission review.',
+        'This control has a consequential or opaque canvas action. Consequential-action permission was not granted in mission review.',
         'needs_review',
       );
     if (context.nativeForm?.valid === false)
@@ -744,7 +746,7 @@ async function execute(action, token, secureOrigin = '') {
     case 'navigate':
       return navigation(action.value, token);
     case 'click':
-      await click(action.target, token);
+      await click(action.target, token, visual);
       return { dispatched: true };
     case 'fill': {
       if (secure && new URL((await checkTarget()).url).origin !== secureOrigin)
@@ -753,7 +755,9 @@ async function execute(action, token, secureOrigin = '') {
         await resolveReady(action.target, token);
         await content({ type: 'vqa.mark-secret', target: action.target }, token);
       }
-      const field = await resolveReady(action.target, token);
+      const field = visual
+        ? await resolveVisual(visual, token, 'fill', action.target)
+        : await resolveReady(action.target, token);
       if (
         (!['INPUT', 'TEXTAREA'].includes(field.tag) && !field.editable) ||
         (field.tag === 'INPUT' &&
@@ -774,7 +778,7 @@ async function execute(action, token, secureOrigin = '') {
           'Fill requires a text-entry control; no click or text was dispatched',
           'blocked',
         );
-      const r = await click(action.target, token);
+      const r = await click(action.target, token, visual);
       if (r.privateField && !secure && !(r.inputType === 'email' && !r.secretField))
         throw fault('Use a saved test credential profile for private fields.', 'blocked');
       if (!['INPUT', 'TEXTAREA'].includes(r.tag) && !r.editable)
@@ -823,24 +827,89 @@ async function execute(action, token, secureOrigin = '') {
       throw fault('Unsupported executor operation', 'blocked');
   }
 }
+let visualSnapshot = null;
+async function resolveVisual(point, token, operation, target = '') {
+  const saved = visualSnapshot;
+  if (
+    !saved ||
+    saved.id !== point.snapshot ||
+    Date.now() - saved.at > 180000 ||
+    saved.tabId !== token.tabId ||
+    saved.runId !== state.runId
+  )
+    throw fault('Visual screenshot expired or belongs to another page/run.', 'target_missing');
+  const current = await content({ type: 'vqa.visual-state' }, token);
+  if (
+    JSON.stringify(current) !== JSON.stringify(saved.state) ||
+    point.width !== current.width ||
+    point.height !== current.height
+  )
+    throw fault(
+      'Page changed since the visual observation. No input was dispatched.',
+      'target_missing',
+    );
+  if (operation === 'key') {
+    await content({ type: 'vqa.visual-focused' }, token);
+    return {};
+  }
+  const result = await content({ type: 'vqa.visual-point', point, operation }, token);
+  if (target && result.target !== target)
+    throw fault('Visual target changed before dispatch.', 'target_missing');
+  return result;
+}
+async function visualCapture(p, token) {
+  visualSnapshot = null;
+  await attach(token);
+  const before = await content({ type: 'vqa.visual-state' }, token);
+  const image = await capture(p.maskSelectors, token, p.visualMaskSelectors);
+  if (!image.fullViewport)
+    throw fault(
+      'Chrome returned a cropped screenshot for this emulated viewport. Use a real browser window viewport for visual recovery. No input was dispatched.',
+      'blocked',
+    );
+  const after = await content({ type: 'vqa.visual-state' }, token);
+  if (JSON.stringify(before) !== JSON.stringify(after))
+    throw fault(
+      'Page changed while taking visual evidence (' +
+        Object.keys(before)
+          .filter((k) => before[k] !== after[k])
+          .join(', ') +
+        '). No input was dispatched.',
+      'target_missing',
+    );
+  const id = crypto.randomUUID();
+  visualSnapshot = { id, at: Date.now(), tabId: token.tabId, runId: state.runId, state: after };
+  return { ...image, snapshot: id };
+}
 async function capture(maskSelectors, token, visualMaskSelectors = '') {
   await content({ type: 'vqa.settle' }, token);
   await content({ type: 'vqa.redact', maskSelectors, visualMaskSelectors }, token);
   try {
+    const view = await content({ type: 'vqa.observe' }, token);
+    const { dpr } = await content({ type: 'vqa.pixel-ratio' }, token);
     const { data } = await command(
       'Page.captureScreenshot',
+      // Beyond-surface clipping can reset another CDP client's viewport.
+      // Preserve width and reject cropped geometry in visualCapture instead.
       { format: 'png', captureBeyondViewport: false },
       token,
     );
     const bytes = Uint8Array.from(atob(data), (c) => c.charCodeAt(0));
+    const png = new DataView(bytes.buffer);
+    const pixelWidth = png.getUint32(16),
+      pixelHeight = png.getUint32(20);
     const { artifactId } = await native.upload(bytes, 'image/png');
-    const view = await content({ type: 'vqa.observe' }, token);
     const platform = await chrome.runtime.getPlatformInfo();
     return {
       artifactId,
       width: view.viewport.width,
       height: view.viewport.height,
-      dpr: 1,
+      dpr,
+      pixelWidth,
+      pixelHeight,
+      fullViewport:
+        Math.abs(pixelWidth - view.viewport.width * dpr) <= 1 &&
+        Math.abs(pixelHeight - view.viewport.height * dpr) <= 1,
       browserVersion:
         navigator.userAgent.match(/(?:Chrome|HeadlessChrome)\/[\d.]+/)?.[0] || navigator.userAgent,
       platform: platform.os,
@@ -1149,6 +1218,41 @@ async function onNative(message) {
           result.submissionKey && submittedForms.has(result.submissionKey),
         );
         break;
+      case 'visual_capture':
+        result = await visualCapture(p, token);
+        break;
+      case 'visual_resolve':
+        result = await resolveVisual(p.visual, token, p.actionOperation);
+        break;
+      case 'execute_visual': {
+        if (
+          !message.runId ||
+          !state.runId ||
+          !['click', 'fill', 'key'].includes(p.action?.operation)
+        )
+          throw fault(
+            'Visual input requires a running reviewed mission and an allowed action.',
+            'blocked',
+          );
+        await resolveVisual(p.visual, token, p.action.operation, p.action.target || '');
+        await attach(token);
+        try {
+          result = {
+            ...(await execute(p.action, token, '', { ...p.visual, operation: p.action.operation })),
+            agent: 'agent-s3',
+            model: 'qwen/qwen3.7-flash',
+            visual: {
+              x: p.visual.x,
+              y: p.visual.y,
+              snapshot: p.visual.snapshot,
+              target: p.action.target || '',
+            },
+          };
+        } finally {
+          visualSnapshot = null;
+        }
+        break;
+      }
       case 'action_context':
         result = await content(
           {

@@ -573,6 +573,15 @@ function App() {
                 Adapts after each action · current browser width · up to{' '}
                 {plan.automation.maxActions} actions.
               </p>
+              {plan.aiProvider === 'openrouter' &&
+                ['dots-studio/dots-3-note-preview:free', 'qwen/qwen3.7-flash'].includes(
+                  plan.model,
+                ) && (
+                  <p>
+                    DOM tools first. Complex controls may use Agent S with Qwen 3.7 Flash and masked
+                    screenshots. Qwen API charges can apply.
+                  </p>
+                )}
               <p>
                 {plan.automation.allowConsequential
                   ? 'Consequential actions explicitly allowed.'

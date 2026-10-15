@@ -2,6 +2,104 @@
   if (globalThis.__voiceqaInstalled) return;
   globalThis.__voiceqaInstalled = true;
   const overlays = [];
+  const documentKey = crypto.randomUUID();
+  let visualRevision = 0;
+  const visualMutation = (r) =>
+    !r.target.closest?.('[data-voiceqa-mask]') &&
+    !(
+      r.type === 'childList' &&
+      [...r.addedNodes, ...r.removedNodes].length &&
+      [...r.addedNodes, ...r.removedNodes].every(
+        (n) => n.nodeType === 1 && n.hasAttribute?.('data-voiceqa-mask'),
+      )
+    );
+  const visualObserver = new MutationObserver((records) => {
+    if (records.some(visualMutation)) visualRevision++;
+  });
+  visualObserver.observe(document.documentElement, {
+    subtree: true,
+    childList: true,
+    attributes: true,
+    characterData: true,
+  });
+  const visualRoots = new WeakSet([document.documentElement]);
+  // Scroll offsets, focus and size are compared directly. CDP screenshot
+  // capture can emit transient resize events while leaving that state intact.
+  for (const event of ['input', 'change'])
+    window.addEventListener(event, () => visualRevision++, true);
+  function visualState() {
+    for (const root of roots())
+      if (!visualRoots.has(root)) {
+        visualObserver.observe(root, {
+          subtree: true,
+          childList: true,
+          attributes: true,
+          characterData: true,
+        });
+        visualRoots.add(root);
+      }
+    // Drain pending records before comparing revisions.
+    if (visualObserver.takeRecords().some(visualMutation)) visualRevision++;
+    let focused = document.activeElement;
+    while (focused?.shadowRoot?.activeElement) focused = focused.shadowRoot.activeElement;
+    return {
+      documentKey,
+      revision: visualRevision,
+      url: location.href,
+      width: innerWidth,
+      height: innerHeight,
+      scrollX,
+      scrollY,
+      focus: focused ? nodeTarget(focused) : '',
+    };
+  }
+  function visualPoint(point, operation) {
+    if (
+      !point ||
+      !Number.isInteger(point.x) ||
+      !Number.isInteger(point.y) ||
+      point.x < 0 ||
+      point.y < 0 ||
+      point.x >= innerWidth ||
+      point.y >= innerHeight
+    )
+      throw new Error('Visual point is outside the approved viewport');
+    let hit = document.elementFromPoint(point.x, point.y);
+    while (hit?.shadowRoot?.elementFromPoint(point.x, point.y)) {
+      const inner = hit.shadowRoot.elementFromPoint(point.x, point.y);
+      if (inner === hit) break;
+      hit = inner;
+    }
+    if (!hit || hit.closest('iframe') || visualPrivate(hit))
+      throw new Error('Visual point is private or inaccessible');
+    let el =
+      hit.closest('button,a,input,textarea,select,[role=button],[contenteditable=true],canvas') ||
+      hit;
+    if (operation === 'fill' && !editable(el)) {
+      const editor = hit.closest('.monaco-editor,[role=code],.cm-editor,.ace_editor');
+      el = editor?.querySelector('textarea,[contenteditable=true]') || el;
+    }
+    if (visualPrivate(el) || el.disabled || el.getAttribute('aria-disabled') === 'true')
+      throw new Error('Visual control is private or disabled');
+    const candidate = selector(el);
+    const target = find(candidate).filter(visible).length === 1 ? candidate : nodeTarget(el);
+    return {
+      x: point.x,
+      y: point.y,
+      target,
+      tag: el.tagName,
+      inputType: el.type,
+      editable: editable(el),
+      privateField: false,
+      secretField: false,
+      viewport: { width: innerWidth, height: innerHeight },
+    };
+  }
+  function visualPrivate(el) {
+    for (let current = el; current; current = current.getRootNode()?.host)
+      if (privateElement(current)) return true;
+    return false;
+  }
   const requests = new Set();
   const submissionForms = new WeakMap();
   let submissionSecret = '';
@@ -527,6 +625,10 @@
           testMode: el.hasAttribute('data-voiceqa-test-captcha'),
         })),
       unsupportedFrames,
+      visualCapabilities: {
+        canvas: query('canvas').filter(visible).length,
+        editors: query('.monaco-editor,.cm-editor,.ace_editor,[role=code]').filter(visible).length,
+      },
       viewport: { width: innerWidth, height: innerHeight },
     };
   }
@@ -671,6 +773,7 @@
     unredact();
     for (const root of roots()) {
       const style = document.createElement('style');
+      style.setAttribute('data-voiceqa-mask', '');
       style.textContent =
         '*,*::before,*::after{animation:none!important;transition:none!important;caret-color:transparent!important;scroll-behavior:auto!important}';
       (root.head || root).append(style);
@@ -1018,6 +1121,7 @@
               Boolean(form?.querySelector('[autocomplete^=cc-]'));
             result = {
               consequential,
+              opaque: el.tagName === 'CANVAS',
               control: name(el),
               submissionKey: await submissionKey(el, message.key || ''),
               nativeForm: submissionValidity(el, message.key || ''),
@@ -1033,6 +1137,23 @@
           case 'vqa.resolve':
             result = await resolve(message.target);
             break;
+          case 'vqa.visual-state':
+            result = visualState();
+            break;
+          case 'vqa.pixel-ratio':
+            result = { dpr: devicePixelRatio };
+            break;
+          case 'vqa.visual-point':
+            result = visualPoint(message.point, message.operation);
+            break;
+          case 'vqa.visual-focused': {
+            let el = document.activeElement;
+            while (el?.shadowRoot?.activeElement) el = el.shadowRoot.activeElement;
+            if (!el || el.tagName === 'IFRAME' || visualPrivate(el))
+              throw new Error('Private or inaccessible visual keyboard focus');
+            result = { target: nodeTarget(el) };
+            break;
+          }
           case 'vqa.editable-focus': {
             const el = unique(message.target);
             const active = el.getRootNode().activeElement;

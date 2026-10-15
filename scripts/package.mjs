@@ -10,6 +10,7 @@ const { version } = JSON.parse(await readFile('package.json', 'utf8'));
 await mkdir(root, { recursive: true });
 await cp('dist/extension', `${root}/extension`, { recursive: true });
 await cp('dist/voiceqa-host.exe', `${root}/voiceqa-host.exe`);
+await cp('dist/agent-s', `${root}/agent-s`, { recursive: true });
 await cp('LICENSE', `${root}/LICENSE`);
 await cp('README.md', `${root}/PROJECT_README.md`);
 await cp('docs', `${root}/docs`, { recursive: true });
@@ -42,7 +43,13 @@ const modules = [
   ...new Set(
     execFileSync(
       'go',
-      ['list', '-deps', '-f', '{{with .Module}}{{.Path}}|{{.Version}}|{{.Dir}}{{end}}', './companion/cmd/voiceqa'],
+      [
+        'list',
+        '-deps',
+        '-f',
+        '{{with .Module}}{{.Path}}|{{.Version}}|{{.Dir}}{{end}}',
+        './companion/cmd/voiceqa',
+      ],
       { encoding: 'utf8' },
     )
       .trim()
@@ -51,6 +58,7 @@ const modules = [
   ),
 ];
 const notices = [
+  'Optional Agent S3 browser adapter: Apache-2.0, upstream revision 15776a8dc659658b1963816ea006f7af1978e595. License and source included in agent-s/vendor. Python dependencies are installed separately from pinned requirements; the runtime is not bundled.',
   'VoiceQA includes the following open-source components. Their licenses are included in this folder.',
   'JavaScript runtime: React, React DOM, axe-core, Motion, Lucide React. Local font: Inter (Fontsource). Build-time schema generation: Ajv.',
 ];
@@ -71,7 +79,13 @@ for (const entry of modules) {
   }
 }
 await writeFile(`${root}/THIRD-PARTY-NOTICES.txt`, notices.join('\n'));
-for (const name of ['install-host.ps1', 'uninstall-host.ps1', 'check-host.ps1', 'run-demo.ps1']) {
+for (const name of [
+  'install-host.ps1',
+  'uninstall-host.ps1',
+  'check-host.ps1',
+  'run-demo.ps1',
+  'install-agent-s.ps1',
+]) {
   let source = await readFile(`scripts/${name}`, 'utf8');
   source = source
     .replace(
@@ -80,6 +94,8 @@ for (const name of ['install-host.ps1', 'uninstall-host.ps1', 'check-host.ps1', 
     )
     .replace("'dist\\voiceqa-host.exe'", "'voiceqa-host.exe'")
     .replace("'dist\\native-host.json'", "'native-host.json'");
+  if (name === 'install-agent-s.ps1')
+    source = source.replace("Join-Path $projectRoot 'dist'", '$projectRoot');
   await writeFile(`${root}/${name}`, source);
 }
 await writeFile(
