@@ -857,6 +857,61 @@ test('mandatory private-field redaction survives an empty custom mask', async ()
   }
 });
 
+test('IDE controls expose stable unnamed handles, focus the editor and clip hit points', async () => {
+  await target.goto('http://127.0.0.1:4173/fixtures/shop');
+  await target.bringToFront();
+  const tabId = await worker.evaluate(
+    async () =>
+      (await chrome.tabs.query({})).find((t) => t.url === 'http://127.0.0.1:4173/fixtures/shop').id,
+  );
+  await invoke('bind', { tabId });
+  await target.setContent(`<style>body{margin:40px}.editor{position:relative;width:400px;height:200px;border:1px solid}textarea{position:absolute;left:16px;top:16px;width:1px;height:1px;padding:0;border:0}#clipped{position:fixed;left:-30px;top:400px;width:50px;height:40px}</style>
+    ${Array.from({ length: 60 }, (_, i) => `<button>Tool ${i}</button>`).join('')}
+    <div data-id="folder" draggable="true">contracts</div>
+    <input data-id="filename"><div role="code" class="editor"><textarea role="textbox" aria-label="Editor content" aria-roledescription="editor"></textarea></div>
+    <div contenteditable="true" aria-label="Rich text"></div><div contenteditable="true" data-private>secret-sentinel</div>
+    <button id="clipped">Edge</button>`);
+  await target.locator('[data-id=filename]').focus();
+  const view = await invoke('observe');
+  const folder = view.controls.find((c) => c.name === 'contracts');
+  const filename = view.controls.find((c) => c.focused && c.role === 'textbox');
+  expect(folder.target).toMatch(/^node:\d+$/);
+  expect(filename.target).toMatch(/^node:\d+$/);
+  expect(view.controls.indexOf(filename)).toBeLessThan(40);
+  expect(JSON.stringify(view)).not.toContain('secret-sentinel');
+  expect((await invoke('observe')).controls.find((c) => c.name === 'contracts').target).toBe(
+    folder.target,
+  );
+  const send = (message) =>
+    worker.evaluate(({ tabId, message }) => chrome.tabs.sendMessage(tabId, message), {
+      tabId,
+      message,
+    });
+  const editor = view.controls.find((c) => c.editor);
+  const point = (await send({ type: 'vqa.resolve', target: editor.target })).result;
+  expect(point.editable).toBe(true);
+  expect(point.tag).toBe('TEXTAREA');
+  const bounds = await target.locator('[role=code]').boundingBox();
+  expect(point.x).toBeCloseTo(bounds.x + bounds.width / 2);
+  expect(point.y).toBeCloseTo(bounds.y + bounds.height / 2);
+  await target
+    .locator('[role=code]')
+    .evaluate((el) => (el.onclick = () => el.querySelector('textarea').focus()));
+  await target.mouse.click(point.x, point.y);
+  expect((await send({ type: 'vqa.editable-focus', target: editor.target })).result.focused).toBe(
+    true,
+  );
+  const edge = (await send({ type: 'vqa.resolve', target: '#clipped' })).result;
+  expect(edge.x).toBeGreaterThan(0);
+  expect(edge.x).toBeLessThan(20);
+  await target.locator('[data-id=filename]').evaluate((el) => {
+    el.remove();
+    document.body.appendChild(document.createElement('input'));
+  });
+  const stale = await send({ type: 'vqa.resolve', target: filename.target });
+  expect(stale.error).toContain('Target not found');
+});
+
 async function labSuite(path, mode = 'qa', dataset, responsive = false) {
   const url = advancedOrigin + path;
   await target.goto(url);

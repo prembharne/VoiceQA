@@ -909,6 +909,37 @@ try {
       );
     }
     const expectedTotalDefect = process.argv.includes('--expect-total-defect');
+    if (process.argv.includes('--ide-controls')) {
+      if (!automationLive || origin !== 'http://127.0.0.1:4177')
+        throw new Error('IDE control acceptance is limited to the owned source editor fixture.');
+      if (run.status !== 'passed')
+        throw new Error(
+          'IDE agent did not complete: ' + run.status + ': ' + (run.error || 'unverified outcome'),
+        );
+      const saved = {
+        path: await target.locator('#saved-path').textContent(),
+        source: await target.locator('#saved-source').textContent(),
+        saves: await target.locator('#save-count').textContent(),
+      };
+      await writeFile(join(work, 'saved-source.json'), JSON.stringify(saved, null, 2));
+      const expected =
+        'pragma solidity ^0.8.20; contract VoiceQAProbe { uint256 public totalSupply = 1000; }';
+      if (
+        saved.path !== 'contracts/VoiceQAProbe.sol' ||
+        saved.source !== expected ||
+        saved.saves !== 'Saves: 1' ||
+        !run.steps.some(
+          (s) => s.action.operation === 'fill' && s.action.target.startsWith('node:'),
+        ) ||
+        assertions.filter((s) => s.status === 'passed').length < 2
+      )
+        throw new Error(
+          'Actual agent did not create/edit/save once and verify the requested file and source.',
+        );
+      console.log(
+        'Actual AI created the file through an unnamed input, edited the caret-based source control and verified saved content; one save. This is not a Solidity compilation/deployment test.',
+      );
+    }
     if (expectedTotalDefect) {
       if (!automationLive || origin !== 'http://127.0.0.1:4178')
         throw new Error('The receipt-defect check is limited to the owned adaptive wizard.');

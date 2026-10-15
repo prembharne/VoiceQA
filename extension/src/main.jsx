@@ -803,7 +803,7 @@ function App() {
             <div className="stats">
               <div>
                 <strong>{passed}</strong>
-                <span>Passed steps</span>
+                <span>Completed steps</span>
               </div>
               <div>
                 <strong>{failed}</strong>
@@ -850,7 +850,13 @@ function App() {
                       {run.plan.dataset?.length > 1 ? ` · row ${step.iteration}` : ''}
                     </small>
                   </span>
-                  <span className="step-status">{pretty(step.status)}</span>
+                  <span className="step-status">
+                    {step.status === 'passed' &&
+                    step.result?.dispatched &&
+                    !['assert', 'http_check'].includes(step.action.operation)
+                      ? 'Executed'
+                      : pretty(step.status)}
+                  </span>
                 </summary>
                 <div className="step-body">
                   {step.result?.historical && (

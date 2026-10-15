@@ -4,11 +4,66 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
+	"net/http"
 	"strings"
 	"testing"
 	"voiceqa/companion/internal/core"
 	"voiceqa/companion/internal/native"
 )
+
+type automationReplyTransport func(*http.Request) (*http.Response, error)
+
+func (f automationReplyTransport) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+func TestCompletedReplyCorrectionAndReplayFeedbackNeverDuplicateDispatch(t *testing.T) {
+	a := newTestApp(t)
+	t.Setenv("NVIDIA_API_KEY", "nvapi-fixture")
+	calls, dispatched := 0, []string{}
+	a.Provider.HTTP = &http.Client{Transport: automationReplyTransport(func(req *http.Request) (*http.Response, error) {
+		calls++
+		var input struct {
+			Messages []struct {
+				Content string `json:"content"`
+			} `json:"messages"`
+		}
+		_ = json.NewDecoder(req.Body).Decode(&input)
+		var payload map[string]any
+		_ = json.Unmarshal([]byte(input.Messages[1].Content), &payload)
+		if calls == 2 && !strings.Contains(stringField(payload, "validationError"), "valid JSON") {
+			t.Error("rejected reply did not receive format feedback")
+		}
+		if calls == 4 && !strings.Contains(stringField(payload, "validationError"), "will not be replayed") {
+			t.Error("repeated action did not receive recovery feedback")
+		}
+		content := `{"result":{"type":"action","action":{"operation":"click","target":"#folder","label":"Open folder"}}}`
+		if calls == 1 {
+			content = `{`
+		}
+		if calls == 4 {
+			content = `{"result":{"type":"action","action":{"operation":"key","value":"Enter","label":"Confirm filename"}}}`
+		}
+		body, _ := json.Marshal(map[string]any{"choices": []any{map[string]any{"index": 0, "finish_reason": "stop", "message": map[string]any{"content": content}}}})
+		return &http.Response{StatusCode: 200, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(string(body)))}, nil
+	})}
+	a.Send = func(m native.Message) error {
+		if m.Type == "browser.request" {
+			var payload map[string]any
+			_ = json.Unmarshal(m.Payload, &payload)
+			if payload["operation"] == "execute" {
+				action := payload["action"].(map[string]any)
+				dispatched = append(dispatched, stringField(action, "operation"))
+			}
+			a.Handle(message("browser.result", map[string]any{"requestId": m.ID, "result": map[string]any{"url": "https://app.test/", "page": "main", "viewport": map[string]any{"width": 1280, "height": 720}}}))
+		}
+		return nil
+	}
+	r := core.Run{ID: "correct-before-dispatch", Status: "running", Usage: map[string]int{}, Plan: core.Plan{AIProvider: "nvidia", Model: "nvidia/test", Mode: "automation", Origin: "https://app.test", URL: "https://app.test/", Automation: &core.AutomationPolicy{Live: true, MaxActions: 2}}}
+	a.executeAutomation(context.Background(), &r)
+	if calls != 4 || strings.Join(dispatched, ",") != "click,key" || len(r.DecisionErrors) != 2 || len(r.Steps) != 2 {
+		t.Fatal("recovery duplicated or dropped a dispatch", calls, dispatched, r.DecisionErrors, r.Error)
+	}
+}
 
 func TestAutomationCompletionCannotSkipCriteriaOrUseMutationAsProof(t *testing.T) {
 	p := core.Plan{Mode: "automation", URL: "https://app.test/", Origin: "https://app.test", Automation: &core.AutomationPolicy{MaxActions: 20, Criteria: []string{"Requested data is confirmed", "Exactly one reservation exists"}}}
@@ -188,6 +243,26 @@ func TestAutomationReplayFingerprintIgnoresLabelsButTracksActualState(t *testing
 	}
 	if automationStateFingerprint(action, map[string]any{"text": "One item added"}) == first {
 		t.Fatal("observable progress not tracked")
+	}
+}
+
+func TestReplayFeedbackRejectsMutationButAllowsDifferentNextControl(t *testing.T) {
+	action := core.Action{Operation: "click", Target: "#folder"}
+	state := map[string]any{"controls": []any{map[string]any{"target": "#folder", "focused": false}, map[string]any{"target": "node:1", "focused": true}}}
+	seen := map[string]bool{automationStateFingerprint(action, state): true}
+	changed := map[string]any{"controls": []any{map[string]any{"target": "node:1", "focused": false}, map[string]any{"target": "#folder", "focused": true}}}
+	if !automationReplayBlocked(action, changed, seen) {
+		t.Fatal("focus/reordering bypassed the replay guard")
+	}
+	if state["controls"].([]any)[0].(map[string]any)["focused"] != false {
+		t.Fatal("fingerprint altered live observation")
+	}
+	if automationReplayBlocked(core.Action{Operation: "fill", Target: "node:1", Value: "Token.sol"}, changed, seen) {
+		t.Fatal("blocked a different next action on the current field")
+	}
+	key := core.Action{Operation: "key", Value: "Enter"}
+	if automationStateFingerprint(key, state) == automationStateFingerprint(key, changed) {
+		t.Fatal("keyboard actions lost the identity of the focused control")
 	}
 }
 

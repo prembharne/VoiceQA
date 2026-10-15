@@ -1,0 +1,11 @@
+{
+  "id": "ide-controls-live-request",
+  "version": 1,
+  "origin": "http://127.0.0.1:4177",
+  "url": "http://127.0.0.1:4177/",
+  "request": "Create VoiceQAProbe.sol in the contracts folder with exactly this source: pragma solidity ^0.8.20; contract VoiceQAProbe { uint256 public totalSupply = 1000; } . Save it once and verify the saved path and exact saved source. The final period after the closing brace in this request is punctuation, not source code. Preserve browser width.",
+  "model": "dots-studio/dots-3-note-preview:free",
+  "aiProvider": "openrouter",
+  "preserveViewport": true,
+  "mode": "automation"
+}

@@ -17,6 +17,8 @@ The requested goal remains broad: general end-to-end workflows, debugging, Q&A, 
 
 ## Still incomplete for the full goal
 
+Version 0.11.4 adds exposed custom/unnamed IDE controls, editor focus verification, clipped click points and bounded pre-dispatch correction without replay. Dots found the controls but repeated ineffective clicks; the authorized Qwen fallback passed the owned source editor journey (11 steps, four assertions, one save). Direct manual Remix inspection compiled a probe, but full VoiceQA-driven Remix deployment/contract testing is not verified. See `IDE_CONTROL_ACCEPTANCE.md`; the full goal remains active.
+
 Typed native function choices now have actual Qwen live-wizard acceptance: 12 steps, all five checks, one submission and a correctly derived $460 total. The UI permission-change guard also passed. This improves the model transport for existing tools; it does not add missing upload/download/widget capabilities or close the generic security matrix. See `NATIVE_FUNCTION_TRANSPORT.md` for evidence and remaining failures.
 
 The Qwen negative receipt run initially falsely passed by copying the final displayed price. A new local preflight guard rejected that copied expectation against an earlier visible calculation output in an actual rerun, including capture laundering. That run then blocked on reply formatting; the next stopped on an ambiguous provider response. Neither establishes a successful recorded negative assertion. Earlier Nemotron defect-detection evidence does not substitute for this current Qwen acceptance. Broader oracle provenance, legitimate changed quotes/fees, numeric/API results and successful fresh negative acceptance remain open.

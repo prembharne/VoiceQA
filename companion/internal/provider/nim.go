@@ -310,7 +310,11 @@ func parseDeclaredToolStructured(raw []byte, budget int, contracts map[string]fu
 		case "stop", "tool_calls", "content_filter":
 			finish = choice.Finish
 		}
-		return nil, usage, fmt.Errorf("AI function response is incomplete, refused or ambiguous (finish=%s, calls=%d, textBytes=%d, refused=%t, providerError=%t); no action was dispatched", finish, len(choice.Message.Calls), len(choice.Message.Content), choice.Message.Refusal != "", len(packet.Error) > 0 && string(packet.Error) != "null")
+		message := fmt.Sprintf("AI function response is incomplete, refused or ambiguous (finish=%s, calls=%d, textBytes=%d, refused=%t, providerError=%t); no action was dispatched", finish, len(choice.Message.Calls), len(choice.Message.Content), choice.Message.Refusal != "", len(packet.Error) > 0 && string(packet.Error) != "null")
+		if choice.Finish == "tool_calls" && choice.Message.Refusal == "" && (len(packet.Error) == 0 || string(packet.Error) == "null") {
+			return nil, usage, responseContractErrorf("%s. Return exactly one declared function, without parallel calls or separate text", message)
+		}
+		return nil, usage, errors.New(message)
 	}
 	call := choice.Message.Calls[0]
 	arguments := normalizedJSON([]byte(call.Function.Arguments))
@@ -322,9 +326,12 @@ func parseDeclaredToolStructured(raw []byte, budget int, contracts map[string]fu
 		if declared {
 			nameClass = "expected"
 		}
-		return nil, usage, fmt.Errorf("AI function contract rejected (function=%s, typeValid=%t, JSONValid=%t, object=%t, argumentBytes=%d); no action was dispatched", nameClass, call.Type == "function", json.Valid(arguments), len(arguments) > 0 && arguments[0] == '{', len(arguments))
+		return nil, usage, responseContractErrorf("AI function contract rejected (function=%s, typeValid=%t, JSONValid=%t, object=%t, argumentBytes=%d); no action was dispatched. Use exactly one declared function with valid object arguments", nameClass, call.Type == "function", json.Valid(arguments), len(arguments) > 0 && arguments[0] == '{', len(arguments))
 	}
 	result, err := contract.decode(arguments)
+	if err != nil {
+		return nil, usage, responseContractErrorf("%s", err.Error())
+	}
 	if err == nil {
 		usage["function_calls"] = 1
 		if contract.Kind != "" {
@@ -460,7 +467,7 @@ func structuredFormatError(raw []byte) error {
 	case text[0] == '"':
 		format = "quoted-text"
 	}
-	return fmt.Errorf("AI provider did not return valid JSON (format=%s, bytes=%d); no tests were run", format, len(raw))
+	return responseContractErrorf("AI provider did not return valid JSON (format=%s, bytes=%d); no action was dispatched from this reply. Return the complete declared result without prose", format, len(raw))
 }
 
 type chatLimitError struct{}

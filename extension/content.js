@@ -4,6 +4,28 @@
   const overlays = [];
   const requests = new Set();
   const submissionForms = new WeakMap();
+  const nodeIds = new WeakMap();
+  const nodeRefs = new Map();
+  let nextNodeId = 0;
+  function nodeTarget(el) {
+    let id = nodeIds.get(el);
+    if (!id) {
+      id = `node:${++nextNodeId}`;
+      nodeIds.set(el, id);
+    }
+    nodeRefs.set(id, new WeakRef(el));
+    return id;
+  }
+  function editable(el) {
+    return ['INPUT', 'TEXTAREA'].includes(el.tagName) || el.isContentEditable;
+  }
+  function customControl(el) {
+    return (
+      el.matches('[draggable=true],[tabindex],[contenteditable=true],[onclick]') ||
+      (el.hasAttribute('data-id') &&
+        el.ownerDocument.defaultView.getComputedStyle(el).cursor === 'pointer')
+    );
+  }
   function submissionKey(el, key = '') {
     const control = el.closest('button,input[type=submit],input[type=image]') || el;
     const form = control.form || control.closest('form');
@@ -156,17 +178,22 @@
           ? publicText(el)
           : '') ||
         el.getAttribute('placeholder') ||
-        el.getAttribute('title'),
+        el.getAttribute('title') ||
+        (customControl(el) ? publicText(el).slice(0, 180) : ''),
     );
   }
   function selector(el) {
     if (el.dataset.testid) return `testid:${el.dataset.testid}`;
     if (role(el) && name(el)) return `role:${role(el)}|${name(el)}`;
     if (el.id) return `#${CSS.escape(el.id)}`;
-    return null;
+    return nodeTarget(el);
   }
   function find(target) {
     if (!target) return [];
+    if (target.startsWith('node:')) {
+      const el = nodeRefs.get(target)?.deref();
+      return el?.isConnected && roots().includes(el.getRootNode()) ? [el] : [];
+    }
     if (target.startsWith('testid:'))
       return query(`[data-testid="${CSS.escape(target.slice(7))}"]`);
     if (target.startsWith('role:')) {
@@ -216,13 +243,29 @@
     if (el.disabled || el.getAttribute('aria-disabled') === 'true')
       throw new Error('Target is disabled');
     el.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'instant' });
-    const r = el.getBoundingClientRect();
-    const cx = r.x + r.width / 2;
-    const cy = r.y + r.height / 2;
+    // Code editors keep their real input at a 1px caret. Focus through the
+    // visible editor surface, then use native keyboard input as for any field.
+    const editor = el.matches('textarea[aria-roledescription=editor]')
+      ? el.closest('[role=code]')
+      : null;
+    const surface = editor && visible(editor) ? editor : el;
+    const r = surface.getBoundingClientRect();
+    const view = el.ownerDocument.defaultView;
+    const left = Math.max(0, r.left),
+      right = Math.min(view.innerWidth, r.right);
+    const top = Math.max(0, r.top),
+      bottom = Math.min(view.innerHeight, r.bottom);
+    if (right <= left || bottom <= top) {
+      const e = new Error('Target has no visible area in the current viewport');
+      e.code = 'blocked';
+      throw e;
+    }
+    const cx = (left + right) / 2;
+    const cy = (top + bottom) / 2;
     let hit = el.ownerDocument.elementFromPoint(cx, cy);
     if (el.getRootNode() instanceof ShadowRoot)
       hit = el.getRootNode().elementFromPoint?.(cx, cy) || hit;
-    if (hit && hit !== el && !el.contains(hit) && !hit.contains(el)) {
+    if (hit && hit !== surface && !surface.contains(hit) && !hit.contains(surface)) {
       const e = new Error('Target is obscured');
       e.code = 'blocked';
       throw e;
@@ -243,6 +286,7 @@
       y,
       target,
       tag: el.tagName,
+      editable: editable(el),
       text: privateElement(el) ? '[redacted]' : publicText(el).slice(0, 1000),
       privateField: privateElement(el),
       secretField: Boolean(el.matches(mandatoryPrivate) || el.closest('[data-private]')),
@@ -254,12 +298,37 @@
     };
   }
   function observe() {
-    const controls = query('button,a[href],input,select,textarea,[role],[data-testid]')
+    for (const [id, ref] of nodeRefs) {
+      if (!ref.deref()?.isConnected) nodeRefs.delete(id);
+    }
+    // Bound weak-handle metadata on long-lived apps; current observations
+    // re-register their handles before exposing them to the agent.
+    while (nodeRefs.size > 800) nodeRefs.delete(nodeRefs.keys().next().value);
+    const controls = query(
+      'button,a[href],input,select,textarea,[role],[data-testid],[draggable=true],[tabindex],[contenteditable=true],[onclick],[data-id]',
+    )
+      .filter(
+        (el) =>
+          el.matches('button,a[href],input,select,textarea,[role],[data-testid]') ||
+          customControl(el),
+      )
       .filter(visible)
       .filter((el) => !privateElement(el) || ['INPUT', 'TEXTAREA'].includes(el.tagName))
+      // A newly focused filename field or dialog must survive evidence budgets.
+      .sort((a, b) => {
+        const priority = (el) =>
+          (editable(el) && el.getRootNode().activeElement === el ? 4 : 0) +
+          (el.closest('[role=dialog],dialog[open]') ? 2 : 0) +
+          (editable(el) ? 1 : 0);
+        return priority(b) - priority(a);
+      })
+      .slice(0, 160)
       .map((el) => ({
         target: selector(el),
         role: role(el),
+        editable: editable(el),
+        editor: el.getAttribute('aria-roledescription') === 'editor',
+        draggable: el.draggable === true,
         parameterizedLink:
           el.tagName === 'A'
             ? (() => {
@@ -845,6 +914,15 @@
           case 'vqa.resolve':
             result = resolve(message.target);
             break;
+          case 'vqa.editable-focus': {
+            const el = unique(message.target);
+            const active = el.getRootNode().activeElement;
+            result = {
+              focused:
+                editable(el) && (active === el || (el.isContentEditable && el.contains(active))),
+            };
+            break;
+          }
           case 'vqa.assert':
             result = assertion(message.action);
             break;

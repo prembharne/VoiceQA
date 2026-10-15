@@ -2,6 +2,10 @@
 
 This document records current evidence, not projected reliability.
 
+## IDE controls and live recovery — 2026-10-15
+
+Version 0.11.4 addresses the missing Remix folder/filename controls and caret-based editor focus. Actual Dots 3 acceptance found the controls but blocked on repeated ineffective choices. The authorized Qwen fallback completed the owned source editor journey: 11 recorded steps, four passing assertions and independently verified exact file/source with one save. The focused browser regression, companion suite and 50 JavaScript checks passed. Manual real Remix compilation is separate evidence; real VoiceQA-driven Remix deployment remains unverified. See [the control acceptance record](IDE_CONTROL_ACCEPTANCE.md).
+
 ## Live Dots planning and execution — 2026-10-12
 
 Version 0.6.2 was investigated using actual Dots 3 free-model calls and real extension execution. The recorded healthy suites cover 150 steps and 38 checks across 15 cases; a deliberately broken ownership suite correctly reports two cross-account access failures with 11 passed controls. The full broad suite and authentication replay preserve current width and demonstrate at least 4.004-second inspection gaps. These figures include actual model-generated plans, rather than preset fixture plans. See [the live validation record](LIVE_AI_VALIDATION.md) for failures found, scope, evidence and reproduction.

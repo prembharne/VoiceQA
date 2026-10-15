@@ -738,8 +738,11 @@ async function execute(action, token, secureOrigin = '') {
       const r = await click(action.target, token);
       if (r.privateField && !secure && !(r.inputType === 'email' && !r.secretField))
         throw fault('Use a saved test credential profile for private fields.', 'blocked');
-      if (!['INPUT', 'TEXTAREA'].includes(r.tag))
-        throw fault('Fill requires a text input', 'blocked');
+      if (!['INPUT', 'TEXTAREA'].includes(r.tag) && !r.editable)
+        throw fault('Fill requires an editable text control', 'blocked');
+      const focus = await content({ type: 'vqa.editable-focus', target: action.target }, token);
+      if (!focus.focused)
+        throw fault('Editable control did not receive focus; no text was entered', 'blocked');
       await key('a', 2, token);
       if (secure && new URL((await checkTarget()).url).origin !== secureOrigin)
         throw fault('Credential origin changed before entry.', 'blocked');

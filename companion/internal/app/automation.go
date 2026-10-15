@@ -171,21 +171,24 @@ func (a *App) executeAutomation(ctx context.Context, r *core.Run) {
 				sort.Strings(aliases)
 				schema = provider.AutomationLiveStepSchema(aliases...)
 			}
+			decision = automationDecision{} // Never reuse a rejected prior candidate.
 			raw, usage, e := a.aiClient(r.Plan.AIProvider).PlanStructured(ctx, a.keyFor(r.Plan.AIProvider), r.Plan.Model, provider.AutomationInstructions, map[string]any{"goal": r.Plan.Request, "conversation": r.Plan.Conversation, "successCriteria": r.Plan.Automation.Criteria, "permissions": r.Plan.Automation, "apiWritesAllowed": r.Plan.APIWritesAllowed, "scope": scope, "observation": public, "navigationChoices": automationNavigationChoices(scope, obs), "observedStateHistory": r.Observations, "earlierEvidenceOmitted": r.EvidenceOmitted, "recentSteps": agentPublicEvidence(map[string]any{"steps": history})["steps"], "publicValues": r.Values, "credentialProfiles": allowedProfiles, "remainingActions": r.Plan.Automation.MaxActions - len(r.Steps), "validationError": validation}, schema, nil)
 			for key, n := range usage {
 				r.Usage[key] += n
 			}
-			if e != nil {
+			if e != nil && !provider.IsResponseContractError(e) {
 				a.setInterrupted(r, agentResponseError(e, "next tool decision", true))
 				return
 			}
 			var packet struct {
 				Result automationDecision `json:"result"`
 			}
-			decoder := json.NewDecoder(bytes.NewReader(raw))
-			decoder.DisallowUnknownFields()
-			e = decoder.Decode(&packet)
-			decision = packet.Result
+			if e == nil {
+				decoder := json.NewDecoder(bytes.NewReader(raw))
+				decoder.DisallowUnknownFields()
+				e = decoder.Decode(&packet)
+				decision = packet.Result
+			}
 			if e == nil {
 				normalizeAutomationOptionals(&decision.Action)
 				for i := range decision.Checks {
@@ -263,6 +266,9 @@ func (a *App) executeAutomation(ctx context.Context, r *core.Run) {
 						break
 					}
 				}
+			}
+			if e == nil && decision.Type == "action" && automationReplayBlocked(decision.Action, public, seen) {
+				e = errors.New("This identical action was already dispatched against unchanged evidence; it will not be replayed. Inspect current controls and choose a different next action, verify the actual outcome, or report the blocker. A successful dispatch is not proof of progress")
 			}
 			if e == nil {
 				break
@@ -346,7 +352,7 @@ func (a *App) executeAutomation(ctx context.Context, r *core.Run) {
 			return
 		}
 		hash := automationStateFingerprint(action, public)
-		if action.Operation != "assert" && action.Operation != "wait_for" && action.Operation != "switch_tab" && seen[hash] {
+		if automationReplayBlocked(action, public, seen) {
 			a.setInterrupted(r, &BrowserError{Code: "needs_review", Message: "Identical action requested against unchanged evidence; no mutation was replayed"})
 			return
 		}
@@ -636,9 +642,33 @@ func (a *App) preflightAutomationAssertion(ctx context.Context, r *core.Run, act
 func automationStateFingerprint(action core.Action, state map[string]any) string {
 	action.Label = ""
 	action.TimeoutMS = 0
+	if action.Operation != "key" {
+		// Focus alone does not prove that a click/fill advanced the workflow.
+		// Observation priority may move the focused control to the front.
+		encoded, _ := json.Marshal(state)
+		var cloned map[string]any
+		_ = json.Unmarshal(encoded, &cloned)
+		state = cloned
+		if controls, ok := state["controls"].([]any); ok {
+			for _, raw := range controls {
+				if row, ok := raw.(map[string]any); ok {
+					delete(row, "focused")
+				}
+			}
+			sort.SliceStable(controls, func(i, j int) bool {
+				a, _ := json.Marshal(controls[i])
+				b, _ := json.Marshal(controls[j])
+				return string(a) < string(b)
+			})
+		}
+	}
 	raw, _ := json.Marshal(struct {
 		Action core.Action
 		State  map[string]any
 	}{action, state})
 	return fmt.Sprintf("%x", sha256.Sum256(raw))
+}
+
+func automationReplayBlocked(action core.Action, state map[string]any, seen map[string]bool) bool {
+	return action.Operation != "assert" && action.Operation != "wait_for" && action.Operation != "switch_tab" && seen[automationStateFingerprint(action, state)]
 }

@@ -23,6 +23,30 @@ func functionReply(name, arguments string) []byte {
 	return raw
 }
 
+func TestOnlyCompletedRejectedContractsPermitPreDispatchCorrection(t *testing.T) {
+	_, contracts := nativeResultFunctions(AutomationLiveStepSchema("main"))
+	valid := functionReply("browser_click", `{"target":"node:1","label":"Open folder","timeoutMs":0}`)
+	for _, reply := range [][]byte{
+		functionReply("browser_click", `{"target":"node:1","operation":"fill"}`),
+		functionReply("browser_unknown", `{}`),
+		[]byte(strings.Replace(string(valid), `"content":null`, `"content":"secret-sentinel"`, 1)),
+	} {
+		raw, _, err := parseDeclaredToolStructured(reply, 0, contracts)
+		if len(raw) != 0 || !IsResponseContractError(err) || strings.Contains(err.Error(), "secret-sentinel") {
+			t.Fatal("completed rejected reply not safely classified", err)
+		}
+	}
+	for _, reply := range [][]byte{
+		[]byte(strings.Replace(string(valid), `"finish_reason":"tool_calls"`, `"finish_reason":"length"`, 1)),
+		[]byte(strings.Replace(string(valid), `"content":null`, `"content":null,"refusal":"No"`, 1)),
+		[]byte(strings.Replace(string(valid), `"finish_reason":"tool_calls"`, `"finish_reason":"content_filter"`, 1)),
+	} {
+		if _, _, err := parseDeclaredToolStructured(reply, 0, contracts); err == nil || IsResponseContractError(err) {
+			t.Fatal("terminal refusal/limit classified as retryable", err)
+		}
+	}
+}
+
 func TestNativeLiveFunctionsSelectOneTypedActionWithoutWrapper(t *testing.T) {
 	functions, contracts := nativeResultFunctions(AutomationLiveStepSchema("main", "review"))
 	if len(functions) < 15 || contracts["browser_click"].Operation != "click" || contracts["browser_http_check"].Operation != "http_check" {
