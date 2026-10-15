@@ -109,7 +109,20 @@ func nativeResultFunctions(schema any) ([]any, map[string]functionContract) {
 }
 
 func resultFunction(name string, schema any) map[string]any {
-	return map[string]any{"type": "function", "function": map[string]any{"name": name, "description": "Return this single decision using the declared arguments. Execution and validation are performed separately by the local controller.", "parameters": schema}}
+	description := "Return this single decision using the declared arguments. Execution and validation are performed separately by the local controller."
+	switch name {
+	case "browser_inspect_element":
+		description = "Read an element's actual pattern, length/range constraints, public description, options and value. Use BEFORE choosing a format-constrained identifier. Clicking the field does NOT inspect its constraints. Private values remain redacted."
+	case "browser_search_page":
+		description = "Find a phrase/control missing from the bounded page snapshot. Returns public matches and selectors; does not click or inspect field constraints."
+	case "browser_click":
+		description = "Click one currently observed control. For a custom combobox, click its button and then an exposed option. This does NOT read input constraints or prove that a form was saved."
+	case "browser_select":
+		description = "Choose an actual option value on a native HTML SELECT only. Custom combobox buttons/options require browser_click instead."
+	case "report_complete":
+		description = "Propose independent assertions covering every requested outcome. The application verifies coverage and real outcomes before passing. Do not repair a persistence discrepancy or submit again to hide it."
+	}
+	return map[string]any{"type": "function", "function": map[string]any{"name": name, "description": description, "parameters": schema}}
 }
 
 func genericResultFunction(schema any) ([]any, map[string]functionContract) {

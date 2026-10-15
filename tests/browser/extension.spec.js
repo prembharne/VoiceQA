@@ -887,6 +887,22 @@ test('IDE controls expose stable unnamed handles, focus the editor and clip hit 
       tabId,
       message,
     });
+  const found = await send({ type: 'vqa.search', query: 'contracts' });
+  expect(found.result.matches.some((m) => m.target === folder.target)).toBe(true);
+  await target.locator('[data-id=filename]').evaluate((el) => {
+    el.pattern = 'rel-[a-z]{4,8}';
+    el.maxLength = 12;
+    el.setAttribute('aria-describedby', 'constraint-help');
+    const hint = document.createElement('p');
+    hint.id = 'constraint-help';
+    hint.innerHTML = 'Public rule <span data-private>private-description-sentinel</span>';
+    el.after(hint);
+  });
+  const details = (await send({ type: 'vqa.inspect', target: filename.target })).result;
+  expect(details.pattern).toBe('rel-[a-z]{4,8}');
+  expect(details.maxLength).toBe(12);
+  expect(details.description).toBe('Public rule');
+  expect(JSON.stringify(details)).not.toContain('private-description-sentinel');
   const editor = view.controls.find((c) => c.editor);
   const point = (await send({ type: 'vqa.resolve', target: editor.target })).result;
   expect(point.editable).toBe(true);
@@ -910,6 +926,89 @@ test('IDE controls expose stable unnamed handles, focus the editor and clip hit 
   });
   const stale = await send({ type: 'vqa.resolve', target: filename.target });
   expect(stale.error).toContain('Target not found');
+});
+
+test('submission preflight reads native constraints without validation events or private values', async () => {
+  await target.goto('http://127.0.0.1:4173/fixtures/shop');
+  await target.bringToFront();
+  const tabId = await worker.evaluate(
+    async () =>
+      (await chrome.tabs.query({})).find((t) => t.url === 'http://127.0.0.1:4173/fixtures/shop').id,
+  );
+  await invoke('bind', { tabId });
+  await target.setContent(
+    '<form><label>Handle<input id="handle" required pattern="rel-[a-z]{4,8}" value="atlas-launch"></label><input type="password" id="password" required pattern="[A-Z]+" value="private-value-sentinel"><button id="save">Save</button><button type="submit" formnovalidate id="unchecked">Save draft</button></form>',
+  );
+  await invoke('observe');
+  await target.evaluate(() => {
+    window.invalidEvents = 0;
+    document.addEventListener('invalid', () => window.invalidEvents++, true);
+  });
+  const send = (message) =>
+    worker.evaluate(({ tabId, message }) => chrome.tabs.sendMessage(tabId, message), {
+      tabId,
+      message,
+    });
+  const blocked = (await send({ type: 'vqa.resolve', target: '#save' })).result.nativeForm;
+  expect(blocked.valid).toBe(false);
+  expect(blocked.invalidCount).toBe(2);
+  expect(blocked.fields.find((f) => f.name === 'Handle').pattern).toBe('rel-[a-z]{4,8}');
+  expect(blocked.fields.find((f) => f.name === '[private field]').reasons).toContain(
+    'patternMismatch',
+  );
+  expect(JSON.stringify(blocked)).not.toContain('private-value-sentinel');
+  expect(await target.evaluate(() => window.invalidEvents)).toBe(0);
+  await target.locator('#handle').focus();
+  expect(
+    (await send({ type: 'vqa.action-context', focused: true, key: 'Enter' })).result.nativeForm
+      .valid,
+  ).toBe(false);
+  expect((await send({ type: 'vqa.resolve', target: '#unchecked' })).result.nativeForm).toBe(null);
+  await target.locator('#handle').fill('rel-launch');
+  await target.locator('#password').fill('VALID');
+  expect((await send({ type: 'vqa.resolve', target: '#save' })).result.nativeForm.valid).toBe(true);
+});
+
+test('submission identities survive navigation without exposing credentials or volatile tokens', async () => {
+  const url = 'http://127.0.0.1:4173/fixtures/shop';
+  const render = async (token) => {
+    await target.goto(url);
+    await target.bringToFront();
+    const tabId = await worker.evaluate(
+      async (url) => (await chrome.tabs.query({})).find((t) => t.url === url).id,
+      url,
+    );
+    await invoke('bind', { tabId });
+    await target.setContent(
+      '<form id="record"><label>Customer<input name="customer" value="synthetic-customer"></label><label>Password<input name="password" type="password" value="credential-sentinel"></label><input type="hidden" name="csrf" value="' +
+        token +
+        '"><button>Save release</button></form>',
+    );
+    await invoke('observe');
+    return tabId;
+  };
+  const send = async (tabId, secret) =>
+    worker.evaluate(
+      ({ tabId, secret }) =>
+        chrome.tabs.sendMessage(tabId, {
+          type: 'vqa.resolve',
+          target: 'role:button|Save release',
+          submissionSecret: secret,
+        }),
+      { tabId, secret },
+    );
+  let tabId = await render('volatile-one');
+  const first = await send(tabId, 'a'.repeat(64));
+  expect(first.result.submissionKey).toMatch(/^[a-f0-9]{64}$/);
+  expect(JSON.stringify(first)).not.toContain('credential-sentinel');
+  tabId = await render('volatile-two');
+  const after = await send(tabId, 'a'.repeat(64));
+  expect(after.result.submissionKey).toBe(first.result.submissionKey);
+  await target.locator('[name=customer]').fill('different-customer');
+  const changed = await send(tabId, 'a'.repeat(64));
+  expect(changed.result.submissionKey).not.toBe(first.result.submissionKey);
+  const otherRun = await send(tabId, 'b'.repeat(64));
+  expect(otherRun.result.submissionKey).not.toBe(changed.result.submissionKey);
 });
 
 async function labSuite(path, mode = 'qa', dataset, responsive = false) {

@@ -4,6 +4,8 @@
   const overlays = [];
   const requests = new Set();
   const submissionForms = new WeakMap();
+  let submissionSecret = '';
+  let submissionSigner = null;
   const nodeIds = new WeakMap();
   const nodeRefs = new Map();
   let nextNodeId = 0;
@@ -26,16 +28,87 @@
         el.ownerDocument.defaultView.getComputedStyle(el).cursor === 'pointer')
     );
   }
-  function submissionKey(el, key = '') {
+  function submissionControl(el, key = '') {
     const control = el.closest('button,input[type=submit],input[type=image]') || el;
     const form = control.form || control.closest('form');
     const implicit =
       key === 'Enter' &&
       control.tagName === 'INPUT' &&
       !['button', 'reset', 'checkbox', 'radio'].includes(control.type);
-    if (!form || (!(control.type === 'submit' || control.type === 'image') && !implicit)) return '';
-    // Compare values locally, including private fields; only an opaque random
-    // identity leaves this isolated content world. Never expose a secret/hash.
+    if (!form || (!(control.type === 'submit' || control.type === 'image') && !implicit))
+      return null;
+    return { control, form };
+  }
+  function submissionValidity(el, key = '') {
+    const submission = submissionControl(el, key);
+    if (!submission || submission.form.noValidate || submission.control.formNoValidate) return null;
+    const invalid = [...submission.form.elements].filter(
+      (field) => field.willValidate && !field.validity.valid,
+    );
+    return {
+      valid: invalid.length === 0,
+      invalidCount: invalid.length,
+      // Read ValidityState instead of checkValidity/reportValidity: the latter
+      // dispatch invalid events and would make this preflight a mutation.
+      fields: invalid.slice(0, 8).map((field) => ({
+        target: selector(field),
+        name: privateElement(field) ? '[private field]' : name(field).slice(0, 120),
+        required: field.required,
+        pattern: privateElement(field) ? '' : field.pattern || '',
+        min: privateElement(field) ? '' : field.min || '',
+        max: privateElement(field) ? '' : field.max || '',
+        minLength: field.minLength,
+        maxLength: field.maxLength,
+        reasons: [
+          'valueMissing',
+          'typeMismatch',
+          'patternMismatch',
+          'tooLong',
+          'tooShort',
+          'rangeUnderflow',
+          'rangeOverflow',
+          'stepMismatch',
+          'badInput',
+          'customError',
+        ].filter((reason) => field.validity[reason]),
+      })),
+    };
+  }
+  async function submissionKey(el, key = '') {
+    const submission = submissionControl(el, key);
+    if (!submission) return '';
+    const { control, form } = submission;
+    // Values remain in the isolated world. A per-run keyed identity survives
+    // navigation without exposing credential values or an unkeyed value hash.
+    if (submissionSigner) {
+      const identity = JSON.stringify({
+        page: el.ownerDocument.location.origin + el.ownerDocument.location.pathname,
+        action: new URL(form.action).origin + new URL(form.action).pathname,
+        method: form.method,
+        submitter: name(control),
+        fields: [...form.elements]
+          .filter(
+            (field) =>
+              !field.matches(
+                'input[name*=csrf i],input[name*=xsrf i],input[name=__RequestVerificationToken],[name=cf-turnstile-response],[name=g-recaptcha-response],[name=h-captcha-response]',
+              ),
+          )
+          .map((field) => [
+            field.name || name(field),
+            field.type,
+            field.value,
+            Boolean(field.checked),
+            field.tagName === 'BUTTON' ? publicText(field) : '',
+            [...(field.files || [])].map((file) => [file.name, file.size, file.lastModified]),
+          ]),
+      });
+      const signed = await crypto.subtle.sign(
+        'HMAC',
+        await submissionSigner,
+        new TextEncoder().encode(identity),
+      );
+      return [...new Uint8Array(signed)].map((n) => n.toString(16).padStart(2, '0')).join('');
+    }
     const values = JSON.stringify(
       [...form.elements].map((field) => [
         field.name,
@@ -238,7 +311,7 @@
     }
     return items[0];
   }
-  function resolve(target) {
+  async function resolve(target) {
     const el = unique(target);
     if (el.disabled || el.getAttribute('aria-disabled') === 'true')
       throw new Error('Target is disabled');
@@ -293,7 +366,8 @@
       inputType: el.type,
       options: el.options ? [...el.options].map((o) => ({ value: o.value, label: o.label })) : [],
       selectedIndex: el.selectedIndex,
-      submissionKey: submissionKey(el),
+      submissionKey: await submissionKey(el),
+      nativeForm: submissionValidity(el),
       viewport: { width: innerWidth, height: innerHeight },
     };
   }
@@ -325,6 +399,7 @@
       .slice(0, 160)
       .map((el) => ({
         target: selector(el),
+        tag: el.tagName.toLowerCase(),
         role: role(el),
         editable: editable(el),
         editor: el.getAttribute('aria-roledescription') === 'editor',
@@ -360,8 +435,10 @@
             ? [...el.options].slice(0, 40).map((o) => ({ value: o.value, label: o.label }))
             : [],
         name: name(el),
-        disabled: Boolean(el.disabled),
+        disabled: Boolean(el.disabled) || el.getAttribute('aria-disabled') === 'true',
         checked: Boolean(el.checked),
+        selected: Boolean(el.selected || el.getAttribute('aria-selected') === 'true'),
+        readOnly: Boolean(el.readOnly),
         focused: el.getRootNode().activeElement === el || el.ownerDocument.activeElement === el,
         selectedIndex: typeof el.selectedIndex === 'number' ? el.selectedIndex : null,
         expanded: el.getAttribute('aria-expanded'),
@@ -471,6 +548,22 @@
       pattern: el.getAttribute('pattern') || '',
       minLength: el.minLength >= 0 ? el.minLength : null,
       maxLength: el.maxLength >= 0 ? el.maxLength : null,
+      readOnly: Boolean(el.readOnly),
+      inputMode: el.getAttribute('inputmode') || '',
+      description: secret
+        ? '[redacted]'
+        : normalize(
+            [
+              el.getAttribute('aria-description') || '',
+              ...(el.getAttribute('aria-describedby') || '')
+                .split(/\s+/)
+                .filter(Boolean)
+                .map((id) => {
+                  const text = el.getRootNode().getElementById?.(id);
+                  return text ? publicText(text) : '';
+                }),
+            ].join(' '),
+          ).slice(0, 1000),
       text: secret ? '[redacted]' : publicText(el).slice(0, 1000),
       value: secret ? '[redacted]' : String(el.value ?? '').slice(0, 400),
       options:
@@ -483,16 +576,22 @@
     if (typeof phrase !== 'string' || !phrase.trim() || phrase.length > 200)
       throw new Error('Search requires a phrase of 1-200 characters.');
     const wanted = normalize(phrase).toLowerCase();
-    return {
-      matches: query('h1,h2,h3,p,label,output,[role],button,a[href]')
-        .filter((el) => visible(el) && !privateElement(el) && !el.querySelector(privateSelectors()))
-        .map((el) => ({
-          target: selector(el) || el.tagName.toLowerCase(),
-          text: publicText(el).slice(0, 700),
-        }))
-        .filter((el) => el.text.toLowerCase().includes(wanted))
-        .slice(0, 20),
-    };
+    const matches = [];
+    for (const el of query(
+      'h1,h2,h3,p,label,output,[role],button,a[href],input,select,textarea,[draggable=true],[tabindex],[contenteditable=true],[onclick],[data-id]',
+    )) {
+      if (!visible(el) || privateElement(el) || el.querySelector(privateSelectors())) continue;
+      if (
+        !el.matches('h1,h2,h3,p,label,output,[role],button,a[href],input,select,textarea') &&
+        !customControl(el)
+      )
+        continue;
+      const text = (publicText(el) || name(el)).slice(0, 700);
+      if (!text.toLowerCase().includes(wanted)) continue;
+      matches.push({ target: selector(el), text });
+      if (matches.length === 20) break;
+    }
+    return { matches };
   }
   function assertion(action) {
     const { kind, expected, tolerance = 0 } = action.assertion;
@@ -820,6 +919,25 @@
     if (sender.id !== chrome.runtime.id || !message?.type?.startsWith('vqa.')) return false;
     (async () => {
       try {
+        if (
+          typeof message.submissionSecret === 'string' &&
+          message.submissionSecret !== submissionSecret
+        ) {
+          if (message.submissionSecret && !/^[a-f0-9]{64}$/.test(message.submissionSecret))
+            throw new Error('Invalid submission context');
+          const nextSecret = message.submissionSecret;
+          const nextSigner = nextSecret
+            ? await crypto.subtle.importKey(
+                'raw',
+                Uint8Array.from(nextSecret.match(/../g), (b) => parseInt(b, 16)),
+                { name: 'HMAC', hash: 'SHA-256' },
+                false,
+                ['sign'],
+              )
+            : null;
+          submissionSecret = nextSecret;
+          submissionSigner = nextSigner;
+        }
         if (typeof message.maskSelectors === 'string') {
           if (message.maskSelectors) document.querySelector(message.maskSelectors);
           maskSelectors = message.maskSelectors;
@@ -901,7 +1019,8 @@
             result = {
               consequential,
               control: name(el),
-              submissionKey: submissionKey(el, message.key || ''),
+              submissionKey: await submissionKey(el, message.key || ''),
+              nativeForm: submissionValidity(el, message.key || ''),
             };
             break;
           }
@@ -912,7 +1031,7 @@
             result = searchPage(message.query);
             break;
           case 'vqa.resolve':
-            result = resolve(message.target);
+            result = await resolve(message.target);
             break;
           case 'vqa.editable-focus': {
             const el = unique(message.target);

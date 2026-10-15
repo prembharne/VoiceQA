@@ -2,6 +2,10 @@
 
 This document records current evidence, not projected reliability.
 
+## Eino live agent runtime - 2026-10-15
+
+Version 0.12.0 pins Eino ADK v0.9.21 and reuses VoiceQA's typed tools behind the existing origin, permission, credential and outcome guards. Live calls prefer advertised native tools and forward completed call/result pairs, including actual read results. Fresh Dots-only negative acceptance `paced-live-run-NLaXQp` correctly failed on expected Ready versus observed Archived after one save and refresh (eight steps, 99.7 seconds). Fresh healthy Dots-first acceptance `paced-live-run-WjCqBA` attempted Dots, encountered a provider failure, then passed ten steps and three assertions using the authorized Qwen fallback (87.3 seconds), with actual constraint inspection and exactly one saved release. Earlier incomplete/error runs remain rejected rather than treated as success; their integration fixes and limitations are in [the Eino integration record](EINO_AGENT_HARNESS.md). The Go race suite and all 51 JavaScript checks passed. Dependency checks found no npm findings or reachable Go vulnerabilities.
+
 ## IDE controls and live recovery — 2026-10-15
 
 Version 0.11.4 addresses the missing Remix folder/filename controls and caret-based editor focus. Actual Dots 3 acceptance found the controls but blocked on repeated ineffective choices. The authorized Qwen fallback completed the owned source editor journey: 11 recorded steps, four passing assertions and independently verified exact file/source with one save. The focused browser regression, companion suite and 50 JavaScript checks passed. Manual real Remix compilation is separate evidence; real VoiceQA-driven Remix deployment remains unverified. See [the control acceptance record](IDE_CONTROL_ACCEPTANCE.md).

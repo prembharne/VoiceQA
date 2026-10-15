@@ -1,0 +1,11 @@
+{
+  "id": "live-read-release-request",
+  "version": 1,
+  "origin": "http://127.0.0.1:4177",
+  "url": "http://127.0.0.1:4177/",
+  "request": "Create a synthetic release titled Atlas launch, choose a valid release handle based on the actual field constraints, set its status to Ready and save exactly once. Refresh the page and verify the saved title, handle and status persisted. Preserve browser width.",
+  "model": "dots-studio/dots-3-note-preview:free",
+  "aiProvider": "openrouter",
+  "preserveViewport": true,
+  "mode": "automation"
+}

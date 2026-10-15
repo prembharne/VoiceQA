@@ -1,4 +1,9 @@
-import { approvedReadLink, rememberPublicLinks, runtimeDiagnostic } from './agent-tools.js';
+import {
+  approvedReadLink,
+  rememberPublicLinks,
+  runtimeDiagnostic,
+  validateLiveRead,
+} from './agent-tools.js';
 import { PageRegistry } from './page-registry.js';
 import { NativeClient } from './native-client.js';
 import { envelope, id, validateAction, isAllowedURL } from '../shared/protocol.js';
@@ -9,6 +14,7 @@ import { auditConfiguration } from './security-audit.js';
 const fence = new ExecutionFence();
 const network = new NetworkRecorder();
 const submittedForms = new Set();
+let submissionSecret = '';
 let lastHTTPAt = 0;
 
 const panels = new Set();
@@ -318,6 +324,9 @@ async function handlePanel(method, payload) {
     state.testMode = planned.mode || 'qa';
     state.automationPolicy = planned.automation || null;
     submittedForms.clear();
+    submissionSecret = [...crypto.getRandomValues(new Uint8Array(32))]
+      .map((n) => n.toString(16).padStart(2, '0'))
+      .join('');
     state.securityAuthorized = planned.securityAuthorized === true;
     state.apiWritesAllowed = planned.apiWritesAllowed === true;
     state.httpCount = 0;
@@ -429,9 +438,13 @@ async function ensureContent(token) {
 async function content(message, token) {
   await ensureContent(token);
   fence.check(token, state);
-  const response = await chrome.tabs.sendMessage(token?.tabId || state.target.tabId, message, {
-    frameId: 0,
-  });
+  const response = await chrome.tabs.sendMessage(
+    token?.tabId || state.target.tabId,
+    { ...message, submissionSecret: state.automationPolicy && state.runId ? submissionSecret : '' },
+    {
+      frameId: 0,
+    },
+  );
   if (response.error) throw fault(response.error, response.code);
   if (message.type === 'vqa.observe' && !registry.allows(response.result.url))
     throw fault('Observation left explicitly approved origins.', 'blocked');
@@ -630,6 +643,11 @@ async function execute(action, token, secureOrigin = '') {
         'This control may send, publish, pay, transfer or delete. Consequential-action permission was not granted in mission review.',
         'needs_review',
       );
+    if (context.nativeForm?.valid === false)
+      throw fault(
+        'The browser would block this submission because fields are invalid. Inspect their constraints before submitting.',
+        'validation_blocked',
+      );
     if (context.submissionKey) {
       if (submittedForms.has(context.submissionKey))
         throw fault(
@@ -735,6 +753,27 @@ async function execute(action, token, secureOrigin = '') {
         await resolveReady(action.target, token);
         await content({ type: 'vqa.mark-secret', target: action.target }, token);
       }
+      const field = await resolveReady(action.target, token);
+      if (
+        (!['INPUT', 'TEXTAREA'].includes(field.tag) && !field.editable) ||
+        (field.tag === 'INPUT' &&
+          [
+            'checkbox',
+            'radio',
+            'button',
+            'submit',
+            'reset',
+            'image',
+            'file',
+            'color',
+            'range',
+            'hidden',
+          ].includes(field.inputType))
+      )
+        throw fault(
+          'Fill requires a text-entry control; no click or text was dispatched',
+          'blocked',
+        );
       const r = await click(action.target, token);
       if (r.privateField && !secure && !(r.inputType === 'email' && !r.secretField))
         throw fault('Use a saved test credential profile for private fields.', 'blocked');
@@ -750,6 +789,9 @@ async function execute(action, token, secureOrigin = '') {
       return { dispatched: true };
     }
     case 'select': {
+      const field = await resolveReady(action.target, token);
+      if (field.tag !== 'SELECT')
+        throw fault('Select requires a native select control; no click was dispatched', 'blocked');
       const r = await click(action.target, token);
       if (r.tag !== 'SELECT') throw fault('Select requires a native select control', 'blocked');
       const idx = r.options.findIndex((o) => o.value === action.value || o.label === action.value);
@@ -815,6 +857,43 @@ async function capture(maskSelectors, token, visualMaskSelectors = '') {
   }
 }
 const investigationLinks = new Set();
+async function automationRead(p, token) {
+  validateLiveRead(p, state.currentPage, Boolean(state.runId && state.automationPolicy?.live));
+  const current = registry.ensure()[state.currentPage];
+  const tab = await checkTarget();
+  if (!current || current.tabId !== tab.id || !isAllowedURL(tab.url, current.origin))
+    throw fault('Read target left its approved page origin.', 'blocked');
+  let result;
+  if (p.tool === 'inspect_element')
+    result = await content({ type: 'vqa.inspect', target: p.target }, token);
+  else if (p.tool === 'search_page')
+    result = await content({ type: 'vqa.search', query: p.query }, token);
+  else if (p.tool === 'diagnostics') {
+    await attach(token);
+    result = {
+      network: network.snapshot(state.currentPage),
+      runtime: diagnostics.filter((e) => e.page === state.currentPage).slice(-20),
+      coverage:
+        'Captured events only, starting at debugger attachment. Empty events do not prove health.',
+    };
+  } else {
+    await chrome.scripting.executeScript({
+      target: { tabId: current.tabId },
+      files: ['axe.min.js'],
+    });
+    fence.check(token, state);
+    result = await content({ type: 'vqa.accessibility' }, token);
+  }
+  fence.check(token, state);
+  const after = await checkTarget();
+  if (
+    state.currentPage !== p.page ||
+    after.id !== current.tabId ||
+    !isAllowedURL(after.url, current.origin)
+  )
+    throw fault('Read page changed before its result could be accepted.', 'blocked');
+  return { ...result, page: state.currentPage, origin: current.origin };
+}
 async function investigationTool(p, token) {
   if (!state.planning || state.runId)
     throw fault('Investigation requires an active read request and no test run.', 'blocked');
@@ -991,6 +1070,9 @@ async function onNative(message) {
       await save();
     }
     switch (p.operation) {
+      case 'automation_tool':
+        result = await automationRead(p, token);
+        break;
       case 'agent_tool':
         result = await investigationTool(p, token);
         break;
@@ -1063,6 +1145,20 @@ async function onNative(message) {
       }
       case 'resolve_target':
         result = await resolveReady(p.target, token);
+        result.submissionAlreadyDispatched = Boolean(
+          result.submissionKey && submittedForms.has(result.submissionKey),
+        );
+        break;
+      case 'action_context':
+        result = await content(
+          {
+            type: 'vqa.action-context',
+            target: p.target || '',
+            focused: !p.target,
+            key: p.key || '',
+          },
+          token,
+        );
         result.submissionAlreadyDispatched = Boolean(
           result.submissionKey && submittedForms.has(result.submissionKey),
         );

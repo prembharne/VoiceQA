@@ -19,7 +19,7 @@ import (
 	"voiceqa/companion/internal/store"
 )
 
-const HostVersion = "0.11.4"
+const HostVersion = "0.12.0"
 
 type browserReply struct {
 	Result map[string]any
@@ -143,6 +143,15 @@ func (a *App) Handle(m native.Message) {
 	}()
 }
 func (a *App) browser(ctx context.Context, runID, actionID string, payload any) (map[string]any, error) {
+	// Read-only control resolution must not wait for the full run deadline when
+	// an extension/content response is lost. Execution remains non-retryable.
+	readTimeout := false
+	if request, ok := payload.(map[string]any); ok && (request["operation"] == "resolve_target" || request["operation"] == "action_context") {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, 15*time.Second)
+		defer cancel()
+		readTimeout = true
+	}
 	id := core.ID()
 	c := make(chan browserReply, 1)
 	a.mu.Lock()
@@ -159,6 +168,9 @@ func (a *App) browser(ctx context.Context, runID, actionID string, payload any) 
 	}
 	select {
 	case <-ctx.Done():
+		if readTimeout && errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			return nil, &BrowserError{Code: "tool_timeout", Message: "Browser control lookup did not respond within 15 seconds. No action was dispatched; inspect the page or report the browser connection blocker"}
+		}
 		return nil, ctx.Err()
 	case r := <-c:
 		if r.Error != "" {

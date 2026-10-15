@@ -16,7 +16,7 @@ func AgentDebugSchema(tools, sources []string) map[string]any {
 	return agentSchema(tools, sources, true)
 }
 
-func agentSchema(tools, sources []string, debugging bool) map[string]any {
+func agentToolVariants(tools []string) []any {
 	calls := []any{}
 	for _, name := range tools {
 		fields := map[string]any{"page": String()}
@@ -30,6 +30,11 @@ func agentSchema(tools, sources []string, debugging bool) map[string]any {
 		}
 		calls = append(calls, Object(map[string]any{"type": map[string]any{"type": "string", "enum": []string{"tool"}}, "name": map[string]any{"type": "string", "enum": []string{name}}, "args": Object(fields)}))
 	}
+	return calls
+}
+
+func agentSchema(tools, sources []string, debugging bool) map[string]any {
+	calls := agentToolVariants(tools)
 	answerFields := map[string]any{"type": map[string]any{"type": "string", "enum": []string{"answer"}}, "answer": String(), "sources": map[string]any{"type": "array", "items": map[string]any{"type": "string", "enum": sources}}}
 	if debugging {
 		list := func() map[string]any { return map[string]any{"type": "array", "items": String()} }

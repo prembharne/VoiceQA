@@ -81,7 +81,7 @@ func (c *Client) chatStructured(ctx context.Context, key, model, instructions st
 			return nil, nil, errors.New("Choose an OpenRouter model that can generate text plans")
 		}
 		mode = capabilities.outputMode()
-		toolTransport = mode != "json-schema" && capabilities.supports("tools") && capabilities.supports("tool_choice")
+		toolTransport = (c.preferToolCalls || mode != "json-schema") && capabilities.supports("tools") && capabilities.supports("tool_choice")
 		if budget > 0 && capabilities.Top.MaxCompletion > 0 && capabilities.Top.MaxCompletion < budget {
 			budget = capabilities.Top.MaxCompletion
 		}
@@ -108,7 +108,7 @@ func (c *Client) chatStructured(ctx context.Context, key, model, instructions st
 	}
 	body := map[string]any{
 		"model": model, "stream": stream,
-		"messages": []map[string]string{{"role": "system", "content": instructions + "\nReturn only JSON matching the supplied response schema."}, {"role": "user", "content": string(inputJSON)}},
+		"messages": []map[string]any{{"role": "system", "content": instructions + "\nReturn only JSON matching the supplied response schema."}, {"role": "user", "content": string(inputJSON)}},
 	}
 	if budget > 0 {
 		body["max_tokens"] = budget
@@ -120,13 +120,28 @@ func (c *Client) chatStructured(ctx context.Context, key, model, instructions st
 		body["response_format"] = map[string]any{"type": "json_object"}
 	}
 	if toolTransport {
-		// Use the model's trained argument channel when strict JSON schema is
-		// unavailable. This function only returns data; it never executes tools.
+		// Use the model's trained argument channel for live tool decisions or when
+		// strict JSON is unavailable. This only returns data; it executes no tools.
 		delete(body, "response_format")
 		body["stream"] = false
 		body["tools"], resultContracts = nativeResultFunctions(schema)
-		messages := body["messages"].([]map[string]string)
-		messages[0]["content"] += "\nFUNCTION TRANSPORT: Choose exactly ONE of the declared functions for your next decision. Its argument schema replaces the JSON reply wrapper described above: do not include result/type/operation fields unless explicitly declared in the chosen function. The controller restores those fixed discriminators from the function you choose. Do not output a separate text reply or call multiple functions. These declarations grant no permission beyond the trusted scope and policy."
+		messages := body["messages"].([]map[string]any)
+		messages[0]["content"] = messages[0]["content"].(string) + "\nFUNCTION TRANSPORT: Choose exactly ONE of the declared functions for your next decision. Its argument schema replaces the JSON reply wrapper described above: do not include result/type/operation fields unless explicitly declared in the chosen function. The controller restores those fixed discriminators from the function you choose. Do not output a separate text reply or call multiple functions. These declarations grant no permission beyond the trusted scope and policy."
+		for i, turn := range c.decisionHistory {
+			contract, known := resultContracts[turn.Name]
+			if !known || turn.Output == "" {
+				continue
+			}
+			if _, err := contract.decode(json.RawMessage(turn.Arguments)); err != nil {
+				continue
+			}
+			id := fmt.Sprintf("completed-%d", i+1)
+			messages = append(messages,
+				map[string]any{"role": "assistant", "content": nil, "tool_calls": []any{map[string]any{"id": id, "type": "function", "function": map[string]any{"name": turn.Name, "arguments": turn.Arguments}}}},
+				map[string]any{"role": "tool", "tool_call_id": id, "content": turn.Output},
+			)
+		}
+		body["messages"] = messages
 	}
 	if c.Router {
 		body["provider"] = map[string]any{"require_parameters": true}
@@ -231,7 +246,7 @@ func (c *Client) chatStructured(ctx context.Context, key, model, instructions st
 			}
 			return nil, nil, fmt.Errorf("OpenRouter has no available endpoint for model %q with %s output. Check provider availability and your account routing preferences; no model was switched. Details: %s", model, mode, msg)
 		}
-		return nil, nil, fmt.Errorf("%s HTTP %d: %s", name, res.StatusCode, msg)
+		return nil, nil, &StatusError{Status: res.StatusCode, Message: fmt.Sprintf("%s HTTP %d: %s", name, res.StatusCode, msg)}
 	}
 	var raw []byte
 	if strings.Contains(strings.ToLower(res.Header.Get("Content-Type")), "text/event-stream") {
@@ -284,8 +299,14 @@ func parseDeclaredToolStructured(raw []byte, budget int, contracts map[string]fu
 		return nil, nil, err
 	}
 	usage := map[string]int{"input_tokens": packet.Usage.Input, "output_tokens": packet.Usage.Output, "total_tokens": packet.Usage.Total}
+	if err := responseEnvelopeError(packet.Error); err != nil {
+		return nil, usage, err
+	}
+	if len(packet.Choices) == 0 {
+		return nil, usage, &EmptyResultError{}
+	}
 	if len(packet.Choices) != 1 || packet.Choices[0].Index != 0 {
-		return nil, usage, errors.New("AI provider omitted its single completed result")
+		return nil, usage, errors.New("AI provider returned ambiguous or incorrectly indexed choices; no tool decision was executed")
 	}
 	choice := packet.Choices[0]
 	if choice.Finish == "length" {
@@ -430,6 +451,12 @@ func parseChatStructuredMode(raw []byte, budget int, allowFence bool) (json.RawM
 		return nil, nil, e
 	}
 	usage := map[string]int{"input_tokens": response.Usage.Input, "output_tokens": response.Usage.Output, "total_tokens": response.Usage.Total}
+	if err := responseEnvelopeError(response.Error); err != nil {
+		return nil, usage, err
+	}
+	if len(response.Choices) == 0 {
+		return nil, usage, &EmptyResultError{}
+	}
 	if len(response.Choices) != 1 || response.Choices[0].Index != 0 {
 		return nil, usage, errors.New("AI provider omitted its completed answer")
 	}

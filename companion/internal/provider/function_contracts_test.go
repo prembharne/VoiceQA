@@ -52,6 +52,9 @@ func TestNativeLiveFunctionsSelectOneTypedActionWithoutWrapper(t *testing.T) {
 	if len(functions) < 15 || contracts["browser_click"].Operation != "click" || contracts["browser_http_check"].Operation != "http_check" {
 		t.Fatal("Operation-specific functions were not exposed")
 	}
+	if contracts["browser_inspect_element"].Kind != "tool" || contracts["browser_inspect_element"].Operation != "" || contracts["browser_inspect_element"].Tool != "inspect_element" {
+		t.Fatal("live inspection was not exposed as a read-only typed tool")
+	}
 	args := contracts["browser_click"].Parameters["properties"].(map[string]any)
 	if args["target"] == nil || args["operation"] != nil || args["http"] != nil || args["result"] != nil {
 		t.Fatal("Click function includes unrelated dispatch/wrapper fields", args)

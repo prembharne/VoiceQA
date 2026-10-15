@@ -27,6 +27,8 @@ type Client struct {
 	acceptanceCalls     *atomic.Int32
 	acceptanceTokens    *atomic.Int32
 	acceptanceModelOnly bool
+	preferToolCalls     bool
+	decisionHistory     []DecisionTurn
 }
 
 func New() *Client {

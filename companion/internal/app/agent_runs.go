@@ -123,6 +123,11 @@ func recordedRunEvidence(r *core.Run, query string) (map[string]any, error) {
 		base["error"] = recordedText(r.Error, 1500)
 		base["startedAt"] = r.StartedAt
 		base["model"] = r.Plan.Model
+		if r.AgentRuntime != "" {
+			base["agentRuntime"] = r.AgentRuntime
+			base["actualModel"] = r.AgentModel
+			base["agentEvents"] = r.AgentEvents
+		}
 		base["mode"] = r.Plan.Mode
 		base["stepCount"] = len(r.Steps)
 		base["earlierEvidenceOmitted"] = r.EvidenceOmitted || len(r.Observations) == 0
@@ -138,10 +143,11 @@ func recordedRunEvidence(r *core.Run, query string) (map[string]any, error) {
 			base["nextStepQuery"] = "steps:20"
 		}
 		refs := []map[string]any{}
-		for _, obs := range r.Observations {
+		for _, obs := range slices.Concat(r.Observations, r.ReadEvidence) {
 			ref := map[string]any{"id": obs["id"], "afterActions": obs["afterActions"]}
 			if data, ok := obs["evidence"].(map[string]any); ok {
 				ref["title"] = data["title"]
+				ref["tool"] = data["tool"]
 				if text, ok := data["text"].(string); ok {
 					ref["preview"] = recordedText(text, 400)
 				}
@@ -194,7 +200,7 @@ func recordedRunEvidence(r *core.Run, query string) (map[string]any, error) {
 		return nil, errors.New("Step ID does not belong to the selected run")
 	case strings.HasPrefix(query, "observation:"):
 		id := strings.TrimPrefix(query, "observation:")
-		for _, obs := range r.Observations {
+		for _, obs := range slices.Concat(r.Observations, r.ReadEvidence) {
 			if obs["id"] == id {
 				base["observation"] = obs
 				return base, nil

@@ -49,7 +49,9 @@ func (a *App) runList() (any, error) {
 			r.Steps = nil
 			r.Values = nil
 			r.Observations = nil
+			r.ReadEvidence = nil
 			r.DecisionErrors = nil
+			r.AgentEvents = nil
 			r.SecurityFindings = nil
 			r.Error = trim(r.Error, 200)
 			runs = append(runs, r)

@@ -4,7 +4,30 @@ import {
   approvedReadLink,
   rememberPublicLinks,
   runtimeDiagnostic,
+  validateLiveRead,
 } from '../../extension/agent-tools.js';
+
+test('live inspection reads cannot expand pages, become mutations or carry other arguments', () => {
+  for (const tool of ['diagnostics', 'accessibility'])
+    assert.doesNotThrow(() => validateLiveRead({ tool, page: 'main' }, 'main', true));
+  assert.doesNotThrow(() =>
+    validateLiveRead({ tool: 'inspect_element', page: 'main', target: 'node:3' }, 'main', true),
+  );
+  assert.doesNotThrow(() =>
+    validateLiveRead({ tool: 'search_page', page: 'main', query: 'Create release' }, 'main', true),
+  );
+  for (const p of [
+    { tool: 'click', page: 'main', target: '#submit' },
+    { tool: 'inspect_element', page: 'other', target: '#input' },
+    { tool: 'inspect_element', page: 'main', target: '#input', url: 'https://outside.test/' },
+    { tool: 'inspect_element', page: 'main', target: '#input', query: 'extra' },
+    { tool: 'inspect_element', page: 'main', target: ' ' },
+    { tool: 'search_page', page: 'main', query: 'x'.repeat(201) },
+    { tool: 'diagnostics', page: 'main', target: '#field' },
+  ])
+    assert.throws(() => validateLiveRead(p, 'main', true));
+  assert.throws(() => validateLiveRead({ tool: 'diagnostics', page: 'main' }, 'main', false));
+});
 
 test('linked discovery accepts observed pages and rejects scope, token and action routes', () => {
   const origin = 'https://app.test';

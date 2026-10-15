@@ -86,6 +86,10 @@ func normalizeDraftControls(cases []core.Case, obs map[string]any) error {
 				if !ok || control["role"] != "combobox" {
 					continue
 				}
+				if control["target"] == a.Target && a.Operation == "select" && control["tag"] != nil && control["tag"] != "select" {
+					failures = append(failures, errors.New("select requires a native SELECT. For this custom combobox, click its observed target, then choose an actual currently exposed option control"))
+					continue
+				}
 				options, _ := control["options"].([]any)
 				if len(options) == 0 {
 					continue

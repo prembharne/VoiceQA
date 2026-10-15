@@ -14,6 +14,8 @@ const debugPath = process.argv
   ?.slice('--debug-run='.length);
 const debugRecord = debugPath ? JSON.parse(await readFile(resolve(debugPath), 'utf8')) : null;
 const automationUI = process.argv.includes('--automation-ui');
+if (process.argv.includes('--expect-status-defect') && !process.argv.includes('--live-reads'))
+  throw new Error('Status-defect acceptance requires the owned live-read workspace check.');
 const automationLive = process.argv.includes('--automation-live') || automationUI;
 const livePlanning = process.argv.includes('--plan-live') || automationLive;
 const lowTokens = process.argv.includes('--paid-qwen-low-tokens');
@@ -149,6 +151,11 @@ const registration = join(work, 'native-host.json');
 const backup = join(work, 'registry-backup.json');
 let context,
   registered = false;
+// Close the owned profile on interruption so catch/finally can restore native
+// registration and remove this attempt's temporary encrypted key copies.
+process.once('SIGINT', () => {
+  void context?.close().catch(() => {});
+});
 const copiedKeys = ['openrouter-api-key.dpapi', 'api-key.dpapi'];
 try {
   if (
@@ -497,6 +504,12 @@ try {
         await new Promise((done) => setTimeout(done, 100));
       }
       if (!runId) throw new Error('Automation mission did not start through UI approval');
+      // Approval is clicked in the panel page. Explicitly return focus to the
+      // owned target before the real agent resolves controls; keep production
+      // pause checks enabled rather than mistaking an inactive test tab for AI delay.
+      await target.bringToFront();
+      const approvedState = await rpc('state');
+      if (approvedState.paused && !approvedState.handoff) await rpc('resume');
       plan = (await rpc('run.get', { id: runId })).plan;
       if (
         !plan.automation?.live ||
@@ -587,12 +600,45 @@ try {
       captured = false;
     const deadline = Date.now() + 1200000;
     while (Date.now() < deadline) {
+      const runtime = await rpc('state');
+      if (runtime.paused && !runtime.handoff) {
+        // Follow the executor's current approved tab, including actor-created
+        // aliases; never switch a multi-tab run back to the original tab here.
+        const activeURL = await worker.evaluate(async (tabId) => {
+          const tab = await chrome.tabs.get(tabId);
+          await chrome.windows.update(tab.windowId, { focused: true });
+          await chrome.tabs.update(tab.id, { active: true });
+          return tab.url;
+        }, runtime.target.tabId);
+        if (!demoURL(activeURL))
+          throw new Error('Paused acceptance target left the owned route scope.');
+        await rpc('resume');
+        console.log('Resumed the owned acceptance target after panel focus changed.');
+      }
       run = await rpc('run.get', { id: runId });
       if (run.steps.length !== count) {
         count = run.steps.length;
         const last = run.steps.at(-1);
         console.log(`Step ${count}/${run.totalSteps}: ${last?.action.label || 'Starting'}`);
       }
+      await writeFile(
+        join(work, 'runtime-status.json'),
+        JSON.stringify(
+          {
+            status: run.status,
+            phase: run.agentPhase,
+            model: run.agentModel,
+            runtime: run.agentRuntime,
+            steps: run.steps.length,
+            paused: runtime.paused,
+            connected: runtime.connected,
+            page: runtime.currentPage,
+            events: run.agentEvents?.slice(-6),
+          },
+          null,
+          2,
+        ),
+      );
       if (run.nextStep && !captured && run.steps.at(-1)?.action.operation === 'click') {
         await panel.screenshot({ path: join(work, 'paced-run.png'), fullPage: true });
         captured = true;
@@ -631,6 +677,12 @@ try {
     const assertions = run.steps.filter((s) =>
       ['assert', 'http_check'].includes(s.action.operation),
     );
+    if (
+      process.argv.includes('--eino') &&
+      (run.agentRuntime !== 'eino-adk/0.9.21' ||
+        !run.agentEvents?.some((e) => e.kind === 'tool_dispatch'))
+    )
+      throw new Error('Acceptance did not execute the real Eino agent harness.');
     if (parcelWorkspace) {
       const state = await target.evaluate(() => fetch('/api/testing-state').then((r) => r.json()));
       await writeFile(join(work, 'security-state.json'), JSON.stringify(state, null, 2));
@@ -909,6 +961,51 @@ try {
       );
     }
     const expectedTotalDefect = process.argv.includes('--expect-total-defect');
+    const expectedStatusDefect = process.argv.includes('--expect-status-defect');
+    if (process.argv.includes('--live-reads')) {
+      if (
+        !automationLive ||
+        origin !== 'http://127.0.0.1:4177' ||
+        run.status !== (expectedStatusDefect ? 'failed' : 'passed')
+      )
+        throw new Error(
+          'Live-read workspace did not finish: ' + run.status + ': ' + (run.error || ''),
+        );
+      const saved = await target.evaluate(() =>
+        JSON.parse(localStorage.getItem('release-studio') || 'null'),
+      );
+      const inspected = run.readEvidence?.some(
+        (o) =>
+          o.evidence.tool === 'inspect_element' &&
+          o.evidence.toolResult?.pattern === 'rel-[a-z]{4,8}',
+      );
+      if (
+        !saved ||
+        saved.title !== 'Atlas launch' ||
+        !/^rel-[a-z]{4,8}$/.test(saved.handle) ||
+        saved.status !== (expectedStatusDefect ? 'Archived' : 'Ready') ||
+        saved.saves !== 1 ||
+        !inspected ||
+        !run.steps.some((s) => s.action.operation === 'navigate') ||
+        (!expectedStatusDefect && assertions.filter((s) => s.status === 'passed').length < 3) ||
+        (expectedStatusDefect &&
+          !assertions.some(
+            (s) =>
+              s.status === 'failed' &&
+              s.action.assertion?.expected === 'Ready' &&
+              String(s.result?.actual).includes('Archived'),
+          ))
+      )
+        throw new Error(
+          'Actual agent omitted constraints inspection, custom selection, persistence verification, or saved more than once.',
+        );
+      await writeFile(join(work, 'persisted-release.json'), JSON.stringify(saved, null, 2));
+      console.log(
+        expectedStatusDefect
+          ? 'Actual AI detected the corrupted persisted status: expected Ready, observed Archived after refresh, with one save.'
+          : 'Actual AI inspected field constraints, created one compliant release through a custom combobox, refreshed and verified persisted values.',
+      );
+    }
     if (process.argv.includes('--ide-controls')) {
       if (!automationLive || origin !== 'http://127.0.0.1:4177')
         throw new Error('IDE control acceptance is limited to the owned source editor fixture.');
@@ -963,7 +1060,7 @@ try {
     }
     const expectedFailure = process.argv.includes('--expect-failed');
     if (
-      (expectedTotalDefect || expectedStale
+      (expectedTotalDefect || expectedStale || expectedStatusDefect
         ? false
         : expectedFailure
           ? run.status !== 'failed' ||
@@ -977,6 +1074,13 @@ try {
 } catch (error) {
   const diagnostic = new DatabaseSync(join(data, 'voiceqa.db'), { readOnly: true });
   try {
+    // Transport loss can prevent RPC from returning the final run. Preserve
+    // local partial records as such; never label them completed acceptance.
+    const partialRuns = diagnostic
+      .prepare('SELECT body FROM records WHERE kind=?')
+      .all('run')
+      .map((row) => JSON.parse(row.body));
+    await writeFile(join(work, 'partial-runs.json'), JSON.stringify(partialRuns, null, 2));
     const investigations = diagnostic
       .prepare('SELECT body FROM records WHERE kind=?')
       .all('investigation')

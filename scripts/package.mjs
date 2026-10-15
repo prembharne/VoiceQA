@@ -55,7 +55,7 @@ for (const entry of modules) {
   if (!version || !dir) continue;
   notices.push(`${name} ${version}`);
   const files = (await readdir(dir)).filter((file) =>
-    /^(license|copying|notice)(\.|$)/i.test(file),
+    /^(license|copying|notice)([.-]|$)/i.test(file),
   );
   for (const file of files) {
     await cp(`${dir}/${file}`, `${root}/licenses/go-${name.replaceAll('/', '-')}-${file}`);

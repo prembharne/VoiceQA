@@ -23,7 +23,11 @@ func (a *App) auditLiveCompletion(ctx context.Context, r *core.Run, current map[
 		history = history[len(history)-12:]
 	}
 	regressions := automationRegressionCandidates(r, checks)
-	raw, usage, err := a.aiClient(r.Plan.AIProvider).PlanStructured(ctx, a.keyFor(r.Plan.AIProvider), r.Plan.Model, provider.AutomationAuditInstructions+"\n"+provider.AutomationTemporalAuditInstructions, map[string]any{"request": r.Plan.Request, "conversation": r.Plan.Conversation, "candidateChecks": checks, "potentialRegressions": regressions, "observedStateHistory": r.Observations, "earlierEvidenceOmitted": r.EvidenceOmitted, "currentObservation": current, "publicCaptures": r.Values, "recentActions": agentPublicEvidence(map[string]any{"steps": history})["steps"]}, provider.AutomationAuditSchema(), nil)
+	selectedModel := r.AgentModel
+	if selectedModel == "" {
+		selectedModel = r.Plan.Model
+	}
+	raw, usage, err := a.aiClient(r.Plan.AIProvider).PlanStructured(ctx, a.keyFor(r.Plan.AIProvider), selectedModel, provider.AutomationAuditInstructions+"\n"+provider.AutomationTemporalAuditInstructions, map[string]any{"request": r.Plan.Request, "conversation": r.Plan.Conversation, "candidateChecks": checks, "potentialRegressions": regressions, "observedStateHistory": automationModelHistory(r.Observations), "readEvidence": r.ReadEvidence, "earlierEvidenceOmitted": r.EvidenceOmitted, "currentObservation": automationModelObservation(current), "publicCaptures": r.Values, "recentActions": agentPublicEvidence(map[string]any{"steps": history})["steps"]}, provider.AutomationAuditSchema(), nil)
 	for key, n := range usage {
 		r.Usage[key] += n
 	}

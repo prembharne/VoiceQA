@@ -1,4 +1,19 @@
 // Investigation calls are bounded reads. Model arguments never become code.
+export function validateLiveRead(p, currentPage, live) {
+  if (!live || p.page !== currentPage || p.url)
+    throw new Error(
+      'Live reads require the active automation page; switch to an approved page first.',
+    );
+  const target = p.target || '',
+    query = p.query || '';
+  if (typeof target !== 'string' || typeof query !== 'string')
+    throw new Error('Read arguments must be strings.');
+  if (p.tool === 'inspect_element' && target.trim() && target.length <= 500 && !query) return;
+  if (p.tool === 'search_page' && query.trim() && query.length <= 200 && !target) return;
+  if (['diagnostics', 'accessibility'].includes(p.tool) && !target && !query) return;
+  throw new Error('Unknown live read or invalid arguments. No action was dispatched.');
+}
+
 export function approvedReadLink(raw, links, origins) {
   const u = new URL(raw);
   if (
