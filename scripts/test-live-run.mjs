@@ -37,6 +37,7 @@ const workspace = plan.origin === 'http://127.0.0.1:4176';
 const multiWorkspace = plan.origin === 'http://127.0.0.1:4179';
 const parcelWorkspace = plan.origin === 'http://127.0.0.1:4180';
 const visualWorkspace = plan.origin === 'http://127.0.0.1:4181';
+const timingWorkspace = visualWorkspace && new URL(plan.url).pathname === '/timing';
 const expectedStale = multiWorkspace && process.argv.includes('--expect-stale-original');
 const generic = [
   'http://127.0.0.1:4177',
@@ -68,15 +69,17 @@ const demoURL = (raw) => {
         ? /^\/(?:guide)?$/.test(u.pathname)
         : multiWorkspace
           ? /^\/(?:review)?$/.test(u.pathname)
-          : generic
-            ? /^\/(?:help)?$/.test(u.pathname)
-            : workspace
-              ? /^\/(?:app\/(?:orders|settings|auth|security|compatibility|projects|layout)|app\/invoices\/[^/]+)?$/.test(
-                  u.pathname,
-                )
-              : security
-                ? u.pathname === '/security'
-                : u.pathname === '/fixtures/shop')
+          : visualWorkspace
+            ? /^\/(?:timing)?$/.test(u.pathname)
+            : generic
+              ? /^\/(?:help)?$/.test(u.pathname)
+              : workspace
+                ? /^\/(?:app\/(?:orders|settings|auth|security|compatibility|projects|layout)|app\/invoices\/[^/]+)?$/.test(
+                    u.pathname,
+                  )
+                : security
+                  ? u.pathname === '/security'
+                  : u.pathname === '/fixtures/shop')
     );
   } catch {
     return false;
@@ -1085,6 +1088,50 @@ try {
         throw new Error(
           'Reviewed QA did not use actual visual recovery and preserve the original assertion',
         );
+    }
+    if (timingWorkspace) {
+      const state = await target.evaluate(() => ({
+        status: document.querySelector('#job-status').textContent,
+        artifact: document.querySelector('#build-artifact')?.textContent,
+        requests: document.querySelector('#compile-count').textContent,
+        jobMs: Number(document.body.dataset.finishedAt) - Number(document.body.dataset.startedAt),
+        width: innerWidth,
+      }));
+      await writeFile(join(work, 'timing-state.json'), JSON.stringify(state, null, 2));
+      if (
+        state.status !== 'Compilation succeeded' ||
+        state.artifact !== 'TimingProbe artifact ready' ||
+        state.requests !== 'Compile requests: 1' ||
+        state.jobMs < 19500 ||
+        state.width !== plan.viewports[0].width ||
+        assertions.length < 3 ||
+        (!process.argv.includes('--expect-readiness-recovery') &&
+          !run.steps.some(
+            (s) =>
+              s.action.operation === 'wait_for' &&
+              s.status === 'passed' &&
+              s.result?.waitedMs >= 6000,
+          ))
+      )
+        throw new Error(
+          'Live AI did not wait for delayed readiness, independently verify all outcomes or preserve single dispatch/width.',
+        );
+      if (
+        process.argv.includes('--expect-readiness-recovery') &&
+        (!run.steps.some(
+          (s) => ['wait_timeout', 'wait_changed'].includes(s.status) && s.result?.pending,
+        ) ||
+          !run.agentEvents?.some((e) =>
+            ['readiness_timeout', 'readiness_changed'].includes(e.kind),
+          ) ||
+          run.steps.filter((s) => s.action.operation === 'click').length !== 1)
+      )
+        throw new Error(
+          'The actual AI did not exercise a recorded short readiness timeout followed by non-replayed recovery.',
+        );
+      console.log(
+        'Actual AI waited for a 20-second job and verified its status, artifact and exactly one compile request; browser width preserved.',
+      );
     }
     if (visualWorkspace && process.argv.includes('--visual-agent')) {
       const state = {

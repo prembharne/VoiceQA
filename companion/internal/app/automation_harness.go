@@ -39,6 +39,8 @@ type automationSession struct {
 	observation, public   map[string]any
 	seen, readSeen        map[string]bool
 	readCalls, rejections int
+	waitRecoveries        int
+	pendingWaits          map[string]bool
 	validation, model     string
 	contract              any
 }

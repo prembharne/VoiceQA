@@ -2,6 +2,10 @@
 
 This document records current evidence, not projected reliability.
 
+## Asynchronous readiness - 2026-10-15
+
+Version 0.13.1 fixes the reported Remix wait tied to a changing Compile caption. Readiness has a 60-second default/120-second maximum, exact-node continuity, and bounded live re-inspection on timeouts or stable text changes. Actual Dots acceptance passed a 20-second owned job (seven steps/five assertions) and final-build timeout recovery (eight recorded steps/six assertions), each with one compile dispatch and preserved width. The timed-out step remains in the latter record. Actual Chrome checks cover caption changes before the first poll, early status-change handoff, cancellation and genuine assertion failures. These are simulated compiler UI jobs, not a complete real Remix/Solidity deployment acceptance. See [implementation, discrepancies and evidence](READINESS_WAITS.md).
+
 ## Hybrid visual routing - 2026-10-15
 
 Actual Qwen grounding passed eight screenshot targets at two viewport sizes. Final-build extension/Eino acceptance `paced-live-run-Yb7Ye4` passed fifteen steps and nine assertions in 75.7 seconds after Dots handed a canvas interaction to Agent S/Qwen, preserving browser width. Read-only investigation identified canvas labels/colors without changing the page. Reviewed QA acceptance `paced-live-run-RFgUW9` recovered a missing target with actual Qwen grounding and passed the unchanged assertion. A separate real Remix screenshot check located the actual preferences control without clicking it. These do not establish Solidity compilation/deployment or a complete Remix journey. Go race, 51 JavaScript, three restricted-dispatch and seven targeted Chrome checks passed; the complete 54-test browser suite is not claimed. See [the hybrid integration record](HYBRID_AGENT_ROUTER.md).

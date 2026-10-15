@@ -62,7 +62,9 @@ export function validateAction(action) {
     throw new Error('Only HTTP(S) navigation is allowed');
   if (
     action.timeoutMs &&
-    (!Number.isInteger(action.timeoutMs) || action.timeoutMs < 500 || action.timeoutMs > 30000)
+    (!Number.isInteger(action.timeoutMs) ||
+      action.timeoutMs < 500 ||
+      action.timeoutMs > (action.operation === 'wait_for' ? 120000 : 30000))
   )
     throw new Error('Invalid step timeout');
   if (action.operation === 'http_check') validateHTTP(action.http);

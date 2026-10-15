@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+  <meta charset="UTF-8" />
+  <title>Compiler timing lab — VoiceQA fixture</title>
+  <style>
+    body {
+      margin: 48px;
+      max-width: 850px;
+      background: #121923;
+      color: #edf4ff;
+      font: 16px system-ui;
+    }
+    button {
+      background: #327cdb;
+      color: white;
+      border: 0;
+      border-radius: 8px;
+      padding: 14px 22px;
+      font: inherit;
+      cursor: pointer;
+    }
+    button:disabled {
+      opacity: 0.6;
+    }
+    pre,
+    output {
+      display: block;
+      padding: 20px;
+      background: #202c3e;
+      border-radius: 8px;
+    }
+  </style>
+  <h1>Compiler timing lab</h1>
+  <p>Owned UI simulation. No Solidity compiler, EVM, wallet or blockchain is used.</p>
+  <p>
+    The prepared source is TimingProbe.sol. Compile it once. A successful job creates a build
+    artifact after a delay; button labels change while busy.
+  </p>
+  <pre>pragma solidity ^0.8.20; contract TimingProbe { uint public count = 7; }</pre>
+  <button id="compile">Compile</button>
+  <output id="job-status" role="status">Not started</output>
+  <output id="compile-count">Compile requests: 0</output>
+  <div id="artifact"></div>
+  <script>
+    const params = new URLSearchParams(location.search);
+    const delay = Math.max(500, Math.min(120000, Number(params.get('delay')) || 20000));
+    let requests = 0;
+    const status = document.getElementById('job-status');
+    document.getElementById('compile').onclick = (event) => {
+      const button = event.currentTarget;
+      requests++;
+      document.getElementById('compile-count').textContent = `Compile requests: ${requests}`;
+      document.body.dataset.startedAt = String(performance.now());
+      button.disabled = true;
+      button.textContent = 'Compiling…';
+      status.textContent = 'Compilation running';
+      setTimeout(() => {
+        button.textContent = 'Compiled';
+        button.disabled = false;
+        status.textContent = params.has('defect')
+          ? 'Compilation failed: syntax error'
+          : 'Compilation succeeded';
+        document.getElementById('artifact').innerHTML = params.has('defect')
+          ? ''
+          : '<output id="build-artifact">TimingProbe artifact ready</output>';
+        document.body.dataset.finishedAt = String(performance.now());
+      }, delay);
+    };
+  </script>
+</html>

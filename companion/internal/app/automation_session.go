@@ -119,6 +119,9 @@ func (s *automationSession) validate(ctx context.Context, decision *automationDe
 	if e == nil && decision.Type == "action" && automationReplayBlocked(decision.Action, public, s.seen) {
 		e = errors.New("This identical action was already dispatched against unchanged evidence; it will not be replayed. Inspect current controls and choose a different next action, verify the actual outcome, or report the blocker. A successful dispatch is not proof of progress")
 	}
+	if e == nil && decision.Type == "action" && decision.Action.Operation == "wait_for" && s.pendingWaits[automationStateFingerprint(decision.Action, public)] {
+		e = errors.New("This readiness condition already returned inconclusive evidence against unchanged state. Inspect the current status and stable result target, verify a newly observed outcome without changing its expectation, or report the blocker. Do not repeat the wait or the preceding mutation")
+	}
 	return e
 }
 
@@ -226,6 +229,24 @@ func (s *automationSession) execute(ctx context.Context, decision automationDeci
 	}
 	s.seen[hash] = true
 	if err = a.runAutomationAction(ctx, r, action, label, scope.Current); err != nil {
+		var browser *BrowserError
+		if action.Operation == "wait_for" && errors.As(err, &browser) && (browser.Code == "wait_timeout" || browser.Code == "wait_changed") && s.waitRecoveries < 2 {
+			// A changed status/read deadline does not establish an application
+			// defect. Keep the original inconclusive step and re-observe before the next AI
+			// decision. No mutation, expectation or previous verdict is retried.
+			s.waitRecoveries++
+			if s.pendingWaits == nil {
+				s.pendingWaits = map[string]bool{}
+			}
+			s.pendingWaits[hash] = true
+			s.router.unchanged, s.router.reads = -1, 0
+			event := "readiness_timeout"
+			if browser.Code == "wait_changed" {
+				event = "readiness_changed"
+			}
+			s.event(event, action.Target)
+			return nil
+		}
 		a.setAutomationFailure(r, err)
 		return nil
 	}

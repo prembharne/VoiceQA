@@ -218,6 +218,7 @@ class Session:
             "Preserve browser width. Choose exactly one listed method using literal arguments. " +
             ("READ-ONLY mode: inspect or report observed facts. No clicks, keys, typing or scrolling. " if read_only else "Use fill for filename fields and code editors, then Enter where required. ") +
             "A dispatched click is not proof of completion. After the subtask is complete use done for independent verification. "
+            "If compilation, a server job or a transaction is still busy, use done to hand back to the controller for condition polling. Never click the start/submit control again to wait. "
             "Respond with only one Python code block containing a single agent method call, without explanations.\n" + methods)
         examples = "agent.report('Observed public facts'); agent.done()." if read_only else "agent.click('New file button'); agent.fill('File name input', 'Example.sol'); agent.press('Enter'); agent.done()."
         self.agent.executor.generator_agent.add_system_prompt(self.agent.executor.generator_agent.system_prompt +

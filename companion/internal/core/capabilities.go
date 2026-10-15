@@ -67,8 +67,12 @@ func NewScope(p Plan, page string) (*Scope, error) {
 	return s, nil
 }
 func (s *Scope) Advance(a Action) error {
-	if a.TimeoutMS != 0 && (a.TimeoutMS < 500 || a.TimeoutMS > 30000) {
-		return errors.New("step timeout must be 500–30000 milliseconds")
+	maxTimeout := 30000
+	if a.Operation == "wait_for" {
+		maxTimeout = 120000
+	}
+	if a.TimeoutMS != 0 && (a.TimeoutMS < 500 || a.TimeoutMS > maxTimeout) {
+		return fmt.Errorf("step timeout must be 500–%d milliseconds", maxTimeout)
 	}
 	switch a.Operation {
 	case "navigate":

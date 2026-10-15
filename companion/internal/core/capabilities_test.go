@@ -39,9 +39,12 @@ func TestPageScopeBoundaries(t *testing.T) {
 func TestAdvancedInputsStayBounded(t *testing.T) {
 	p := validPlan()
 	s, _ := NewScope(p, "main")
-	for _, a := range []Action{{Operation: "fill_secret", Value: "../../bad:password"}, {Operation: "fill_secret", Value: "qa:cookie"}, {Operation: "fill_totp", Value: "raw secret"}, {Operation: "human_checkpoint", Value: "solve"}, {Operation: "wait_for", TimeoutMS: 40000}} {
+	for _, a := range []Action{{Operation: "fill_secret", Value: "../../bad:password"}, {Operation: "fill_secret", Value: "qa:cookie"}, {Operation: "fill_totp", Value: "raw secret"}, {Operation: "human_checkpoint", Value: "solve"}, {Operation: "wait_for", TimeoutMS: 120001}, {Operation: "assert", TimeoutMS: 40000}} {
 		if s.Advance(a) == nil {
 			t.Fatal("invalid advanced action accepted", a.Operation)
 		}
+	}
+	if e := s.Advance(Action{Operation: "wait_for", TimeoutMS: 120000}); e != nil {
+		t.Fatal("bounded slow-operation wait rejected", e)
 	}
 }

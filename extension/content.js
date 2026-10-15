@@ -355,10 +355,13 @@
   }
   function selector(el) {
     if (el.dataset.testid) return `testid:${el.dataset.testid}`;
-    if (role(el) && name(el)) return `role:${role(el)}|${name(el)}`;
     if (el.id) return `#${CSS.escape(el.id)}`;
+    if (role(el) && name(el)) return `role:${role(el)}|${name(el)}`;
     return nodeTarget(el);
   }
+  // Only exact previously resolved elements, for read-only readiness. A click
+  // can change its button's caption before the first wait poll arrives.
+  const readinessRefs = new Map();
   function find(target) {
     if (!target) return [];
     if (target.startsWith('node:')) {
@@ -411,6 +414,8 @@
   }
   async function resolve(target) {
     const el = unique(target);
+    readinessRefs.set(target, new WeakRef(el));
+    while (readinessRefs.size > 100) readinessRefs.delete(readinessRefs.keys().next().value);
     if (el.disabled || el.getAttribute('aria-disabled') === 'true')
       throw new Error('Target is disabled');
     el.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'instant' });
@@ -696,6 +701,15 @@
     return { matches };
   }
   function assertion(action) {
+    if (
+      action.operation === 'wait_for' &&
+      /^(role:|label:|text:)/.test(action.target) &&
+      !find(action.target).filter(visible).length
+    ) {
+      const prior = readinessRefs.get(action.target)?.deref();
+      if (prior?.isConnected && roots().includes(prior.getRootNode()))
+        action = { ...action, target: nodeTarget(prior) };
+    }
     const { kind, expected, tolerance = 0 } = action.assertion;
     let actual;
     let passed = false;
@@ -762,6 +776,7 @@
     const actualTruncated = typeof actual === 'string' && actual.length > 2000;
     return {
       passed,
+      ...(action.operation === 'wait_for' && el ? { targetHandle: nodeTarget(el) } : {}),
       actual: actualTruncated ? actual.slice(0, 2000) + '…' : actual,
       actualTruncated,
       expected,

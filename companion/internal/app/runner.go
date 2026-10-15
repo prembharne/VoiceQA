@@ -410,7 +410,7 @@ func (a *App) setInterrupted(r *core.Run, e error) {
 		switch be.Code {
 		case "blocked", "target_missing":
 			r.Status = "blocked"
-		case "needs_review":
+		case "needs_review", "wait_timeout", "wait_changed":
 			r.Status = "needs_review"
 		case "cancelled":
 			r.Status = "cancelled"

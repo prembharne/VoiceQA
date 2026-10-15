@@ -45,6 +45,9 @@ func recordedText(text string, limit int) string {
 
 func recordedStepEvidence(s core.Step) map[string]any {
 	action := map[string]any{"operation": s.Action.Operation, "target": s.Action.Target, "label": recordedText(s.Action.Label, 300)}
+	if s.Action.TimeoutMS != 0 {
+		action["timeoutMs"] = s.Action.TimeoutMS
+	}
 	if s.Action.Assertion != nil && (s.Action.Operation == "assert" || s.Action.Operation == "wait_for") {
 		action["assertion"] = map[string]any{"kind": s.Action.Assertion.Kind, "expected": recordedText(s.Action.Assertion.Expected, 1000), "tolerance": s.Action.Assertion.Tolerance}
 	}
@@ -55,7 +58,7 @@ func recordedStepEvidence(s core.Step) map[string]any {
 		action["http"] = map[string]any{"method": s.Action.HTTP.Method, "url": publicAgentURL(s.Action.HTTP.URL), "expectedStatus": s.Action.HTTP.ExpectedStatus, "jsonPointer": s.Action.HTTP.JSONPointer, "expectedValue": recordedText(s.Action.HTTP.ExpectedValue, 1000)}
 	}
 	result := map[string]any{}
-	for _, key := range []string{"actual", "expected", "kind", "passed", "status", "statusCode", "actualTruncated", "seriousCount", "rulePasses", "historical", "observationId", "priorObservationId", "observedAfterActions"} {
+	for _, key := range []string{"actual", "expected", "kind", "passed", "status", "statusCode", "actualTruncated", "seriousCount", "rulePasses", "historical", "observationId", "priorObservationId", "observedAfterActions", "waitedMs", "timeoutMs", "polls", "missingPolls", "checkedTarget", "pending"} {
 		if value, ok := s.Result[key]; ok {
 			switch value.(type) {
 			case string, bool, float64, int, int64, nil:

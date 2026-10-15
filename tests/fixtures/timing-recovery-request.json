@@ -1,0 +1,17 @@
+{
+  "id": "timing-recovery-acceptance",
+  "version": 1,
+  "origin": "http://127.0.0.1:4181",
+  "url": "http://127.0.0.1:4181/timing?delay=20000",
+  "request": "Compile the prepared TimingProbe.sol exactly once. Exercise timing recovery: after starting compilation, first use a short 1000-ms wait_for check for COMPLETED compilation, not merely a visible or running status. If that read times out while work continues, keep the timeout in the record, inspect fresh state and wait for the actual build artifact using an appropriate longer deadline. Never click Compile a second time. Independently verify compilation succeeded, the TimingProbe artifact is ready, and only one compile request was made. Preserve the current browser width.",
+  "summary": "Owned live readiness timeout recovery acceptance",
+  "clarification": "",
+  "cases": [],
+  "viewports": [{ "width": 1280, "height": 720 }],
+  "preserveViewport": true,
+  "confirmed": false,
+  "visual": false,
+  "model": "dots-studio/dots-3-note-preview:free",
+  "aiProvider": "openrouter",
+  "createdAt": "2026-10-15T00:00:00Z"
+}

@@ -15,12 +15,27 @@ func diagnose(r *core.Run) *core.Diagnosis {
 	if r.Status == "cancelled" {
 		return &core.Diagnosis{Category: "cancelled", Summary: "The run was stopped; completed application changes remain.", NextCheck: "Review the partial evidence before starting a new run."}
 	}
+	hasMeasuredFailure := false
 	for _, step := range r.Steps {
-		if step.Status == "passed" {
+		if step.Status == "failed" {
+			hasMeasuredFailure = true
+			break
+		}
+	}
+	for _, step := range r.Steps {
+		if step.Status == "passed" || (step.Status == "wait_timeout" || step.Status == "wait_changed") && hasMeasuredFailure {
 			continue
 		}
 		d := &core.Diagnosis{Category: "assertion", Summary: "Observed behavior did not match the reviewed expectation.", NextCheck: "Check the expected business rule and the recorded application state.", StepID: step.ID}
 		switch {
+		case step.Status == "wait_timeout" || step.Status == "wait_changed":
+			d.Category = "readiness_timeout"
+			d.Summary = "A readiness condition timed out; this does not establish that the application operation failed."
+			if step.Status == "wait_changed" {
+				d.Category = "readiness_changed"
+				d.Summary = "The status changed without satisfying the readiness condition; its actual outcome still requires verification."
+			}
+			d.NextCheck = "Inspect the recorded wait duration, selector and fresh status. A busy control may have changed its accessible name. Do not repeat the operation merely because its wait expired."
 		case step.Result["actual"] == "target missing" || strings.Contains(step.Error, "target missing"):
 			d.Category = "target_or_evidence"
 			d.Summary = "The expected element was not found, so its value was not measured."

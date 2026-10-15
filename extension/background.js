@@ -8,6 +8,7 @@ import { PageRegistry } from './page-registry.js';
 import { NativeClient } from './native-client.js';
 import { envelope, id, validateAction, isAllowedURL } from '../shared/protocol.js';
 import { ExecutionFence } from '../shared/execution-fence.js';
+import { pollCondition } from '../shared/condition-wait.js';
 import { NetworkRecorder, publicURL } from './network-recorder.js';
 import { auditConfiguration } from './security-audit.js';
 
@@ -597,30 +598,12 @@ async function navigation(url, token) {
   throw fault('Navigation timed out; outcome is unknown', 'needs_review');
 }
 async function assertion(action, token) {
-  const end = Date.now() + (action.timeoutMs || 6000);
-  let last = {};
-  while (Date.now() < end) {
-    fence.check(token, state);
-    if (state.cancelled) throw fault('Run cancelled', 'cancelled');
-    try {
-      last = await content({ type: 'vqa.assert', action }, token);
-      if (last.passed) return last;
-    } catch (e) {
-      if (e.code !== 'target_missing') throw e;
-      last = {
-        expected: action.assertion.expected,
-        actual: 'target missing',
-        kind: action.assertion.kind,
-      };
-    }
-    await delay(150);
-  }
-  const e = fault(
-    `Expected ${JSON.stringify(last.expected)}; observed ${JSON.stringify(last.actual)}`,
-    'assertion_failed',
-  );
-  e.result = last;
-  throw e;
+  return pollCondition(action, {
+    read: (condition) => content({ type: 'vqa.assert', action: condition }, token),
+    check: () => fence.check(token, state),
+    sleep: delay,
+    reinspectOnChange: Boolean(state.automationPolicy?.live),
+  });
 }
 async function execute(action, token, secureOrigin = '', visual = null) {
   const secure = Boolean(secureOrigin);

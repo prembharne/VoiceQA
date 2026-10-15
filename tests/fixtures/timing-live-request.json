@@ -1,0 +1,17 @@
+{
+  "id": "timing-live-acceptance",
+  "version": 1,
+  "origin": "http://127.0.0.1:4181",
+  "url": "http://127.0.0.1:4181/timing?delay=20000",
+  "request": "Compile the prepared TimingProbe.sol exactly once. Wait for the asynchronous compilation to finish, then independently verify compilation succeeded, a TimingProbe artifact is ready, and only one compile request was made. Do not treat a dispatched click or an enabled button as success. Preserve the current browser width.",
+  "summary": "Owned delayed compilation UI acceptance; not Solidity compilation",
+  "clarification": "",
+  "cases": [],
+  "viewports": [{ "width": 1280, "height": 720 }],
+  "preserveViewport": true,
+  "confirmed": false,
+  "visual": false,
+  "model": "dots-studio/dots-3-note-preview:free",
+  "aiProvider": "openrouter",
+  "createdAt": "2026-10-15T00:00:00Z"
+}
