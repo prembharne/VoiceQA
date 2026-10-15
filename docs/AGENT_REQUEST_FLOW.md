@@ -49,6 +49,8 @@ The JSON inside the user message is data, not an additional system prompt. A sim
 
 Model instructions and the complete output schema are attached separately by the provider adapter. A previous assistant message cannot add an origin or enable API writes: permissions come from locally validated fields, not chat prose.
 
+When a compatible OpenRouter model advertises native tools and tool choice but lacks strict structured output, the adapter can request one `submit_result` function call containing the same result contract. It accepts only a completed, single, correctly named call with valid object arguments; it does not execute that function or grant browser permissions. Strict structured-output models retain their JSON-schema transport. Browser tools/actions are still dispatched by the local controller after validation, and live automation still chooses only its next action from current evidence. Function-transport coverage must be verified with real-model acceptance alongside the parser guards.
+
 Simplified OpenRouter/NIM payload:
 
 ```json
@@ -67,6 +69,8 @@ The API key is an authorization header handled by the local companion. Passwords
 JSON-mode models receive a compact flat action contract: irrelevant optional fields can be omitted rather than repeated as empty strings or nulls. Strict structured-output adapters retain their full contract. Local validation remains authoritative. HTTP requests use same-origin browser cookies by default; an additional bearer reference must come from that origin's observed names or explicit public documentation. Private CSRF references are resolved locally on the write, never captured into public variables.
 
 Optional discovery and drafting have separate six-minute deadlines under a bounded outer request. Cancellation still interrupts both. Invalid investigation contracts receive one bounded correction; failed investigations and sanitized plan diagnostics are saved locally. Neither diagnostic persistence nor a passing schema proves a correct testing oracle. See [actual security acceptance findings](GENERIC_SECURITY_ACCEPTANCE.md).
+
+Security drafts additionally receive an evidence review before human confirmation. The model compares prerequisites, expected outcomes, coverage and credential-readiness claims to supplied source IDs. The controller binds findings to the original excerpts; corrections must pass local validation and a new review. The reviewer cannot change permissions or execute actions, and its judgment still requires real positive/negative testing. This path does not preplan browser automation.
 
 Live action requests additionally include `navigationChoices`: public links actually observed on an approved origin, with a suggested new tab alias. These bind tab arguments to current evidence; they are not a generated itinerary. Completion replies contain a `page` alias per assertion. The runner validates aliases, budgets necessary switches and reads each page again before checking it. Invalid pre-dispatch decisions retain bounded sanitized diagnostics without filled values or raw HTTP bodies.
 

@@ -148,7 +148,8 @@ func (a *App) draftPlanWithProgress(ctx context.Context, request, url, origin st
 			} `json:"result"`
 		}
 		e = json.Unmarshal(raw, &draft)
-		plan := core.Plan{Summary: draft.Summary, Cases: draft.Result.Cases, Pages: pages}
+		decoded := e == nil
+		plan := core.Plan{Summary: draft.Summary, Cases: draft.Result.Cases, Pages: pages, Request: request, Origin: origin, URL: url, Model: s.Model, AIProvider: s.AIProvider}
 		normalizeDraftLabels(plan.Cases)
 		normalizeDraftWaits(plan.Cases)
 		e = errors.Join(e, normalizeDraftControls(plan.Cases, obs))
@@ -186,6 +187,7 @@ func (a *App) draftPlanWithProgress(ctx context.Context, request, url, origin st
 			plan.URL = url
 			plan.Origin = origin
 			normalizeDraftURLs(&plan)
+			normalizeCredentialWrappers(&plan, allowedProfiles)
 			plan.Request = request
 			plan.Model = s.Model
 			plan.AIProvider = s.AIProvider
@@ -220,6 +222,25 @@ func (a *App) draftPlanWithProgress(ctx context.Context, request, url, origin st
 				e = errors.Join(e, validateDraftAuthSources(plan, obs))
 				e = errors.Join(e, validateProfileReferences(plan, allowedProfiles))
 
+			}
+		}
+		// Repair deterministic contract failures first. Asking another model to
+		// review an unexecutable draft adds cost and conflicting schema feedback.
+		if decoded && e == nil && plan.Mode == "security" && plan.Request != "" && (len(plan.Cases) > 0 || plan.Clarification != "") {
+			if progress != nil {
+				progress(provider.PlanProgress{Phase: "validating"})
+			}
+			reviewUsage, reviewErr := a.reviewSecurityDraft(ctx, client, key, s.Model, plan, obs, allowedProfiles)
+			for name, tokens := range reviewUsage {
+				totalUsage[name] += tokens
+			}
+			plan.Usage = totalUsage
+			if reviewErr != nil {
+				var corrections *draftReviewCorrections
+				if !errors.As(reviewErr, &corrections) {
+					return core.Plan{}, planningError(reviewErr)
+				}
+				e = errors.Join(e, reviewErr)
 			}
 		}
 		if a.DraftDiagnostic != nil {

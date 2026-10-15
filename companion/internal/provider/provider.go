@@ -18,19 +18,25 @@ import (
 )
 
 type Client struct {
-	HTTP            *http.Client
-	BaseURL         string
-	Router          bool
-	NIM             bool
-	models          *modelCache
-	acceptanceCalls *atomic.Int32
+	HTTP                *http.Client
+	BaseURL             string
+	Router              bool
+	NIM                 bool
+	models              *modelCache
+	acceptanceCalls     *atomic.Int32
+	acceptanceTokens    *atomic.Int32
+	acceptanceModelOnly bool
 }
 
 func New() *Client {
 	c := &Client{HTTP: &http.Client{Timeout: 90 * time.Second}, BaseURL: "https://api.openai.com/v1", models: &modelCache{}}
+	c.acceptanceModelOnly = os.Getenv("VOICEQA_ACCEPTANCE_QWEN") == "1"
 	// Explicit isolated acceptance only; normal user planning stays uncapped.
 	if os.Getenv("VOICEQA_ACCEPTANCE_QWEN_LOW_TOKENS") == "1" {
+		c.acceptanceModelOnly = true
 		c.acceptanceCalls = &atomic.Int32{}
+		c.acceptanceTokens = &atomic.Int32{}
+		c.acceptanceTokens.Store(18000)
 	}
 	return c
 }
@@ -97,8 +103,8 @@ func (c *Client) Structured(ctx context.Context, key, model, instructions string
 
 // StructuredWithBudget keeps generation bounded while allowing complete multi-case plans.
 func (c *Client) StructuredWithBudget(ctx context.Context, key, model, instructions string, input any, schema any, budget int) (json.RawMessage, map[string]int, error) {
-	if c.acceptanceCalls != nil && (!c.Router || model != "qwen/qwen3.7-flash") {
-		return nil, nil, errors.New("Low-token acceptance permits only OpenRouter Qwen 3.7 Flash")
+	if c.acceptanceModelOnly && (!c.Router || model != "qwen/qwen3.7-flash") {
+		return nil, nil, errors.New("Qwen acceptance permits only OpenRouter Qwen 3.7 Flash")
 	}
 	if budget < 512 || budget > 16000 {
 		return nil, nil, errors.New("structured output budget must be 512–16000 tokens")
@@ -281,7 +287,7 @@ Every text, number, value, count, visible/hidden/enabled/selected/focus check re
 Targets: use observed selectors or testid:ID, role:ROLE|EXACT ACCESSIBLE NAME, label:EXACT LABEL, text:EXACT TEXT.
 - capture_value: target=nonprivate element, value=bare public variable alias such as order-id, matching ^[a-z][a-z0-9_-]{0,31}$. Do not use a selector, dot-path or placeholder as the alias. Later steps use ${order-id}; never consume a variable before capturing it. testDataRows provide public ${name} inputs. Do not capture credentials/tokens.
 - open_tab: target=unique alias, value=known URL on an approved origin; activates it. switch_tab: target=existing alias. close_tab: target=run-created alias only; returns to main. Never close shared/user tabs. Each case starts on its declared page alias, main by default. At most five pages.
-- fill_secret: target=input, value=ACTUAL_PROFILE_ID:username or ACTUAL_PROFILE_ID:password. fill_totp: target=OTP input, value=ACTUAL_PROFILE_ID. ACTUAL_PROFILE_ID must exactly equal an id in authProfiles; do not emit the literal placeholder profile. Use only supplied origin-bound authProfiles metadata; never include secret values. Missing required credentials are a blocker. SMS/passkeys/device prompts/real CAPTCHA use human_checkpoint with value=mfa or captcha and label=operator instructions, then an independent application-state assert. Do not inject challenge tokens or use solver services. Owned synthetic CAPTCHA is still an operator checkpoint.
+- fill_secret: target=input; value must exactly copy a supplied credentialReferences value for this page and requested username/password field. fill_totp likewise copies the supplied reference for an OTP input. Never prepend placeholder text, invent an id or include actual secret values. Use only supplied origin-bound authProfiles metadata. Missing required credentials are a blocker. SMS/passkeys/device prompts/real CAPTCHA use human_checkpoint with value=mfa or captcha and label=operator instructions, then an independent application-state assert. Do not inject challenge tokens or use solver services. Owned synthetic CAPTCHA is still an operator checkpoint.
 - http_check: http={method,url,body,expectedStatus,jsonPointer,expectedValue,expectedType,tolerance,saveAs,idempotencyKey,authSource,authPointer,csrfSource,csrfHeader,csrfBodyField}; unused strings empty, tolerance=0. Body is JSON string. jsonPointer is RFC6901. saveAs is a public alias. Routes/business rules must be supplied. GET/HEAD are allowed in QA mode. Mutations require apiWritesAllowed or explicitly authorized security mode. HTTP uses the active approved-origin session; never retry mutations automatically. Named browser references only: authSource=local:KEY/session:KEY/cookie:NAME, csrfSource=meta:NAME/input:NAME/cookie:NAME. Never expose token values or put credentials in HTTP bodies. Use supported CSRF headers/body fields.
 HTTP examples are tool syntax, not website rules: a public ID capture uses jsonPointer="/id", expectedType="string", saveAs="created-id"; a later equality check uses expectedValue="${created-id}". A numeric total check uses jsonPointer="/total", expectedType="number", expectedValue=an independently derived numeric string. A private CSRF reference is supplied directly on each write as csrfSource="meta:OBSERVED_NAME", csrfHeader="DOCUMENTED_HEADER"; never add a GET to capture CSRF, never use saveAs for secrets. Status-only checks omit captures and value comparisons.
 - security_audit: only explicitly authorized security mode; reads observed response-header and cookie-flag configuration indicators. It does not execute ownership, role, pricing, CSRF or duplicate-submission tests. Use http_check and secure account interactions to test those rules, including legitimate positive controls. A header scan cannot establish logical security. Never brute force, scan/exfiltrate or run exploit code. UI visibility is not server authorization evidence; report uncertainty instead of blanket security claims.

@@ -16,7 +16,8 @@ const debugRecord = debugPath ? JSON.parse(await readFile(resolve(debugPath), 'u
 const automationUI = process.argv.includes('--automation-ui');
 const automationLive = process.argv.includes('--automation-live') || automationUI;
 const livePlanning = process.argv.includes('--plan-live') || automationLive;
-const paidQwen = process.argv.includes('--paid-qwen-low-tokens');
+const lowTokens = process.argv.includes('--paid-qwen-low-tokens');
+const paidQwen = lowTokens || process.argv.includes('--paid-qwen');
 if (paidQwen && (plan.aiProvider !== 'openrouter' || plan.model !== 'qwen/qwen3.7-flash'))
   throw new Error('Paid acceptance permits only the explicitly authorized Qwen 3.7 Flash.');
 if (
@@ -172,7 +173,8 @@ try {
     env: {
       ...process.env,
       VOICEQA_DATA_DIR: data,
-      VOICEQA_ACCEPTANCE_QWEN_LOW_TOKENS: paidQwen ? '1' : '',
+      VOICEQA_ACCEPTANCE_QWEN: paidQwen ? '1' : '',
+      VOICEQA_ACCEPTANCE_QWEN_LOW_TOKENS: lowTokens ? '1' : '',
       OPENAI_API_KEY: '',
       OPENROUTER_API_KEY: '',
       VOICEQA_TTS_API_KEY: '',
@@ -607,6 +609,24 @@ try {
       await new Promise((done) => setTimeout(done, 250));
     }
     await writeFile(join(work, 'run.json'), JSON.stringify(run, null, 2));
+    if (parcelWorkspace) {
+      const reviewDB = new DatabaseSync(join(data, 'voiceqa.db'), { readOnly: true });
+      try {
+        await writeFile(
+          join(work, 'plan-reviews.json'),
+          JSON.stringify(
+            reviewDB
+              .prepare('SELECT body FROM records WHERE kind=?')
+              .all('plan_review')
+              .map((row) => JSON.parse(row.body)),
+            null,
+            2,
+          ),
+        );
+      } finally {
+        reviewDB.close();
+      }
+    }
     await panel.screenshot({ path: join(work, 'results.png'), fullPage: true });
     const assertions = run.steps.filter((s) =>
       ['assert', 'http_check'].includes(s.action.operation),
@@ -699,6 +719,21 @@ try {
         )
       )
         throw new Error('Actual AI did not detect the deliberately broken ownership boundary.');
+      if (process.argv.includes('--expect-ownership-defect')) {
+        const unexpected = run.steps
+          .filter((s) => s.status === 'failed')
+          .filter(
+            (s) =>
+              s.action.operation !== 'http_check' ||
+              new URL(s.action.http.url).pathname !== '/api/orders/OB2002' ||
+              s.action.http.expectedStatus !== 403 ||
+              s.result?.status !== 200,
+          );
+        if (unexpected.length)
+          throw new Error(
+            'Ownership negative control also had unexpected failures; it is not a clean defect-detection result.',
+          );
+      }
       console.log(
         `Actual server security controls verified: ${http.length} HTTP checks, ${state.creations} unique created orders, genuine member/manager sessions.`,
       );
@@ -921,6 +956,19 @@ try {
       .map((row) => JSON.parse(row.body));
     await writeFile(join(work, 'investigations.json'), JSON.stringify(investigations, null, 2));
     await writeFile(join(work, 'planning-diagnostics.json'), JSON.stringify(planning, null, 2));
+    const reviews = diagnostic
+      .prepare('SELECT body FROM records WHERE kind=?')
+      .all('plan_review')
+      .map((row) => JSON.parse(row.body));
+    await writeFile(join(work, 'plan-reviews.json'), JSON.stringify(reviews, null, 2));
+    const reviewDiagnostics = diagnostic
+      .prepare('SELECT body FROM records WHERE kind=?')
+      .all('plan_review_diagnostic')
+      .map((row) => JSON.parse(row.body));
+    await writeFile(
+      join(work, 'plan-review-diagnostics.json'),
+      JSON.stringify(reviewDiagnostics, null, 2),
+    );
     await writeFile(
       join(work, 'failure.json'),
       JSON.stringify({ error: String(error.message).slice(0, 1600) }, null, 2),

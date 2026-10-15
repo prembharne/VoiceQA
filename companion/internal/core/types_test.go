@@ -1,6 +1,18 @@
 package core
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
+
+func TestDraftMetadataErrorIdentifiesTheActualRepair(t *testing.T) {
+	p := validPlan()
+	p.Cases[0].Goal = strings.Repeat("g", 501)
+	err := ValidatePlan(p)
+	if err == nil || !strings.Contains(err.Error(), "case 1 metadata") || !strings.Contains(err.Error(), "goal=501/500") || strings.Contains(err.Error(), "needs a name") {
+		t.Fatal("Oversized goal reported as missing name/steps", err)
+	}
+}
 
 func validPlan() Plan {
 	return Plan{URL: "https://example.test/", Origin: "https://example.test", Viewports: []Viewport{{Width: 1440, Height: 900}}, Cases: []Case{{Name: "Cart", Steps: []Action{{Operation: "navigate", Value: "https://example.test/"}, {Operation: "assert", Target: "#total", Assertion: &Assertion{Kind: "number", Expected: "24"}}}}}}

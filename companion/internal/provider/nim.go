@@ -37,11 +37,20 @@ func (c *Client) chatStructured(ctx context.Context, key, model, instructions st
 		if !c.Router || model != "qwen/qwen3.7-flash" {
 			return nil, nil, errors.New("Low-token acceptance permits only OpenRouter Qwen 3.7 Flash")
 		}
-		if c.acceptanceCalls.Add(1) > 3 {
-			return nil, nil, errors.New("Low-token acceptance reached its three-call limit")
+		if c.acceptanceCalls.Add(1) > 4 {
+			return nil, nil, errors.New("Low-token acceptance reached its four-call limit")
 		}
 		if budget == 0 || budget > 6000 {
 			budget = 6000
+		}
+		for {
+			remaining := c.acceptanceTokens.Load()
+			if remaining < int32(budget) {
+				return nil, nil, errors.New("Low-token acceptance reached its 18000-token reserved output limit")
+			}
+			if c.acceptanceTokens.CompareAndSwap(remaining, remaining-int32(budget)) {
+				break
+			}
 		}
 	}
 	if e := c.checkKey(key); e != nil {
@@ -52,6 +61,7 @@ func (c *Client) chatStructured(ctx context.Context, key, model, instructions st
 		return nil, nil, e
 	}
 	mode := "json-schema"
+	toolTransport := false
 	name := "NVIDIA NIM"
 	var capabilities routerModel
 	if c.Router {
@@ -70,6 +80,7 @@ func (c *Client) chatStructured(ctx context.Context, key, model, instructions st
 			return nil, nil, errors.New("Choose an OpenRouter model that can generate text plans")
 		}
 		mode = capabilities.outputMode()
+		toolTransport = mode != "json-schema" && capabilities.supports("tools") && capabilities.supports("tool_choice")
 		if budget > 0 && capabilities.Top.MaxCompletion > 0 && capabilities.Top.MaxCompletion < budget {
 			budget = capabilities.Top.MaxCompletion
 		}
@@ -106,6 +117,15 @@ func (c *Client) chatStructured(ctx context.Context, key, model, instructions st
 		body["response_format"] = map[string]any{"type": "json_schema", "json_schema": map[string]any{"name": "qa_result", "strict": true, "schema": schema}}
 	case "json-object":
 		body["response_format"] = map[string]any{"type": "json_object"}
+	}
+	if toolTransport {
+		// Use the model's trained argument channel when strict JSON schema is
+		// unavailable. This function only returns data; it never executes tools.
+		delete(body, "response_format")
+		body["stream"] = false
+		body["tools"] = []any{map[string]any{"type": "function", "function": map[string]any{"name": "submit_result", "description": "Submit the result matching the supplied contract. No browser action is executed by this function.", "parameters": compactJSONContract(schema)}}}
+		messages := body["messages"].([]map[string]string)
+		messages[0]["content"] += "\nTRANSPORT: Return the complete result as arguments of the submit_result function exactly once. Do not output a separate text JSON object or call any other function."
 	}
 	if c.Router {
 		body["provider"] = map[string]any{"require_parameters": true}
@@ -205,6 +225,9 @@ func (c *Client) chatStructured(ctx context.Context, key, model, instructions st
 			msg = "Request rejected. Check the key, model access and account quota."
 		}
 		if c.Router && res.StatusCode == 404 {
+			if toolTransport {
+				mode = "function-argument"
+			}
 			return nil, nil, fmt.Errorf("OpenRouter has no available endpoint for model %q with %s output. Check provider availability and your account routing preferences; no model was switched. Details: %s", model, mode, msg)
 		}
 		return nil, nil, fmt.Errorf("%s HTTP %d: %s", name, res.StatusCode, msg)
@@ -222,7 +245,85 @@ func (c *Client) chatStructured(ctx context.Context, key, model, instructions st
 		}
 		return nil, nil, e
 	}
+	if toolTransport {
+		return parseToolStructured(raw, budget)
+	}
 	return parseChatStructuredMode(raw, budget, c.Router && mode != "json-schema")
+}
+
+func parseToolStructured(raw []byte, budget int) (json.RawMessage, map[string]int, error) {
+	var packet struct {
+		Choices []struct {
+			Index   int    `json:"index"`
+			Finish  string `json:"finish_reason"`
+			Message struct {
+				Content string `json:"content"`
+				Refusal string `json:"refusal"`
+				Calls   []struct {
+					Type     string `json:"type"`
+					Function struct {
+						Name      string `json:"name"`
+						Arguments string `json:"arguments"`
+					} `json:"function"`
+				} `json:"tool_calls"`
+			} `json:"message"`
+		} `json:"choices"`
+		Usage struct {
+			Input  int `json:"prompt_tokens"`
+			Output int `json:"completion_tokens"`
+			Total  int `json:"total_tokens"`
+		} `json:"usage"`
+		Error json.RawMessage `json:"error"`
+	}
+	if err := json.Unmarshal(raw, &packet); err != nil {
+		return nil, nil, err
+	}
+	usage := map[string]int{"input_tokens": packet.Usage.Input, "output_tokens": packet.Usage.Output, "total_tokens": packet.Usage.Total}
+	if len(packet.Choices) != 1 || packet.Choices[0].Index != 0 {
+		return nil, usage, errors.New("AI provider omitted its single completed result")
+	}
+	choice := packet.Choices[0]
+	if choice.Finish == "length" {
+		return nil, usage, generationLimitMessage(budget)
+	}
+	// Auto tool selection is portable across endpoints that reject named
+	// tool_choice. A complete plain JSON reply still follows the same contract.
+	if choice.Finish == "stop" && len(choice.Message.Calls) == 0 && choice.Message.Refusal == "" && (len(packet.Error) == 0 || string(packet.Error) == "null") {
+		return parseChatStructuredMode(raw, budget, true)
+	}
+	if choice.Finish != "tool_calls" || choice.Message.Refusal != "" || strings.TrimSpace(choice.Message.Content) != "" || len(choice.Message.Calls) != 1 || (len(packet.Error) > 0 && string(packet.Error) != "null") {
+		return nil, usage, errors.New("AI function response is incomplete, refused or ambiguous; no action was dispatched")
+	}
+	call := choice.Message.Calls[0]
+	arguments := normalizedJSON([]byte(call.Function.Arguments))
+	name := strings.TrimPrefix(call.Function.Name, "functions.")
+	if call.Type != "function" || name != "submit_result" || len(arguments) == 0 || arguments[0] != '{' || !json.Valid(arguments) {
+		// Metadata only: never include generated arguments or filled values.
+		nameClass := "unexpected"
+		if name == "submit_result" {
+			nameClass = "expected"
+		}
+		return nil, usage, fmt.Errorf("AI function contract rejected (function=%s, typeValid=%t, JSONValid=%t, object=%t, argumentBytes=%d); no action was dispatched", nameClass, call.Type == "function", json.Valid(arguments), len(arguments) > 0 && arguments[0] == '{', len(arguments))
+	}
+	return json.RawMessage(arguments), usage, nil
+}
+
+// Normalize exact presentation/encoding wrappers, never prose or malformed JSON.
+func normalizedJSON(raw []byte) []byte {
+	text := strings.TrimSpace(string(raw))
+	for _, prefix := range []string{"```json\n", "```\n"} {
+		if strings.HasPrefix(text, prefix) && strings.HasSuffix(text, "\n```") {
+			text = strings.TrimSuffix(strings.TrimPrefix(text, prefix), "\n```")
+			break
+		}
+	}
+	if strings.HasPrefix(text, "\"") {
+		var decoded string
+		if json.Unmarshal([]byte(text), &decoded) == nil && json.Valid([]byte(decoded)) {
+			text = strings.TrimSpace(decoded)
+		}
+	}
+	return bytes.TrimSpace([]byte(text))
 }
 
 // JSON-mode providers do not enforce OpenAI's all-properties-required rule.
@@ -260,6 +361,10 @@ func compactJSONContract(schema any) any {
 	visit(clone)
 	return clone
 }
+
+// SemanticActionSchema describes accepted action data to the reviewer. Strict
+// provider schemas require empty padding fields for transport, not execution.
+func SemanticActionSchema() any { return compactJSONContract(ActionSchema()) }
 
 type chatChoice struct {
 	Index   int    `json:"index"`
@@ -303,13 +408,7 @@ func parseChatStructuredMode(raw []byte, budget int, allowFence bool) (json.RawM
 		return nil, usage, errors.New("AI response incomplete or refused; no tests were run")
 	}
 	if allowFence {
-		text := strings.TrimSpace(choice.Message.Content)
-		for _, prefix := range []string{"```json\n", "```\n"} {
-			if strings.HasPrefix(text, prefix) && strings.HasSuffix(text, "\n```") {
-				choice.Message.Content = strings.TrimSuffix(strings.TrimPrefix(text, prefix), "\n```")
-				break
-			}
-		}
+		choice.Message.Content = string(normalizedJSON([]byte(choice.Message.Content)))
 	}
 	if !json.Valid([]byte(choice.Message.Content)) {
 		return nil, usage, errors.New("AI provider did not return valid JSON; no tests were run")

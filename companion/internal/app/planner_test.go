@@ -18,7 +18,7 @@ import (
 type routerTestTransport func(*http.Request) (*http.Response, error)
 
 func (f routerTestTransport) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
-func TestPromptJSONStillRejectsUnsafeActionsAndKeepsScope(t *testing.T) {
+func TestInvalidSecurityDraftRepairsWithoutSpendingAReviewCall(t *testing.T) {
 	a := newTestApp(t)
 	t.Setenv("OPENROUTER_API_KEY", "sk-or-test-fixture")
 	a.settings.AIProvider = "openrouter"
@@ -49,7 +49,7 @@ func TestPromptJSONStillRejectsUnsafeActionsAndKeepsScope(t *testing.T) {
 		copy.URL.Path = strings.TrimPrefix(copy.URL.Path, "/api/v1")
 		return http.DefaultTransport.RoundTrip(copy)
 	})
-	_, err := a.draftPlan(context.Background(), "Check the workflow", "https://example.test/", "https://example.test", false, nil)
+	_, err := a.draftConfiguredPlan(context.Background(), "Check the workflow", "https://example.test/", "https://example.test", false, nil, core.Plan{Mode: "security", SecurityAuthorized: true})
 	if err == nil || calls != 2 {
 		t.Fatal("unvalidated JSON accepted or repair budget changed", err, calls)
 	}

@@ -198,8 +198,14 @@ func validateResolvedPlan(p Plan) error {
 		}
 	}
 	for caseIndex, c := range p.Cases {
-		if strings.TrimSpace(c.Name) == "" || len(c.Name) > 100 || len(c.Goal) > 500 || len(c.Source) > 300 || len(c.Steps) == 0 {
-			return errors.New("each test needs a name and steps")
+		if strings.TrimSpace(c.Name) == "" {
+			return fmt.Errorf("case %d needs a nonempty name", caseIndex+1)
+		}
+		if len(c.Name) > 100 || len(c.Goal) > 500 || len(c.Source) > 300 {
+			return fmt.Errorf("case %d metadata exceeds its byte limits: name=%d/100, goal=%d/500, source=%d/300; shorten descriptions without removing test steps", caseIndex+1, len(c.Name), len(c.Goal), len(c.Source))
+		}
+		if len(c.Steps) == 0 {
+			return fmt.Errorf("case %d needs executable steps", caseIndex+1)
 		}
 		if c.Steps[0].Operation != "navigate" {
 			return fmt.Errorf("case %d must start by navigating to its starting URL before any clicks or checks; first operation was %q. Add navigate as steps[0]; steps must be in execution order", caseIndex+1, c.Steps[0].Operation)
