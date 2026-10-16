@@ -147,6 +147,11 @@ func (a *App) investigateWithRun(ctx context.Context, request, origin string, pa
 			result.Usage[name] += n
 		}
 		if err != nil {
+			if provider.IsResponseContractError(err) && !contractRepair && turn < 8 && ctx.Err() == nil {
+				contractRepair = true
+				result.Evidence = append(result.Evidence, AgentEvidence{ID: fmt.Sprintf("E%d", turn+1), Tool: "response_validation", Page: "main", Error: "The previous model response was invalid; no tool ran. Use the recorded evidence to choose a supported read or produce a grounded answer."})
+				continue
+			}
 			return result, agentResponseError(err, "investigation", false)
 		}
 		var packet struct {
@@ -301,6 +306,9 @@ func (a *App) investigateWithRun(ctx context.Context, request, origin string, pa
 						view, toolErr = a.browser(ctx, "", "", map[string]any{"operation": "agent_tool", "tool": reply.Name, "page": reply.Args.Page, "target": reply.Args.Target, "query": reply.Args.Query, "url": reply.Args.URL, "origin": origin, "allowLinks": links})
 					}
 					if toolErr != nil {
+						if reply.Name == "visual_inspect" {
+							visual.close()
+						}
 						e.Error = toolErr.Error()
 					} else {
 						e.Result = agentPublicEvidence(view)

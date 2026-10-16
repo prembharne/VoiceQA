@@ -354,6 +354,9 @@ func (a *App) preflightAutomationAssertion(ctx context.Context, r *core.Run, act
 	if action.Assertion == nil {
 		return errors.New("assertion expectation missing")
 	}
+	if literal, ok := requestedExactContent(r.Plan.Request, action.Assertion.Expected); ok {
+		return fmt.Errorf("This expectation reformats explicitly exact content from the original request. Preserve the requested literal, not the model's formatted output: %s", literal)
+	}
 	switch action.Assertion.Kind {
 	case "url", "url_contains", "no_overflow", "count", "hidden":
 		return nil
@@ -365,6 +368,10 @@ func (a *App) preflightAutomationAssertion(ctx context.Context, r *core.Run, act
 	meta, err := a.browser(ctx, r.ID, "", map[string]any{"operation": "resolve_target", "target": action.Target, "origin": r.Plan.Origin})
 	if err != nil {
 		return fmt.Errorf("Verification target is not present in current state; select an actual observed result target without changing the expected outcome: %w", err)
+	}
+	tag := strings.ToUpper(stringField(meta, "tag"))
+	if (tag == "INPUT" || tag == "TEXTAREA") && (action.Assertion.Kind == "text" || action.Assertion.Kind == "text_contains") {
+		return errors.New("This target stores editable content in its value, not displayed text. Use assertion kind=value with the original independently derived expected content. Do not copy or reformat the observed value into the expectation")
 	}
 	if text, ok := meta["text"].(string); ok {
 		if err := validateQuotedOutcome(r, action, text); err != nil {

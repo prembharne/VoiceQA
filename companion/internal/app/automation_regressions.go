@@ -70,6 +70,11 @@ func automationRegressionCandidates(r *core.Run, checks []automationCheck) []aut
 }
 
 func recordAutomationRegression(r *core.Run, witness automationRegression) error {
+	for _, step := range r.Steps {
+		if step.Result["historical"] == true && step.Result["observationId"] == witness.FailedObservation && step.Action.Target == witness.Action.Target && step.Page == witness.Page {
+			return nil
+		}
+	}
 	action := witness.Action
 	action.Label = "Recorded regression: " + trim(witness.Requirement, 180)
 	now := core.Now()

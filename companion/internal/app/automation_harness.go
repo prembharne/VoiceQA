@@ -25,24 +25,31 @@ const dotsModel = "dots-studio/dots-3-note-preview:free"
 const fallbackModel = "qwen/qwen3.7-flash"
 
 type automationSession struct {
-	router                progressRouter
-	visual                visualSession
-	visualReply           visualagent.Reply
-	visualImage           map[string]any
-	visualTicket          string
-	visualTotal           int
-	app                   *App
-	run                   *core.Run
-	scope                 *core.Scope
-	viewport              string
-	profiles              []AuthProfile
-	observation, public   map[string]any
-	seen, readSeen        map[string]bool
-	readCalls, rejections int
-	waitRecoveries        int
-	pendingWaits          map[string]bool
-	validation, model     string
-	contract              any
+	router                          progressRouter
+	visual                          visualSession
+	visualReply                     visualagent.Reply
+	visualImage                     map[string]any
+	visualTicket                    string
+	visualTotal                     int
+	visualDisabled                  bool
+	app                             *App
+	run                             *core.Run
+	scope                           *core.Scope
+	viewport                        string
+	profiles                        []AuthProfile
+	observation, public             map[string]any
+	seen, readSeen                  map[string]bool
+	readCalls, rejections           int
+	waitRecoveries                  int
+	pendingWaits                    map[string]bool
+	validation, model               string
+	contract                        any
+	recoveries, domCooldown         int
+	lastRecovery                    map[string]any
+	recoveryTicket, pendingRecovery string
+	uiRetries                       map[string]int
+	notDispatched                   map[string]bool
+	blockerReports                  int
 }
 
 func (a *App) runAutomationHarness(ctx context.Context, r *core.Run) error {
@@ -82,6 +89,7 @@ func (a *App) runAutomationHarness(ctx context.Context, r *core.Run) error {
 	}
 	tools = append(tools, agentharness.Tool{Name: repairTool, Parameters: provider.Object(map[string]any{"error": provider.String()})})
 	tools = append(tools, agentharness.Tool{Name: visualTool, Parameters: provider.Object(map[string]any{"ticket": provider.String()})})
+	tools = append(tools, agentharness.Tool{Name: recoveryTool, Parameters: provider.Object(map[string]any{"ticket": provider.String()})})
 	cfg := agentharness.Config{Instructions: provider.AutomationInstructions, Request: r.Plan.Request,
 		MaxIterations: 3 * (r.Plan.Automation.MaxActions + automationReadBudget + 1), Tools: tools,
 		Decide: func(ctx context.Context, messages []*schema.Message) (agentharness.Call, error) {
@@ -174,21 +182,31 @@ func (s *automationSession) decide(ctx context.Context, messages []*schema.Messa
 	s.observation, s.public = obs, agentPublicEvidence(obs)
 	rememberAutomationObservation(r, s.public)
 	s.router.observe(s.public)
-	reason := s.router.reason(a.visualAvailable(r.Plan.AIProvider, r.Plan.Model), s.rejections > 0, automationReadBudget-s.readCalls)
-	if s.router.visual || reason != "" {
+	visualAllowed := !s.visualDisabled && s.visualTotal < r.Plan.Automation.MaxActions
+	reason := s.router.reason(visualAllowed && a.visualAvailable(r.Plan.AIProvider, r.Plan.Model), s.rejections > 0, automationReadBudget-s.readCalls)
+	if s.domCooldown > 0 {
+		s.domCooldown--
+		reason, s.router.visual = "", false
+	}
+	if visualAllowed && (s.router.visual || reason != "") {
 		if s.router.visualTurns >= 6 {
 			s.router.visual = false
 			s.router.unchanged = 0
 			s.router.reads = 0
 			s.router.visualTurns = 0
 		} else {
-			if s.visualTotal >= 16 {
-				return agentharness.Call{}, &BrowserError{Code: "blocked", Message: "Visual recovery budget exhausted; inspect the recorded handoffs before continuing"}
-			}
 			s.visualTotal++
 			s.router.visual = true
 			ticket, visualErr := s.visualDecision(ctx, reason)
 			if visualErr != nil {
+				var unavailable *BrowserError
+				if errors.As(visualErr, &unavailable) && unavailable.Code == "visual_unavailable" {
+					s.visualDisabled = true // DOM tools remain usable in this viewport.
+				}
+				if recoverableVisualDecision(ctx, visualErr) {
+					s.visual.close()
+					return s.queueRecovery(visualErr), nil
+				}
 				return agentharness.Call{}, visualErr
 			}
 			args, _ := json.Marshal(map[string]string{"ticket": ticket})
@@ -200,6 +218,8 @@ func (s *automationSession) decide(ctx context.Context, messages []*schema.Messa
 		history = history[len(history)-12:]
 	}
 	input := map[string]any{"goal": r.Plan.Request, "conversation": r.Plan.Conversation, "successCriteria": r.Plan.Automation.Criteria, "permissions": r.Plan.Automation, "apiWritesAllowed": r.Plan.APIWritesAllowed, "scope": s.scope, "observation": automationModelObservation(s.public), "navigationChoices": automationNavigationChoices(s.scope, obs), "observedStateHistory": automationModelHistory(r.Observations), "readEvidence": r.ReadEvidence, "earlierEvidenceOmitted": r.EvidenceOmitted, "recentSteps": agentPublicEvidence(map[string]any{"steps": history})["steps"], "publicValues": r.Values, "credentialProfiles": s.profiles, "remainingActions": r.Plan.Automation.MaxActions - len(r.Steps), "remainingReadCalls": automationReadBudget - s.readCalls, "validationError": s.validation}
+	input["goalRecovery"] = s.lastRecovery
+	input["goalState"] = map[string]any{"completedActions": len(r.Steps), "recordedFailures": automationHasFailures(r), "recoveryAttempts": s.recoveries, "completion": "Requires independent outcome checks covering the original goal"}
 	// Keep Eino's latest tool feedback; durable public facts live in the evidence
 	// ledger instead of being duplicated in an ever-growing transcript.
 	for i := len(messages) - 1; i >= 0; i-- {
@@ -272,10 +292,7 @@ func (s *automationSession) reject(d automationDecision, err error) (agentharnes
 	if r.Status == "error" {
 		return agentharness.Outcome{}, errors.New(r.Error)
 	}
-	if s.rejections >= 3 {
-		return agentharness.Outcome{}, &BrowserError{Code: "blocked", Message: "Adaptive decision failed validation after three corrections: " + s.validation}
-	}
-	return agentharness.Outcome{Output: map[string]any{"status": "rejected_before_dispatch", "error": recordedText(s.validation, 2000), "guidance": "No action was executed. Inspect actual current constraints or choose a different grounded action."}}, nil
+	return s.recoverGoal("proposal_rejected_before_dispatch", err, &d.Action, false)
 }
 
 func (s *automationSession) invoke(ctx context.Context, call agentharness.Call) (agentharness.Outcome, error) {
@@ -285,6 +302,9 @@ func (s *automationSession) invoke(ctx context.Context, call agentharness.Call) 
 	}
 	if call.Name == visualTool {
 		return s.invokeVisual(ctx, call)
+	}
+	if call.Name == recoveryTool {
+		return s.invokeRecovery(call)
 	}
 	if call.Name == repairTool {
 		var body struct {
@@ -324,8 +344,7 @@ func (s *automationSession) invoke(ctx context.Context, call agentharness.Call) 
 	if err = s.validate(ctx, &d); err != nil {
 		var measured *BrowserError
 		if errors.As(err, &measured) && measured.Code == "assertion_failed" {
-			a.setAutomationFailure(r, err)
-			return agentharness.Outcome{Stop: true, Output: map[string]any{"status": r.Status}}, nil
+			return s.recoverGoal("recorded_regression", err, nil, false)
 		}
 		if ctx.Err() != nil || r.Status != "running" {
 			return agentharness.Outcome{}, err

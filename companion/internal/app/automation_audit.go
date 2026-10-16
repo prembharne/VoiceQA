@@ -59,7 +59,10 @@ func (a *App) auditLiveCompletion(ctx context.Context, r *core.Run, current map[
 	if len(audit.ConfirmedRegressions) > 0 {
 		for _, witness := range regressions {
 			if witness.ID == audit.ConfirmedRegressions[0] {
-				return recordAutomationRegression(r, witness)
+				if err := recordAutomationRegression(r, witness); err != nil {
+					return err
+				}
+				break // An already recorded defect cannot bypass coverage review.
 			}
 		}
 	}

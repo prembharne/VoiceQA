@@ -7,6 +7,16 @@ import unittest
 worker = runpy.run_path(str(Path(__file__).resolve().parents[1] / 'agent_s' / 'worker.py'))
 
 class RestrictedActions(unittest.TestCase):
+    def test_json_action_envelope_preserves_source_and_rejects_multiple_actions(self):
+        source = 'contract Probe { string public name = "VoiceQA"; }\n'
+        framed = worker['frame_action'](json.dumps({'method':'fill','args':['Source editor',source]}))
+        expression = framed.split('\n',1)[1].rsplit('```',1)[0].strip()
+        import ast
+        self.assertEqual(ast.literal_eval(ast.parse(expression, mode='eval').body.args[1]), source)
+        for value in ['{"method":"click","args":["Compile"],"extra":1}', '{"method":"exec","args":["bad"]}', '{"method":"click","args":["a","b"]}', 'agent.done(); agent.done()']:
+            with self.subTest(value=value), self.assertRaises((ValueError,SyntaxError)):
+                worker['frame_action'](value)
+
     def test_read_only_has_no_mutation_tools(self):
         aci = worker['ReadACI'](None)
         with self.assertRaises(ValueError):

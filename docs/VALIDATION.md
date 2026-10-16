@@ -2,6 +2,22 @@
 
 This document records current evidence, not projected reliability.
 
+## Goal-driven recovery - 2026-10-16
+
+Version 0.14.0 preserves the original goal across rejected proposals, visual decision errors, inconclusive waits and failed checks, with fresh DOM/Agent S routing and bounded UI retry. Exact literal preservation and editable-value assertion preflight address failures discovered with actual models. See [behavior, limits and reproduction](GOAL_CONTROLLER.md).
+
+Actual Dots-primary/Agent S-Qwen acceptance `paced-live-run-9Ry5mc` (run `cb5bb6d7b74380e3afa7d8676e5473ba`) completed **14 recorded steps and six passing assertions**. The owned interface ignored its first New file click; the agent adapted and a second click opened it. Independent saved page state confirms exactly one file creation, exact requested source, fixture compilation status, the visual-only canvas outcome and unchanged width **1422**. `run.json`, `visual-state.json`, `goal-recovery-state.json` and `goal-acceptance.json` retain the evidence. The wrapper initially rejected the run because it required a specific recovery event, although the model had adapted without that controller path; the wrapper was corrected and the saved actual run/state revalidated without another model workflow. The optional read-only follow-up was not reached in that run and is not claimed.
+
+Two earlier actual runs remain rejected. `paced-live-run-esOYGE` recovered through an invalid Qwen proposal but reformatted the requested source, then used a text assertion against a textarea; it retained a failed check and continued two further passing checks, with overall failure. `paced-live-run-ZEN7Jo` used a value assertion but accepted the reformatted source as its own expectation; its model-reported pass was rejected by independent exact-state validation. These findings led to controller binding of unique explicitly exact request literals and rejection of reformatted expectations; the acceptance did not weaken the exact-source requirement.
+
+The first negative-control attempt (`paced-live-run-4f0enw`) stopped before dispatch: Dots proposed unsupported `text=` selector syntax, then the visual lane could not use a cropped screenshot from an emulated viewport. This exposed a recoverable compatibility failure being treated as a whole-run blocker. The implementation now rejects that selector syntax immediately, classifies unusable screenshots separately and disables only the visual lane while DOM recovery continues. The original partial record is retained.
+
+Final negative acceptance `paced-live-run-sjNmrk` (run `7c217b64d4a77cfde633c63e2e3c7e01`) passed its independent defect gate: **18 recorded steps**, seven passing assertions and three failed checks of the same injected Ready-to-Archived persistence defect, overall **failed**, with exactly one save. Actual Dots inspected the field constraints, created a compliant release, refreshed, retained the failed status check and continued independent checks. The run also recovered from the cropped-screenshot incompatibility without browser input or resizing. No paid DOM fallback was used in either accepted workflow. The negative run took 164,113 ms; the healthy hybrid run took 86,641 ms. Multiple checks of the same injected defect are not separate discovered bugs. A subsequent local regression ensures an already recorded temporal defect cannot bypass coverage of unfinished requirements.
+
+The production build, 57 JavaScript checks, full Go race suite and four restricted Agent S adapter checks pass. Seven focused real-Chrome/native-host regressions passed: credential setup, TOTP/tab/readiness/operator flow, mandatory privacy, IDE controls including fast invalid-selector feedback, submission validity, submission identity across navigation and repeated runs preserving actual width. The complete browser suite was not rerun. These local checks supplement the actual model workflows; they do not substitute for them.
+
+The compiler UI fixture is a simulation, not Solidity compilation or EVM deployment. A complete real Remix ERC-20 deployment journey is still unverified. Native-host harnesses isolate test browser/data profiles, remove copied encrypted keys and restore registration; production settings/runs are not modified.
+
 ## Asynchronous readiness - 2026-10-15
 
 Version 0.13.1 fixes the reported Remix wait tied to a changing Compile caption. Readiness has a 60-second default/120-second maximum, exact-node continuity, and bounded live re-inspection on timeouts or stable text changes. Actual Dots acceptance passed a 20-second owned job (seven steps/five assertions) and final-build timeout recovery (eight recorded steps/six assertions), each with one compile dispatch and preserved width. The timed-out step remains in the latter record. Actual Chrome checks cover caption changes before the first poll, early status-change handoff, cancellation and genuine assertion failures. These are simulated compiler UI jobs, not a complete real Remix/Solidity deployment acceptance. See [implementation, discrepancies and evidence](READINESS_WAITS.md).
@@ -139,15 +155,15 @@ This establishes live plan generation for that request and model. It does not es
 
 ## Local verification — 2026-10-10
 
-| Check | Result |
-|---|---|
-| Production JavaScript extension build | Passed |
-| Windows Go companion build | Passed |
-| Go unit tests with race detector | 26 tests passed |
-| Go vet | Passed |
-| JavaScript unit/contract tests | 18 tests passed |
+| Check                                              | Result                                  |
+| -------------------------------------------------- | --------------------------------------- |
+| Production JavaScript extension build              | Passed                                  |
+| Windows Go companion build                         | Passed                                  |
+| Go unit tests with race detector                   | 26 tests passed                         |
+| Go vet                                             | Passed                                  |
+| JavaScript unit/contract tests                     | 18 tests passed                         |
 | Actual extension + native-host browser integration | 13 tests passed, approximately 1 minute |
-| npm dependency audit | 0 vulnerabilities reported |
+| npm dependency audit                               | 0 vulnerabilities reported              |
 
 Browser integration used Chrome for Testing 156.0.8078.4 in an isolated Chromium profile. It verified healthy desktop/mobile-width workflows, seeded cart and coupon failures, serious accessibility violations, overflow, visual-baseline approval/replay, debugger cleanup after cancellation, explicit missing-key errors, and cancellation while paused. The latter checks that returning to a tab cannot revive old asynchronous browser actions.
 

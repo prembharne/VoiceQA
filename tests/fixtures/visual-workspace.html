@@ -117,7 +117,8 @@
   <div class="layout">
     <aside>
       <h2>FILE EXPLORER</h2>
-      <button id="new-file">＋ New file</button><button id="new-folder">＋ New folder</button>
+      <button id="new-file" aria-haspopup="dialog">＋ New file</button
+      ><button id="new-folder">＋ New folder</button>
       <div id="tree">▾ contracts<br />　Example.sol<br />▸ artifacts<br />▸ dependencies</div>
       <h2>TOOLS</h2>
       <button id="search">Search workspace</button><button id="settings">Preferences</button>
@@ -148,12 +149,18 @@
       byId('output').textContent = v;
     };
     byId('new-file').onclick = () => {
+      const clicks = Number(document.body.dataset.fileClicks || 0) + 1;
+      document.body.dataset.fileClicks = clicks;
+      // Owned acceptance fault: the first UI click has no effect. These
+      // counters are read independently by the harness, not exposed as hints.
+      if (new URLSearchParams(location.search).has('cold') && clicks === 1) return;
       byId('filename-form').style.display = 'flex';
       byId('filename').focus();
       mark('Filename input opened');
     };
     byId('filename-form').onsubmit = (e) => {
       e.preventDefault();
+      document.body.dataset.fileCreations = Number(document.body.dataset.fileCreations || 0) + 1;
       byId('active-file').textContent = byId('filename').value;
       byId('filename-form').style.display = 'none';
       byId('editor').focus();

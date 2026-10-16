@@ -271,8 +271,12 @@ func (a *App) execute(ctx context.Context, r *core.Run) {
 								recovered, e = a.groundVisual(ctx, r, action)
 								if e == nil {
 									result, e = a.browser(ctx, r.ID, core.ID(), map[string]any{"operation": "execute_visual", "action": recovered, "visual": recovered.Visual, "origin": r.Plan.Origin})
+									break
 								}
-								break
+								if !recoverableVisualDecision(ctx, e) {
+									break
+								}
+								r.AgentEvents = append(r.AgentEvents, map[string]any{"kind": "goal_recovery", "name": "qa_visual_to_dom", "reason": recordedText(e.Error(), 500), "at": core.Now()})
 							}
 							grounded, ge := a.ground(ctx, r, action)
 							if ge != nil {

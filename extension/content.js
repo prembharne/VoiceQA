@@ -364,6 +364,13 @@
   const readinessRefs = new Map();
   function find(target) {
     if (!target) return [];
+    if (/^(?:text|label|testid|role|node)=/.test(target))
+      throw Object.assign(
+        new Error(
+          'Unsupported selector syntax. Use the exact exposed target or text:, label:, testid:, role:, node: syntax.',
+        ),
+        { code: 'needs_review' },
+      );
     if (target.startsWith('node:')) {
       const el = nodeRefs.get(target)?.deref();
       return el?.isConnected && roots().includes(el.getRootNode()) ? [el] : [];
@@ -1137,6 +1144,13 @@
             result = {
               consequential,
               opaque: el.tagName === 'CANVAS',
+              repeatableUI:
+                !consequential &&
+                !form &&
+                el.tagName !== 'CANVAS' &&
+                (['tab', 'treeitem', 'menuitem'].includes(role(el)) ||
+                  el.hasAttribute('aria-haspopup') ||
+                  el.hasAttribute('aria-expanded')),
               control: name(el),
               submissionKey: await submissionKey(el, message.key || ''),
               nativeForm: submissionValidity(el, message.key || ''),

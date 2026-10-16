@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 	"voiceqa/companion/internal/core"
@@ -42,8 +43,8 @@ func TestReadinessTimeoutRecoveryIsBoundedAndPreservesEvidence(t *testing.T) {
 	if err := s.validate(context.Background(), &d); err == nil || !strings.Contains(err.Error(), "already returned inconclusive") {
 		t.Fatal("unchanged timeout can be repeated", err)
 	}
-	// A genuinely different freshly inspected condition is allowed, but never
-	// more than two autonomous recovery turns for the whole run.
+	// Different freshly inspected conditions share the goal recovery budget;
+	// the former two-handoff limit must not prematurely end this run.
 	for _, target := range []string{"#job-status", "#artifact"} {
 		if target == "#job-status" {
 			replyCode = "wait_changed"
@@ -55,8 +56,8 @@ func TestReadinessTimeoutRecoveryIsBoundedAndPreservesEvidence(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if r.Status != "needs_review" || dispatches != 3 || s.waitRecoveries != 2 {
-		t.Fatal("readiness recovery is unbounded", r.Status, dispatches, s.waitRecoveries)
+	if r.Status != "running" || dispatches != 3 || s.waitRecoveries != 3 {
+		t.Fatal("third readiness incident stopped the goal instead of replanning", r.Status, dispatches, s.waitRecoveries)
 	}
 	for _, step := range r.Steps {
 		if step.Action.Operation != "wait_for" || (step.Status != "wait_timeout" && step.Status != "wait_changed") || step.Action.Assertion.Expected != "true" {
@@ -69,6 +70,14 @@ func TestReadinessTimeoutRecoveryIsBoundedAndPreservesEvidence(t *testing.T) {
 	}
 	if diagnose(r).Category != "readiness_timeout" {
 		t.Fatal("timeout mislabeled as an application defect", diagnose(r))
+	}
+	for attempt := s.recoveries; attempt < 20; attempt++ {
+		if _, err := s.recoverGoal("test_pending", errors.New("No verified readiness"), nil, false); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := s.recoverGoal("test_pending", errors.New("Still no progress"), nil, false); err == nil {
+		t.Fatal("goal recovery budget is unbounded")
 	}
 	r.Steps = append(r.Steps, core.Step{ID: "real-failure", Status: "failed", Action: core.Action{Operation: "assert"}, Result: map[string]any{"actual": "wrong"}})
 	r.Status = "failed"

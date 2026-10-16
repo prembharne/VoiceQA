@@ -926,6 +926,9 @@ test('IDE controls expose stable unnamed handles, focus the editor and clip hit 
   });
   const stale = await send({ type: 'vqa.resolve', target: filename.target });
   expect(stale.error).toContain('Target not found');
+  const invalidSyntax = await send({ type: 'vqa.resolve', target: 'text=contracts' });
+  expect(invalidSyntax.code).toBe('needs_review');
+  expect(invalidSyntax.error).toContain('Unsupported selector syntax');
 });
 
 test('submission preflight reads native constraints without validation events or private values', async () => {

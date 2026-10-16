@@ -117,7 +117,7 @@ func (s *automationSession) validate(ctx context.Context, decision *automationDe
 		}
 	}
 	if e == nil && decision.Type == "action" && automationReplayBlocked(decision.Action, public, s.seen) {
-		e = errors.New("This identical action was already dispatched against unchanged evidence; it will not be replayed. Inspect current controls and choose a different next action, verify the actual outcome, or report the blocker. A successful dispatch is not proof of progress")
+		e = s.allowRepeatedUI(ctx, decision.Action)
 	}
 	if e == nil && decision.Type == "action" && decision.Action.Operation == "wait_for" && s.pendingWaits[automationStateFingerprint(decision.Action, public)] {
 		e = errors.New("This readiness condition already returned inconclusive evidence against unchanged state. Inspect the current status and stable result target, verify a newly observed outcome without changing its expectation, or report the blocker. Do not repeat the wait or the preceding mutation")
@@ -156,7 +156,17 @@ func (s *automationSession) execute(ctx context.Context, decision automationDeci
 		return nil
 	}
 	if decision.Type == "blocked" {
-		a.setInterrupted(r, &BrowserError{Code: "blocked", Message: decision.Message})
+		if s.blockerReports < 2 {
+			s.blockerReports++
+			_, err = s.recoverGoal("agent_reported_blocker", errors.New(decision.Message), nil, false)
+			return err
+		}
+		if automationHasFailures(r) {
+			r.Status = "failed"
+			r.Error = "The goal remains incomplete with recorded failed checks: " + recordedText(decision.Message, 1400)
+		} else {
+			a.setInterrupted(r, &BrowserError{Code: "blocked", Message: decision.Message})
+		}
 		return nil
 	}
 	if decision.Type == "complete" {
@@ -210,11 +220,19 @@ func (s *automationSession) execute(ctx context.Context, decision automationDeci
 				check.Action.Label = "Verify outcome: " + string(criterionLabel)
 			}
 			if err = a.runAutomationAction(ctx, r, check.Action, label, scope.Current); err != nil {
+				var be *BrowserError
+				if errors.As(err, &be) && be.Code == "assertion_failed" {
+					continue
+				}
 				a.setAutomationFailure(r, err)
 				return nil
 			}
 		}
 		r.Status = "passed"
+		if automationHasFailures(r) {
+			r.Status = "failed"
+			r.Error = "The goal's checks completed with recorded discrepancies. Earlier failed checks remain failed."
+		}
 		return nil
 	}
 	action, resolveErr := core.ResolveAction(decision.Action, r.Values)
@@ -222,15 +240,38 @@ func (s *automationSession) execute(ctx context.Context, decision automationDeci
 		a.setInterrupted(r, resolveErr)
 		return nil
 	}
+	if action.Operation == "fill" {
+		if literal, ok := requestedExactContent(r.Plan.Request, action.Value); ok {
+			action.Value = literal
+			if err = core.ValidateAutomationAction(r.Plan, scope.Clone(), action); err != nil {
+				_, err = s.recoverGoal("literal_input_rejected", err, &action, action.Visual != nil)
+				return err
+			}
+			s.event("literal_input_preserved", action.Target)
+		}
+	}
 	hash := automationStateFingerprint(action, public)
 	if automationReplayBlocked(action, public, s.seen) {
-		a.setInterrupted(r, &BrowserError{Code: "needs_review", Message: "Identical action requested against unchanged evidence; no mutation was replayed"})
-		return nil
+		if err = s.allowRepeatedUI(ctx, action); err != nil {
+			_, err = s.recoverGoal("repeat_rejected", err, &action, action.Visual != nil)
+			return err
+		}
+		if s.uiRetries == nil {
+			s.uiRetries = map[string]int{}
+		}
+		s.uiRetries[hash]++
+		s.event("ui_navigation_retry", action.Target)
 	}
+	delete(s.notDispatched, hash)
 	s.seen[hash] = true
+	before := len(r.Steps)
 	if err = a.runAutomationAction(ctx, r, action, label, scope.Current); err != nil {
+		if ctx.Err() != nil || r.Status != "running" {
+			a.setAutomationFailure(r, err)
+			return nil
+		}
 		var browser *BrowserError
-		if action.Operation == "wait_for" && errors.As(err, &browser) && (browser.Code == "wait_timeout" || browser.Code == "wait_changed") && s.waitRecoveries < 2 {
+		if action.Operation == "wait_for" && errors.As(err, &browser) && (browser.Code == "wait_timeout" || browser.Code == "wait_changed") {
 			// A changed status/read deadline does not establish an application
 			// defect. Keep the original inconclusive step and re-observe before the next AI
 			// decision. No mutation, expectation or previous verdict is retried.
@@ -245,7 +286,25 @@ func (s *automationSession) execute(ctx context.Context, decision automationDeci
 				event = "readiness_changed"
 			}
 			s.event(event, action.Target)
-			return nil
+			_, err = s.recoverGoal(event, err, &action, false)
+			return err
+		}
+		if errors.As(err, &browser) && browser.Code == "assertion_failed" {
+			s.event("goal_check_failed", action.Target)
+			_, err = s.recoverGoal("check_failed", err, &action, false)
+			return err
+		}
+		var last map[string]any
+		if len(r.Steps) > before {
+			last = r.Steps[len(r.Steps)-1].Result
+		}
+		if errors.As(err, &browser) && browser.Code != "cancelled" && last["inputState"] == "not_dispatched" {
+			if s.notDispatched == nil {
+				s.notDispatched = map[string]bool{}
+			}
+			s.notDispatched[hash] = true
+			_, err = s.recoverGoal("browser_input_not_dispatched", err, &action, action.Visual != nil)
+			return err
 		}
 		a.setAutomationFailure(r, err)
 		return nil

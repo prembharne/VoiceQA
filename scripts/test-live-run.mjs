@@ -16,6 +16,11 @@ const debugRecord = debugPath ? JSON.parse(await readFile(resolve(debugPath), 'u
 const automationUI = process.argv.includes('--automation-ui');
 if (process.argv.includes('--expect-status-defect') && !process.argv.includes('--live-reads'))
   throw new Error('Status-defect acceptance requires the owned live-read workspace check.');
+if (
+  process.argv.includes('--expect-continued-failure') &&
+  !process.argv.includes('--expect-status-defect')
+)
+  throw new Error('Failure-continuation acceptance requires the owned status defect.');
 const automationLive = process.argv.includes('--automation-live') || automationUI;
 const livePlanning = process.argv.includes('--plan-live') || automationLive;
 const lowTokens = process.argv.includes('--paid-qwen-low-tokens');
@@ -1020,6 +1025,21 @@ try {
           ? 'Actual AI detected the corrupted persisted status: expected Ready, observed Archived after refresh, with one save.'
           : 'Actual AI inspected field constraints, created one compliant release through a custom combobox, refreshed and verified persisted values.',
       );
+      if (process.argv.includes('--expect-continued-failure')) {
+        const failedAt = run.steps.findIndex((s) => s.status === 'failed');
+        if (
+          failedAt < 0 ||
+          !run.steps
+            .slice(failedAt + 1)
+            .some((s) => s.action.operation === 'assert' && s.status === 'passed')
+        )
+          throw new Error(
+            'The actual agent did not continue independent verification after recording the defect',
+          );
+        console.log(
+          'Actual AI continued verification after the recorded defect; the overall run correctly remains failed.',
+        );
+      }
     }
     if (process.argv.includes('--ide-controls')) {
       if (!automationLive || origin !== 'http://127.0.0.1:4177')
@@ -1159,6 +1179,20 @@ try {
       console.log(
         'Actual Dots → Agent S/Qwen → DOM verification passed; file, source, fixture build, canvas and current viewport independently checked.',
       );
+      if (process.argv.includes('--goal-recovery')) {
+        const counts = await target.evaluate(() => ({
+          clicks: Number(document.body.dataset.fileClicks || 0),
+          creations: Number(document.body.dataset.fileCreations || 0),
+        }));
+        await writeFile(join(work, 'goal-recovery-state.json'), JSON.stringify(counts, null, 2));
+        if (counts.clicks < 2 || counts.creations !== 1)
+          throw new Error(
+            'Goal recovery did not retry the ineffective UI control and create exactly one file',
+          );
+        console.log(
+          'Actual AI recovered from an ineffective first click, completed the goal, and created exactly one file.',
+        );
+      }
       if (process.argv.includes('--visual-investigate')) {
         const before = await target.locator('body').innerText();
         const answer = await rpc('agent.query', {

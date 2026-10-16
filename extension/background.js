@@ -471,6 +471,18 @@ async function attach(token) {
 async function command(method, params = {}, token) {
   fence.check(token, state);
   if (!state.attached) throw fault('Debugger is detached', 'blocked');
+  // Set before sending: a lost CDP acknowledgement means an uncertain outcome.
+  if (
+    token &&
+    method.startsWith('Input.') &&
+    !(method === 'Input.dispatchMouseEvent' && params.type === 'mouseMoved')
+  ) {
+    token.inputDispatched = true;
+    if (token.pendingSubmissionKey) {
+      submittedForms.add(token.pendingSubmissionKey);
+      token.pendingSubmissionKey = '';
+    }
+  }
   return chrome.debugger.sendCommand({ tabId: state.target.tabId }, method, params);
 }
 async function cleanup() {
@@ -639,7 +651,7 @@ async function execute(action, token, secureOrigin = '', visual = null) {
           'These form inputs were already submitted. Inspect the result instead of submitting unchanged data again.',
           'needs_review',
         );
-      submittedForms.add(context.submissionKey);
+      token.pendingSubmissionKey = context.submissionKey;
     }
   }
   switch (action.operation) {
@@ -848,7 +860,7 @@ async function visualCapture(p, token) {
   if (!image.fullViewport)
     throw fault(
       'Chrome returned a cropped screenshot for this emulated viewport. Use a real browser window viewport for visual recovery. No input was dispatched.',
-      'blocked',
+      'visual_unavailable',
     );
   const after = await content({ type: 'vqa.visual-state' }, token);
   if (JSON.stringify(before) !== JSON.stringify(after))
@@ -1061,6 +1073,7 @@ async function onNative(message) {
   if (message.type !== 'browser.request') return;
   await ready;
   const p = message.payload;
+  let token;
   try {
     registry.ensure();
     if (!state.target || p.origin !== registry.primary()?.origin)
@@ -1106,7 +1119,7 @@ async function onNative(message) {
         'needs_review',
       );
     }
-    let token = fence.token(message.runId, state.target.tabId);
+    token = fence.token(message.runId, state.target.tabId);
     if (p.operation === 'page_scope') {
       await waitForTarget(token);
       await cleanup();
@@ -1282,6 +1295,14 @@ async function onNative(message) {
     }
     native.send(envelope('browser.result', { requestId: message.id, ...reply }));
   } catch (e) {
+    if (
+      ['execute', 'execute_visual'].includes(p.operation) &&
+      ['click', 'fill', 'select', 'key'].includes(p.action?.operation)
+    )
+      e.result = {
+        ...e.result,
+        inputState: token && !token.inputDispatched ? 'not_dispatched' : 'uncertain',
+      };
     const reply = { error: e.message, code: e.code || 'error', result: e.result || {} };
     if (message.actionId) {
       journal[message.actionId] = { status: 'completed', reply };

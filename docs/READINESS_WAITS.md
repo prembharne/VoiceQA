@@ -1,5 +1,7 @@
 # Asynchronous readiness — 0.13.1
 
+Historical release evidence follows. Version 0.14.0 replaces the two readiness handoffs with the shared [goal recovery controller](GOAL_CONTROLLER.md); the polling deadlines and assertion semantics are unchanged.
+
 The reported Remix run `47e01b32dfde5bffb243a4d1aa4958f6` dispatched Compile, then waited ten seconds for `role:button|Compile` to become enabled. The current page said `Compiling...`; the later user screenshot showed `Compiled`. The wait therefore measured a missing old accessible name, not a compilation failure. The old default for unspecified waits was also only six seconds. Increasing a sleep alone would not repair a renamed selector.
 
 ## Behavior
@@ -20,7 +22,7 @@ The actual Chrome/content-script probe waited over 13 seconds while the same but
 
 Actual Dots 3 acceptance through the built extension, Go native host and Eino controller completed the owned 20-second asynchronous fixture with seven recorded steps and five passing assertions. The readiness tool waited 16,347 ms with its new 60-second default. Independent page checks confirmed a completed job, artifact, exactly one compile request and preserved width. Evidence: `.tools/live-checks/paced-live-run-laLktn/run.json` and `timing-state.json`. Dots handled every model request; no Qwen fallback was needed in this run.
 
-A later actual Dots run (`paced-live-run-JQIBKf`) exposed a guessed status literal: it waited for `Compilation complete` while the page reported `Compilation succeeded`. The 120-second timeout remained recorded and the agent subsequently verified the real outcomes without recompiling. The acceptance wrapper rejected this run because it incorrectly required a *successful* long wait even for the recovery case. That wrapper condition was corrected; the old result was retained. This observation also led to the early `wait_changed` handoff, checked in Chromium and unit tests without interpreting a changed status as a pass.
+A later actual Dots run (`paced-live-run-JQIBKf`) exposed a guessed status literal: it waited for `Compilation complete` while the page reported `Compilation succeeded`. The 120-second timeout remained recorded and the agent subsequently verified the real outcomes without recompiling. The acceptance wrapper rejected this run because it incorrectly required a _successful_ long wait even for the recovery case. That wrapper condition was corrected; the old result was retained. This observation also led to the early `wait_changed` handoff, checked in Chromium and unit tests without interpreting a changed status as a pass.
 
 Final-build actual Dots recovery acceptance (`paced-live-run-moJsLn`, run `07b8388d64259373b2e76400171a2fd1`) passed eight recorded steps and six actual assertions in 107,160 ms. Its short wait expired after 1,007 ms and remains `wait_timeout`/`pending` in the saved run. The controller re-observed and the later assertions verified the completed job, artifact and exactly one request. Independent state measured a 20,003.7-ms job and unchanged width 1422. All model requests used Dots; no Qwen fallback was needed. The model's descriptive label mentioned a longer wait, but the actual ledger contains one short wait followed by assertions; the evidence claim here follows those calls, not the label.
 

@@ -19,7 +19,9 @@ type visualSession struct {
 func (s *visualSession) close() {
 	if s.worker != nil {
 		s.worker.Close()
+		s.worker = nil
 	}
+	s.usage = nil
 }
 func (a *App) visualAvailable(providerName, model string) bool {
 	return providerName == "openrouter" && (model == dotsModel || model == fallbackModel) && a.keyFor("openrouter") != "" && visualagent.Available()

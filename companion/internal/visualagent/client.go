@@ -15,6 +15,11 @@ import (
 
 const Model = "qwen/qwen3.7-flash"
 
+// DecisionError describes a proposal failure. This worker never sends input.
+type DecisionError struct{ Message, Class string }
+
+func (e *DecisionError) Error() string { return e.Message + " (" + e.Class + ")" }
+
 type Intent struct {
 	Operation   string `json:"operation"`
 	Description string `json:"description,omitempty"`
@@ -119,7 +124,7 @@ func (c *Client) Call(ctx context.Context, payload any) (Reply, error) {
 		return Reply{}, errors.New("Agent S worker returned invalid IPC")
 	}
 	if r.Error != "" {
-		return r, errors.New(r.Error + " (" + r.ErrorClass + ")")
+		return r, &DecisionError{Message: r.Error, Class: r.ErrorClass}
 	}
 	if r.Agent != "agent-s3" || r.Model != Model {
 		return r, errors.New("Unexpected visual agent/model identity")
