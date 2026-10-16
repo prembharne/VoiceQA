@@ -98,7 +98,7 @@ func (a *App) investigateWithRun(ctx context.Context, request, origin string, pa
 	}
 	if visualEnabled {
 		names = append(names, "visual_inspect")
-		registry = append(registry, map[string]string{"name": "visual_inspect", "purpose": "Use Agent S/Qwen screenshot inspection when DOM evidence cannot explain canvas controls, code editors or complex visual UI. Read-only: never clicks or enters text. page=main, query=short inspection objective, target/url empty. Visual interpretation is not an assertion."})
+		registry = append(registry, map[string]string{"name": "visual_inspect", "purpose": "Use Agent S screenshot inspection when DOM evidence cannot explain canvas controls, code editors or complex visual UI. Read-only: never clicks or enters text. page=main, query=short inspection objective, target/url empty. Visual interpretation is not an assertion."})
 	}
 	if links {
 		registry = append(registry, map[string]string{"name": "read_link", "purpose": "Preview a previously observed parameter-free HTTP(S) link on an approved origin in a temporary inactive tab. Never submit/click; close the preview after observing it. At most three link reads."})
@@ -300,7 +300,7 @@ func (a *App) investigateWithRun(ctx context.Context, request, origin string, pa
 							if toolErr == nil && visualReply.Result.Operation != "report" {
 								toolErr = errors.New("Visual investigator returned no factual report")
 							}
-							view = map[string]any{"agent": "agent-s3", "model": fallbackModel, "observation": visualReply.Result.Text, "capture": image, "limitation": "Screenshot interpretation only; independently verify application state"}
+							view = map[string]any{"agent": "agent-s3", "model": visualReply.Model, "observation": visualReply.Result.Text, "capture": image, "limitation": "Screenshot interpretation only; independently verify application state"}
 						}
 					} else {
 						view, toolErr = a.browser(ctx, "", "", map[string]any{"operation": "agent_tool", "tool": reply.Name, "page": reply.Args.Page, "target": reply.Args.Target, "query": reply.Args.Query, "url": reply.Args.URL, "origin": origin, "allowLinks": links})
@@ -348,6 +348,7 @@ func agentPublicEvidence(view map[string]any) map[string]any {
 		}
 	}
 	redact(copy)
+	compactControlRows(copy)
 	for _, name := range []string{"controls", "results", "matches", "violations"} {
 		if list, ok := copy[name].([]any); ok && len(list) > 40 {
 			copy[name] = list[:40]

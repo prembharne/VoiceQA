@@ -15,6 +15,16 @@ import (
 
 const Model = "qwen/qwen3.7-flash"
 
+const AcceptanceModel = "nvidia/nemotron-3.5-super-vl:free"
+
+// ModelName keeps the isolated acceptance override out of saved user settings.
+func ModelName() string {
+	if os.Getenv("VOICEQA_ACCEPTANCE_MODEL") == AcceptanceModel {
+		return AcceptanceModel
+	}
+	return Model
+}
+
 // DecisionError describes a proposal failure. This worker never sends input.
 type DecisionError struct{ Message, Class string }
 
@@ -43,6 +53,7 @@ type Client struct {
 	cmd    *exec.Cmd
 	input  io.WriteCloser
 	output *bufio.Scanner
+	model  string
 }
 
 func Paths() (string, string) {
@@ -83,7 +94,7 @@ func Start(ctx context.Context) (*Client, error) {
 	}
 	scanner := bufio.NewScanner(out)
 	scanner.Buffer(make([]byte, 4096), 64*1024)
-	return &Client{cmd: cmd, input: in, output: scanner}, nil
+	return &Client{cmd: cmd, input: in, output: scanner, model: ModelName()}, nil
 }
 func (c *Client) Close() {
 	_ = c.input.Close()
@@ -126,7 +137,7 @@ func (c *Client) Call(ctx context.Context, payload any) (Reply, error) {
 	if r.Error != "" {
 		return r, &DecisionError{Message: r.Error, Class: r.ErrorClass}
 	}
-	if r.Agent != "agent-s3" || r.Model != Model {
+	if r.Agent != "agent-s3" || r.Model != c.model {
 		return r, errors.New("Unexpected visual agent/model identity")
 	}
 	return r, nil

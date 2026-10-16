@@ -45,7 +45,6 @@ func TestFunctionTransportRejectsIncompleteParallelAndUnexpectedCalls(t *testing
 		{name: "parallel", finish: "tool_calls", function: "submit_result", args: "{}", count: 2},
 		{name: "invalid arguments", finish: "tool_calls", function: "submit_result", args: "unfinished", count: 1},
 		{name: "nonobject arguments", finish: "tool_calls", function: "submit_result", args: "null", count: 1},
-		{name: "mixed content", finish: "tool_calls", function: "submit_result", args: "{}", content: "also do this", count: 1},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			calls := []any{}

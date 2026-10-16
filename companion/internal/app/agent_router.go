@@ -11,6 +11,7 @@ type progressRouter struct {
 	fingerprint                   string
 	unchanged, reads, visualTurns int
 	visual                        bool
+	handoffState                  string
 }
 
 func (p *progressRouter) observe(observation map[string]any) {
@@ -26,6 +27,9 @@ func (p *progressRouter) observe(observation map[string]any) {
 }
 func (p *progressRouter) reason(available bool, rejected bool, readBudget int) string {
 	if !available {
+		return ""
+	}
+	if p.handoffState != "" && p.handoffState == p.fingerprint {
 		return ""
 	}
 	if rejected {

@@ -40,6 +40,8 @@ type automationSession struct {
 	observation, public             map[string]any
 	seen, readSeen                  map[string]bool
 	readCalls, rejections           int
+	stageReads, recoveryStreak      int
+	progressSeen                    map[string]bool
 	waitRecoveries                  int
 	pendingWaits                    map[string]bool
 	validation, model               string
@@ -50,6 +52,8 @@ type automationSession struct {
 	uiRetries                       map[string]int
 	notDispatched                   map[string]bool
 	blockerReports                  int
+	providerFailures                int
+	pendingRecoverySource           string
 }
 
 func (a *App) runAutomationHarness(ctx context.Context, r *core.Run) error {
@@ -125,23 +129,24 @@ func (s *automationSession) decisionSchema() any {
 		aliases = append(aliases, alias)
 	}
 	sort.Strings(aliases)
+	if s.remainingReads() == 0 {
+		return provider.AutomationLiveStepSchemaWithoutReads(aliases...)
+	}
 	return provider.AutomationLiveStepSchema(aliases...)
 }
 
-func (s *automationSession) event(kind, name string) {
+func (s *automationSession) event(kind, name string) map[string]any {
 	r := s.run
-	if len(r.AgentEvents) < 180 {
-		r.AgentEvents = append(r.AgentEvents, map[string]any{"kind": kind, "name": name, "afterActions": len(r.Steps), "at": core.Now()})
+	e := map[string]any{"kind": kind, "name": name, "afterActions": len(r.Steps), "at": core.Now()}
+	r.AgentEvents = append(r.AgentEvents, e)
+	if len(r.AgentEvents) > 180 {
+		r.AgentEvents = r.AgentEvents[len(r.AgentEvents)-180:]
 	}
+	return e
 }
 
 func (s *automationSession) providerEvent(kind, name string, err error) {
-	before := len(s.run.AgentEvents)
-	s.event(kind, name)
-	if len(s.run.AgentEvents) == before {
-		return
-	}
-	event := s.run.AgentEvents[before]
+	event := s.event(kind, name)
 	var status *provider.StatusError
 	var empty *provider.EmptyResultError
 	var network net.Error
@@ -183,7 +188,7 @@ func (s *automationSession) decide(ctx context.Context, messages []*schema.Messa
 	rememberAutomationObservation(r, s.public)
 	s.router.observe(s.public)
 	visualAllowed := !s.visualDisabled && s.visualTotal < r.Plan.Automation.MaxActions
-	reason := s.router.reason(visualAllowed && a.visualAvailable(r.Plan.AIProvider, r.Plan.Model), s.rejections > 0, automationReadBudget-s.readCalls)
+	reason := s.router.reason(visualAllowed && a.visualAvailable(r.Plan.AIProvider, r.Plan.Model), s.rejections > 0, s.remainingReads())
 	if s.domCooldown > 0 {
 		s.domCooldown--
 		reason, s.router.visual = "", false
@@ -217,7 +222,14 @@ func (s *automationSession) decide(ctx context.Context, messages []*schema.Messa
 	if len(history) > 12 {
 		history = history[len(history)-12:]
 	}
-	input := map[string]any{"goal": r.Plan.Request, "conversation": r.Plan.Conversation, "successCriteria": r.Plan.Automation.Criteria, "permissions": r.Plan.Automation, "apiWritesAllowed": r.Plan.APIWritesAllowed, "scope": s.scope, "observation": automationModelObservation(s.public), "navigationChoices": automationNavigationChoices(s.scope, obs), "observedStateHistory": automationModelHistory(r.Observations), "readEvidence": r.ReadEvidence, "earlierEvidenceOmitted": r.EvidenceOmitted, "recentSteps": agentPublicEvidence(map[string]any{"steps": history})["steps"], "publicValues": r.Values, "credentialProfiles": s.profiles, "remainingActions": r.Plan.Automation.MaxActions - len(r.Steps), "remainingReadCalls": automationReadBudget - s.readCalls, "validationError": s.validation}
+	observedHistory, reads := automationModelHistory(r.Observations), s.modelReads()
+	omitted := r.EvidenceOmitted || len(reads) < len(r.ReadEvidence)
+	for _, record := range observedHistory {
+		omitted = omitted || record["detailsOmitted"] == true
+	}
+	input := map[string]any{"goal": r.Plan.Request, "conversation": r.Plan.Conversation, "successCriteria": r.Plan.Automation.Criteria, "permissions": r.Plan.Automation, "apiWritesAllowed": r.Plan.APIWritesAllowed, "scope": s.scope, "observation": automationModelObservation(s.public), "navigationChoices": automationNavigationChoices(s.scope, obs), "observedStateHistory": observedHistory, "readEvidence": reads, "earlierEvidenceOmitted": omitted, "recentSteps": agentPublicEvidence(map[string]any{"steps": history})["steps"], "publicValues": r.Values, "credentialProfiles": s.profiles, "remainingActions": r.Plan.Automation.MaxActions - len(r.Steps), "remainingReadCalls": s.remainingReads(), "validationError": s.validation}
+	input["verifiedProgress"] = r.GoalProgress
+	input["toolAvailability"] = map[string]any{"readWindowRemaining": s.remainingReads(), "totalReadsRemaining": s.totalReadLimit() - s.readCalls, "discoveryRefill": "Only a new independent passed assertion or verified full editor readback refills discovery; clicks and repeated checks do not."}
 	input["goalRecovery"] = s.lastRecovery
 	input["goalState"] = map[string]any{"completedActions": len(r.Steps), "recordedFailures": automationHasFailures(r), "recoveryAttempts": s.recoveries, "completion": "Requires independent outcome checks covering the original goal"}
 	// Keep Eino's latest tool feedback; durable public facts live in the evidence
@@ -252,7 +264,23 @@ func (s *automationSession) decide(ctx context.Context, messages []*schema.Messa
 		return agentharness.Call{}, errors.New(r.Error)
 	}
 	if err != nil && !provider.IsResponseContractError(err) {
+		// This provider stage has dispatched no browser input. Non-Dots models
+		// have no implicit model fallback; recover transient/empty replies in place.
+		if selected != dotsModel && ctx.Err() == nil && transientAgentProviderError(err) {
+			s.providerFailures++
+			timer := time.NewTimer(time.Duration(min(8, s.providerFailures)) * time.Second)
+			defer timer.Stop()
+			select {
+			case <-ctx.Done():
+				return agentharness.Call{}, ctx.Err()
+			case <-timer.C:
+			}
+			return s.queueRecoveryFrom("provider_unavailable_before_dispatch", err), nil
+		}
 		return agentharness.Call{}, err
+	}
+	if err == nil {
+		s.providerFailures = 0
 	}
 	var packet struct {
 		Result automationDecision `json:"result"`

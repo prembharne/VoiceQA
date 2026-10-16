@@ -1,5 +1,7 @@
 # VoiceQA
 
+Version 0.15.0 adds complete Monaco editor readbacks, durable verified progress, replenished discovery windows and clearer grouped function controls. Acceptance can be locked to the requested free NVIDIA model across both DOM and Agent S lanes. See [implementation and test boundaries](docs/EDITOR_PROGRESS.md).
+
 A Chrome side-panel extension that plans, executes, and independently verifies browser workflows and QA checks from typed or dictated requests. JavaScript controls the selected Chrome tab; a local Go companion handles AI, persistence, baselines, and reports.
 
 The side panel is a conversational workspace: share the current website from the bottom composer, type or speak a test request, review the inline plan and watch results stream into the conversation. The top-right settings gear contains only the AI provider and its encrypted API key; the clock/history icon opens saved runs and plans. The **+** menu holds test options and the step gap. New chat clears the visible conversation while preserving saved records. Removing the sharing chip disconnects the selected test target and is disabled during an active run.

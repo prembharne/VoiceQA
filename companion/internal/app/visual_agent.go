@@ -6,10 +6,31 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"regexp"
+	"strings"
 	"time"
+	"unicode"
 	"voiceqa/companion/internal/core"
 	"voiceqa/companion/internal/visualagent"
 )
+
+var shortVisualCaption = regexp.MustCompile(`^[\p{L} ]{2,32}$`)
+
+// A grounded coordinate is not permission to click a contradictory labelled
+// button. Dynamic/account captions and unlabelled custom controls retain their
+// normal DOM/visual validation; this check grants no additional capability.
+func validateVisualCaption(description string, meta map[string]any) error {
+	caption := strings.Join(strings.Fields(strings.ToLower(stringField(meta, "name"))), " ")
+	if stringField(meta, "tag") != "BUTTON" || !shortVisualCaption.MatchString(caption) {
+		return nil
+	}
+	intent := strings.Join(strings.FieldsFunc(strings.ToLower(description), func(r rune) bool { return !unicode.IsLetter(r) }), " ")
+	if !strings.Contains(" "+intent+" ", " "+caption+" ") {
+		return fmt.Errorf("Visual target label %q contradicts the proposed control description. No input was dispatched. Re-inspect the intended control and quote its exact visible button text", caption)
+	}
+	return nil
+}
 
 type visualSession struct {
 	worker *visualagent.Client
@@ -24,7 +45,8 @@ func (s *visualSession) close() {
 	s.usage = nil
 }
 func (a *App) visualAvailable(providerName, model string) bool {
-	return providerName == "openrouter" && (model == dotsModel || model == fallbackModel) && a.keyFor("openrouter") != "" && visualagent.Available()
+	acceptance := os.Getenv("VOICEQA_ACCEPTANCE_MODEL") == visualagent.AcceptanceModel && model == visualagent.AcceptanceModel
+	return providerName == "openrouter" && (model == dotsModel || model == fallbackModel || acceptance) && a.keyFor("openrouter") != "" && visualagent.Available()
 }
 func (s *visualSession) call(ctx context.Context, a *App, runID, origin, instruction, description string, readOnly bool, usage map[string]int) (visualagent.Reply, map[string]any, error) {
 	var reply visualagent.Reply
@@ -92,13 +114,18 @@ func visualInt(v any) int {
 	}
 	return 0
 }
-func (a *App) resolveVisualAction(ctx context.Context, r *core.Run, action core.Action, point *core.VisualPoint) (core.Action, error) {
+func (a *App) resolveVisualAction(ctx context.Context, r *core.Run, action core.Action, point *core.VisualPoint, description string) (core.Action, error) {
 	if action.Operation != "click" && action.Operation != "fill" && action.Operation != "key" {
 		return action, errors.New("Visual intent is not an allowed browser action")
 	}
 	meta, err := a.browser(ctx, r.ID, "", map[string]any{"operation": "visual_resolve", "origin": r.Plan.Origin, "visual": point, "actionOperation": action.Operation})
 	if err != nil {
 		return action, err
+	}
+	if action.Operation == "click" && description != "" {
+		if err = validateVisualCaption(description, meta); err != nil {
+			return action, err
+		}
 	}
 	if action.Operation != "key" {
 		action.Target, _ = meta["target"].(string)
@@ -122,9 +149,9 @@ func (a *App) groundVisual(ctx context.Context, r *core.Run, action core.Action)
 	if reply.Result.Operation != "inspect" {
 		return action, errors.New("Grounder returned an unexpected intent")
 	}
-	result, err := a.resolveVisualAction(ctx, r, action, visualPoint(reply, image))
+	result, err := a.resolveVisualAction(ctx, r, action, visualPoint(reply, image), "")
 	if err == nil {
-		r.AgentEvents = append(r.AgentEvents, map[string]any{"kind": "agent_route", "name": "agent-s3", "model": visualagent.Model, "artifactId": image["artifactId"], "reason": "Reviewed QA target missing before dispatch", "at": core.Now()})
+		r.AgentEvents = append(r.AgentEvents, map[string]any{"kind": "agent_route", "name": "agent-s3", "model": reply.Model, "artifactId": image["artifactId"], "reason": "Reviewed QA target missing before dispatch", "at": core.Now()})
 	}
 	return result, err
 }
@@ -133,17 +160,21 @@ func (s *automationSession) visualDecision(ctx context.Context, reason string) (
 	s.event("agent_route", "agent-s3")
 	if len(r.AgentEvents) > 0 {
 		e := r.AgentEvents[len(r.AgentEvents)-1]
-		e["model"], e["reason"] = visualagent.Model, reason
+		e["model"], e["reason"] = visualagent.ModelName(), reason
 	}
-	r.AgentModel, r.AgentPhase = visualagent.Model, "Agent S: inspecting current browser screenshot"
+	r.AgentModel, r.AgentPhase = visualagent.ModelName(), "Agent S: inspecting current browser screenshot"
 	s.app.update(r)
 	history := []map[string]any{}
 	for _, step := range r.Steps[max(0, len(r.Steps)-8):] {
-		history = append(history, map[string]any{"operation": step.Action.Operation, "target": step.Action.Target, "label": recordedText(step.Action.Label, 180), "status": step.Status, "error": recordedText(step.Error, 250), "publicValueExcerpt": recordedText(step.Action.Value, 250)})
+		history = append(history, map[string]any{"operation": step.Action.Operation, "target": step.Action.Target, "label": recordedText(step.Action.Label, 180), "resolvedControl": step.Result["resolvedControl"], "status": step.Status, "error": recordedText(step.Error, 250), "publicValueExcerpt": recordedText(step.Action.Value, 250)})
 	}
 	last := s.visualReply.Result
 	last.Value = recordedText(last.Value, 250)
-	input, _ := json.Marshal(map[string]any{"goal": r.Plan.Request, "permissions": r.Plan.Automation, "scope": s.scope, "publicValues": r.Values, "recentSteps": history, "lastVisualIntent": last, "lastValidation": s.validation, "controller": "DOM targeting has stalled. Continue the UNFINISHED part of the goal using the visible browser controls. Choose click/fill/press to advance it. A report or inspect does not execute a click. Do not repeat prior unchanged actions. Use done only when no requested visual action remains; the controller independently checks completion. Inspect the screenshot; do not assume a dialog opened."})
+	progress := []map[string]any{}
+	for _, checkpoint := range r.GoalProgress {
+		progress = append(progress, map[string]any{"kind": checkpoint["kind"], "label": checkpoint["label"], "target": checkpoint["target"], "stepId": checkpoint["stepId"], "contentHash": checkpoint["contentHash"], "editorURI": checkpoint["editorURI"]})
+	}
+	input, _ := json.Marshal(map[string]any{"goal": r.Plan.Request, "verifiedProgress": progress, "permissions": r.Plan.Automation, "scope": s.scope, "publicValues": r.Values, "recentSteps": history, "lastVisualIntent": last, "lastValidation": s.validation, "controller": "DOM targeting has stalled. Preserve verified work and continue the UNFINISHED part of the goal using visible controls, including deployed function calls when testing remains. Do not rewrite a verified source or repeat deployment without actual contradictory evidence. Choose one grounded click/fill/press. A report, inspect or done does not test a contract or prove completion. Repeat only an identified non-submitting UI opener when its earlier click had no effect; never replay uncertain/consequential submissions. Inspect the screenshot and do not assume a dialog opened. A done handoff is independently checked; do not use it repeatedly to avoid unfinished interaction."})
 	reply, image, err := s.visual.call(ctx, s.app, r.ID, r.Plan.Origin, string(input), "", false, r.Usage)
 	if err != nil {
 		return "", err

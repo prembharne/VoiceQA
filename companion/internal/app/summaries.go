@@ -50,6 +50,7 @@ func (a *App) runList() (any, error) {
 			r.Values = nil
 			r.Observations = nil
 			r.ReadEvidence = nil
+			r.GoalProgress = nil
 			r.DecisionErrors = nil
 			r.AgentEvents = nil
 			r.SecurityFindings = nil

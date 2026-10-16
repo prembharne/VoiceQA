@@ -418,5 +418,5 @@ func automationStateFingerprint(action core.Action, state map[string]any) string
 }
 
 func automationReplayBlocked(action core.Action, state map[string]any, seen map[string]bool) bool {
-	return action.Operation != "assert" && action.Operation != "wait_for" && action.Operation != "switch_tab" && seen[automationStateFingerprint(action, state)]
+	return action.Operation != "assert" && action.Operation != "wait_for" && action.Operation != "capture_value" && action.Operation != "switch_tab" && seen[automationStateFingerprint(action, state)]
 }

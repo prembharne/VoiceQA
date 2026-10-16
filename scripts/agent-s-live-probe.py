@@ -24,7 +24,9 @@ def key():
     finally:
         ctypes.windll.kernel32.LocalFree(output.data)
 
-if '--live-paid' not in sys.argv:
+if '--nemotron-only' in sys.argv:
+    os.environ['VOICEQA_ACCEPTANCE_MODEL'] = 'nvidia/nemotron-3.5-super-vl:free'
+elif '--live-paid' not in sys.argv:
     raise SystemExit('Explicit --live-paid is required for Qwen calls')
 worker = runpy.run_path(str(Path(__file__).resolve().parents[1] / "agent_s" / "worker.py"))
 session = None

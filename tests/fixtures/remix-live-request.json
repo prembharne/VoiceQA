@@ -1,0 +1,11 @@
+{
+  "id": "remix-local-vm-functional-acceptance",
+  "version": 1,
+  "origin": "https://app.remix.live",
+  "url": "https://app.remix.live/",
+  "request": "Create token.sol in the contracts folder of the current workspace. Write a compact self-contained token named VoiceQA Token, symbol VQA, 18 decimals, minting 1000 tokens to the deployer. Compile and deploy only in Remix VM. Do not connect a wallet or use a live network. Then use actual deployed contract calls to verify name, symbol, decimals, totalSupply and the initial deployer balance. Discover the VM addresses from the interface rather than guessing. Transfer 10 tokens to a second VM account and independently verify the deployer now has 990 and the recipient has 10. Use exact base-unit strings for the large integer values. Verify transaction results and calls rather than just clicks or source text. Once the source and deployment are verified, preserve them and continue testing. Keep the browser width unchanged.",
+  "model": "nvidia/nemotron-3.5-super-vl:free",
+  "aiProvider": "openrouter",
+  "preserveViewport": true,
+  "mode": "automation"
+}

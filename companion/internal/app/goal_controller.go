@@ -17,21 +17,18 @@ const recoveryTool = "voiceqa_goal_recovery"
 func (s *automationSession) recoverGoal(source string, err error, action *core.Action, dom bool) (agentharness.Outcome, error) {
 	r := s.run
 	limit := max(8, min(24, r.Plan.Automation.MaxActions))
-	if s.recoveries >= limit {
-		return agentharness.Outcome{}, &BrowserError{Code: "blocked", Message: fmt.Sprintf("The goal remains unverified after %d recovery attempts. Completed work and rejected proposals are recorded; no ambiguous submission was replayed", limit)}
+	if s.recoveryStreak >= limit || s.recoveries >= max(limit, min(160, 2*r.Plan.Automation.MaxActions)) {
+		return agentharness.Outcome{}, &BrowserError{Code: "blocked", Message: fmt.Sprintf("The goal remains unverified after %d recovery attempts since the last verified progress (%d total). Completed evidence is retained; no ambiguous submission was replayed", s.recoveryStreak, s.recoveries)}
 	}
 	s.recoveries++
+	s.recoveryStreak++
 	s.validation = recordedText(err.Error(), 1400)
-	feedback := map[string]any{"status": "recovering", "source": source, "reason": s.validation, "goal": r.Plan.Request, "attempt": s.recoveries, "remainingRecoveries": limit - s.recoveries, "guidance": "Re-observe actual state. Continue the unfinished goal using a different grounded approach, readiness wait or read tool. Do not infer success from dispatch, repeat a consequential/uncertain submission, or change expected outcomes to hide a defect."}
+	feedback := map[string]any{"status": "recovering", "source": source, "reason": s.validation, "goal": r.Plan.Request, "attempt": s.recoveries, "remainingRecoveries": limit - s.recoveryStreak, "guidance": "Re-observe actual state. Preserve verifiedProgress and continue the unfinished goal instead of restarting completed stages. Do not infer success from dispatch, repeat a consequential/uncertain submission, or change expected outcomes to hide a defect."}
 	if action != nil {
 		feedback["proposal"] = recordedStepEvidence(core.Step{Action: *action})["action"]
 	}
 	s.lastRecovery = feedback
-	before := len(r.AgentEvents)
-	s.event("goal_recovery", source)
-	if len(r.AgentEvents) > before {
-		r.AgentEvents[before]["feedback"] = feedback
-	}
+	s.event("goal_recovery", source)["feedback"] = feedback
 	r.AgentPhase = "Recovering and checking the current state"
 	if dom {
 		s.router.visual, s.router.unchanged, s.router.reads, s.router.visualTurns = false, -2, 0, 0
@@ -46,7 +43,11 @@ func (s *automationSession) recoverGoal(source string, err error, action *core.A
 }
 
 func (s *automationSession) queueRecovery(err error) agentharness.Call {
+	return s.queueRecoveryFrom("visual_decision_rejected", err)
+}
+func (s *automationSession) queueRecoveryFrom(source string, err error) agentharness.Call {
 	s.recoveryTicket = core.ID()
+	s.pendingRecoverySource = source
 	s.pendingRecovery = recordedText(err.Error(), 1400)
 	args, _ := json.Marshal(map[string]string{"ticket": s.recoveryTicket})
 	return agentharness.Call{Name: recoveryTool, Arguments: string(args)}
@@ -60,7 +61,7 @@ func (s *automationSession) invokeRecovery(call agentharness.Call) (agentharness
 		return agentharness.Outcome{}, errors.New("Goal recovery ticket expired")
 	}
 	s.recoveryTicket = ""
-	return s.recoverGoal("visual_decision_rejected", errors.New(s.pendingRecovery), nil, true)
+	return s.recoverGoal(s.pendingRecoverySource, errors.New(s.pendingRecovery), nil, true)
 }
 
 func recoverableVisualDecision(ctx context.Context, err error) bool {

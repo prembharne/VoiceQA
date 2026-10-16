@@ -9,6 +9,25 @@ import (
 	"testing"
 )
 
+func TestNemotronAcceptanceRejectsOtherModelsBeforeNetwork(t *testing.T) {
+	t.Setenv("VOICEQA_ACCEPTANCE_MODEL", "nvidia/nemotron-3.5-super-vl:free")
+	c := New().ForProvider("openrouter")
+	for _, model := range []string{"qwen/qwen3.7-flash", "dots-studio/dots-3-note-preview:free"} {
+		if err := c.checkAcceptanceModel(model); err == nil {
+			t.Fatal("acceptance escaped to another model")
+		}
+		if _, _, err := c.ToolDecision(context.Background(), "", model, "", nil, Object(nil), nil); err == nil {
+			t.Fatal("tool decisions bypassed exact-model restriction")
+		}
+	}
+	if err := c.checkAcceptanceModel("nvidia/nemotron-3.5-super-vl:free"); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.ForProvider("openai").checkAcceptanceModel("nvidia/nemotron-3.5-super-vl:free"); err == nil {
+		t.Fatal("acceptance escaped to another provider")
+	}
+}
+
 func TestPaidAcceptanceBoundsCallsAcrossProviderCopies(t *testing.T) {
 	t.Setenv("VOICEQA_ACCEPTANCE_QWEN_LOW_TOKENS", "1")
 	calls := 0

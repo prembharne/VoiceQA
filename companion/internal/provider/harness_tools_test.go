@@ -36,6 +36,22 @@ func TestEmptyAndErrorEnvelopesCannotBecomeToolDecisions(t *testing.T) {
 	}
 }
 
+func TestEmptyNativeChoiceIsAvailabilityFailureWithoutBypassingRefusal(t *testing.T) {
+	for _, finish := range []string{"", "stop", "error"} {
+		raw := []byte(`{"choices":[{"finish_reason":"` + finish + `","message":{"content":""}}]}`)
+		_, _, err := parseToolStructured(raw, 0)
+		var empty *EmptyResultError
+		if !errors.As(err, &empty) {
+			t.Fatal("empty provider choice became a terminal action error", finish, err)
+		}
+	}
+	_, _, err := parseToolStructured([]byte(`{"choices":[{"finish_reason":"content_filter","message":{"content":""}}]}`), 0)
+	var empty *EmptyResultError
+	if err == nil || errors.As(err, &empty) {
+		t.Fatal("refusal became a retryable empty result")
+	}
+}
+
 func TestToolDecisionPrefersNativeToolsWithoutChangingPlanTransport(t *testing.T) {
 	for _, supported := range []bool{false, true} {
 		t.Run(map[bool]string{false: "schema fallback", true: "native tools"}[supported], func(t *testing.T) {

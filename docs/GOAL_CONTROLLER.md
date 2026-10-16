@@ -1,5 +1,7 @@
 # Goal-driven recovery — 0.14.0
 
+Version 0.15.0 adds durable checkpoints, replenished discovery windows and separate consecutive/total recovery limits. The limits below describe 0.14.0; see [current progress behavior](EDITOR_PROGRESS.md) for their replacement and NVIDIA-only acceptance.
+
 A live automation request remains the goal throughout the run. The Eino controller repeatedly observes the current page, asks for one grounded action, executes it, records its outcome, and uses fresh evidence for the next decision. There is no precomputed click script in live mode. Dots 3 remains primary; Agent S3 with the authorized Qwen 3.7 Flash model handles visual subtasks, and Qwen is the authorized Dots availability fallback.
 
 ## What changes

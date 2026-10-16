@@ -931,6 +931,66 @@ test('IDE controls expose stable unnamed handles, focus the editor and clip hit 
   expect(invalidSyntax.error).toContain('Unsupported selector syntax');
 });
 
+test('grouped function controls stay discoverable and duplicate labels have unique targets', async () => {
+  await target.goto('http://127.0.0.1:4173/fixtures/shop');
+  await target.bringToFront();
+  const tabId = await worker.evaluate(
+    async () =>
+      (await chrome.tabs.query({})).find((t) => t.url === 'http://127.0.0.1:4173/fixtures/shop').id,
+  );
+  await invoke('bind', { tabId });
+  await target.setContent(`<style>[data-id],[title]{cursor:pointer}</style>
+    <nav>${Array.from({ length: 140 }, (_, i) => `<div data-id="icon-${i}">Toolbar ${i}</div>`).join('')}</nav>
+    <i title="New file">+</i><i title="New folder">+</i>
+    <section><h3>approve</h3><input placeholder="value (uint256)"><button>Transact</button></section>
+    <section><h3>transfer</h3><input placeholder="value (uint256)"><button>Transact</button></section>
+    <section><h3>totalSupply</h3><button>Call</button><output>1000</output></section>
+    <section><h3>decimals</h3><button>Call</button><output>18</output></section>`);
+  const view = await invoke('observe');
+  const calls = view.controls.filter((c) => c.name === 'Call');
+  expect(calls).toHaveLength(2);
+  expect(new Set(calls.map((c) => c.target)).size).toBe(2);
+  expect(
+    view.controls.slice(0, 40).some((c) => c.name === 'Call' && c.context.includes('totalSupply')),
+  ).toBe(true);
+  const search = await worker.evaluate(
+    ({ tabId }) => chrome.tabs.sendMessage(tabId, { type: 'vqa.search', query: 'totalSupply' }),
+    { tabId },
+  );
+  expect(
+    search.result.matches.some((m) =>
+      m.relatedControls.some((c) => c.name === 'Call' && c.context.includes('totalSupply')),
+    ),
+  ).toBe(true);
+  const values = view.controls.filter((c) => c.name === 'value (uint256)');
+  expect(new Set(values.map((c) => c.target)).size).toBe(2);
+  const file = view.controls.find((c) => c.name === 'New file');
+  const folder = view.controls.find((c) => c.name === 'New folder');
+  expect(file.target).not.toBe(folder.target);
+  expect(view.controls.indexOf(file)).toBeLessThan(40);
+  await target
+    .locator('[title="New file"]')
+    .evaluate((el) => el.addEventListener('click', () => (document.body.dataset.created = 'file')));
+  const point = await worker.evaluate(
+    ({ tabId, target }) => chrome.tabs.sendMessage(tabId, { type: 'vqa.resolve', target }),
+    { tabId, target: file.target },
+  );
+  await target.mouse.click(point.result.x, point.result.y);
+  expect(await target.locator('body').getAttribute('data-created')).toBe('file');
+  const hit = await worker.evaluate(
+    ({ tabId, point }) =>
+      chrome.tabs.sendMessage(tabId, {
+        type: 'vqa.visual-point',
+        operation: 'click',
+        point: { x: Math.round(point.x), y: Math.round(point.y) },
+      }),
+    { tabId, point: point.result },
+  );
+  expect(hit.error).toBeUndefined();
+  expect(hit.result.name).toBe('New file');
+  expect(hit.result.title).toBe('New file');
+});
+
 test('submission preflight reads native constraints without validation events or private values', async () => {
   await target.goto('http://127.0.0.1:4173/fixtures/shop');
   await target.bringToFront();

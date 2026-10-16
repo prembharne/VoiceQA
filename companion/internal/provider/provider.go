@@ -19,21 +19,23 @@ import (
 )
 
 type Client struct {
-	HTTP                *http.Client
-	BaseURL             string
-	Router              bool
-	NIM                 bool
-	models              *modelCache
-	acceptanceCalls     *atomic.Int32
-	acceptanceTokens    *atomic.Int32
-	acceptanceModelOnly bool
-	preferToolCalls     bool
-	decisionHistory     []DecisionTurn
+	HTTP                 *http.Client
+	BaseURL              string
+	Router               bool
+	NIM                  bool
+	models               *modelCache
+	acceptanceCalls      *atomic.Int32
+	acceptanceTokens     *atomic.Int32
+	acceptanceModelOnly  bool
+	acceptanceExactModel string
+	preferToolCalls      bool
+	decisionHistory      []DecisionTurn
 }
 
 func New() *Client {
 	c := &Client{HTTP: &http.Client{Timeout: 90 * time.Second}, BaseURL: "https://api.openai.com/v1", models: &modelCache{}}
 	c.acceptanceModelOnly = os.Getenv("VOICEQA_ACCEPTANCE_QWEN") == "1"
+	c.acceptanceExactModel = os.Getenv("VOICEQA_ACCEPTANCE_MODEL")
 	// Explicit isolated acceptance only; normal user planning stays uncapped.
 	if os.Getenv("VOICEQA_ACCEPTANCE_QWEN_LOW_TOKENS") == "1" {
 		c.acceptanceModelOnly = true
@@ -106,6 +108,9 @@ func (c *Client) Structured(ctx context.Context, key, model, instructions string
 
 // StructuredWithBudget keeps generation bounded while allowing complete multi-case plans.
 func (c *Client) StructuredWithBudget(ctx context.Context, key, model, instructions string, input any, schema any, budget int) (json.RawMessage, map[string]int, error) {
+	if err := c.checkAcceptanceModel(model); err != nil {
+		return nil, nil, err
+	}
 	if c.acceptanceModelOnly && (!c.Router || model != "qwen/qwen3.7-flash") {
 		return nil, nil, errors.New("Qwen acceptance permits only OpenRouter Qwen 3.7 Flash")
 	}
@@ -126,6 +131,13 @@ func (c *Client) StructuredWithBudget(ctx context.Context, key, model, instructi
 		return nil, nil, e
 	}
 	return parseStructured(data, budget)
+}
+
+func (c *Client) checkAcceptanceModel(model string) error {
+	if c.acceptanceExactModel != "" && (c.acceptanceExactModel != "nvidia/nemotron-3.5-super-vl:free" || !c.Router || model != c.acceptanceExactModel) {
+		return errors.New("Isolated acceptance permits only OpenRouter nvidia/nemotron-3.5-super-vl:free; no model fallback is allowed")
+	}
+	return nil
 }
 
 func parseStructured(data []byte, budget int) (json.RawMessage, map[string]int, error) {

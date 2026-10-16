@@ -1,0 +1,150 @@
+{
+  "version": "0.15.0",
+  "date": "2026-10-16",
+  "model": "nvidia/nemotron-3.5-super-vl:free",
+  "modelRestriction": "NVIDIA only; no Qwen fallback",
+  "grounding": {
+    "fixtureChecksPassed": 8,
+    "realRemixReadOnlyChecksPassed": 1
+  },
+  "run": {
+    "id": "64e788ce74c94caf0068762d9bc31571",
+    "attempt": "paced-live-run-Y1Wweg",
+    "status": "interrupted_by_tester_after_diagnosis",
+    "recordedSteps": 30,
+    "creationCompilationDeploymentVerified": true,
+    "functionalChecksVerified": false,
+    "sourceWrites": 1,
+    "progress": [
+      {
+        "kind": "editor_readback",
+        "uri": "file:///contracts/token.sol",
+        "hash": "591d9665e911eb202cb1528ba39948eb8b253b80457ed4cf9d6113a804e07404",
+        "stepId": "4ce418923994f8bab0c80b105066801b"
+      }
+    ],
+    "localVMReceipt": {
+      "tag": "span",
+      "target": "#tx0x5ea30cd9dd24983a5a09c276ba1a78ea2c4d484dacca89b206041b36cff0213e",
+      "text": "[vm]from:0x5B3...eddC4to:VoiceQAToken.(constructor)value:0 weidata:0x608...20033logs:1hash:0x5ea...0213eDebug",
+      "visible": true
+    },
+    "recordedMisgroundings": [
+      {
+        "intended": "Agent S: name function button",
+        "actual": {
+          "name": "Explain contract",
+          "tag": "BUTTON",
+          "title": ""
+        },
+        "point": {
+          "snapshot": "78671f9d-e1fd-452d-9885-569259d10508",
+          "target": "role:button|Explain contract",
+          "x": 574,
+          "y": 656
+        }
+      },
+      {
+        "intended": "Agent S: name function button",
+        "actual": {
+          "name": "Explain contract",
+          "tag": "BUTTON",
+          "title": ""
+        },
+        "point": {
+          "snapshot": "b657c2a2-e6c6-4d59-991e-256354205c06",
+          "target": "role:button|Explain contract",
+          "x": 572,
+          "y": 655
+        }
+      },
+      {
+        "intended": "Agent S: name function button",
+        "actual": {
+          "name": "Explain contract",
+          "tag": "BUTTON",
+          "title": ""
+        },
+        "point": {
+          "snapshot": "7fff72d5-81a8-407d-8418-a565b990064c",
+          "target": "role:button|Explain contract",
+          "x": 569,
+          "y": 655
+        }
+      }
+    ],
+    "requestModels": [
+      "nvidia/nemotron-3.5-super-vl:free"
+    ],
+    "visualModels": [
+      "nvidia/nemotron-3.5-super-vl:free"
+    ],
+    "usage": {
+      "cost": 0,
+      "function_calls": 32,
+      "ignored_tool_commentary": 6,
+      "input_tokens": 830244,
+      "output_tokens": 28778,
+      "total_tokens": 859022,
+      "typed_function_calls": 32
+    }
+  },
+  "postRunFix": {
+    "captionValidation": "Contradictory short textual button captions rejected before live visual dispatch",
+    "evidence": "Local regressions against recorded misgrounding; subsequent actual continuation tracked in VALIDATION.md"
+  },
+  "continuation": {
+    "id": "cd11c88ba4d4ae9e61ee9c99f890eaf6",
+    "attempt": "paced-live-run-N2364k",
+    "status": "interrupted_by_tester",
+    "recordedSteps": 9,
+    "providerRecoveries": [
+      {
+        "at": "2026-10-16T09:38:18.765033Z",
+        "afterActions": 7,
+        "reason": "OpenRouter HTTP 502: Provider returned error: Failed to generate completions"
+      },
+      {
+        "at": "2026-10-16T09:38:21.9266467Z",
+        "afterActions": 7,
+        "reason": "OpenRouter HTTP 502: Provider returned error: Failed to generate completions"
+      },
+      {
+        "at": "2026-10-16T09:38:26.1968507Z",
+        "afterActions": 7,
+        "reason": "OpenRouter HTTP 502: Provider returned error: Failed to generate completions"
+      },
+      {
+        "at": "2026-10-16T09:38:31.4950889Z",
+        "afterActions": 7,
+        "reason": "OpenRouter HTTP 502: Provider returned error: Failed to generate completions"
+      },
+      {
+        "at": "2026-10-16T09:38:37.7848726Z",
+        "afterActions": 7,
+        "reason": "OpenRouter HTTP 502: Provider returned error: Failed to generate completions"
+      },
+      {
+        "at": "2026-10-16T09:38:45.0500903Z",
+        "afterActions": 7,
+        "reason": "OpenRouter HTTP 502: Provider returned error: Failed to generate completions"
+      }
+    ],
+    "lastRecordedSteps": [
+      {
+        "operation": "click",
+        "label": "Open Deploy panel via Deploy button",
+        "status": "passed"
+      },
+      {
+        "operation": "click",
+        "label": "Agent S: Compile button",
+        "status": "passed"
+      }
+    ],
+    "functionalChecksVerified": false,
+    "requestModels": [
+      "nvidia/nemotron-3.5-super-vl:free"
+    ]
+  }
+}

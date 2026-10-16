@@ -312,6 +312,9 @@ func parseDeclaredToolStructured(raw []byte, budget int, contracts map[string]fu
 	if choice.Finish == "length" {
 		return nil, usage, generationLimitMessage(budget)
 	}
+	if choice.Finish != "content_filter" && choice.Message.Refusal == "" && len(choice.Message.Calls) == 0 && strings.TrimSpace(choice.Message.Content) == "" && (len(packet.Error) == 0 || string(packet.Error) == "null") {
+		return nil, usage, &EmptyResultError{}
+	}
 	// Auto tool selection is portable across endpoints that reject named
 	// tool_choice. A complete plain JSON reply still follows the same contract.
 	if choice.Finish == "stop" && len(choice.Message.Calls) == 0 && choice.Message.Refusal == "" && (len(packet.Error) == 0 || string(packet.Error) == "null") {
@@ -325,7 +328,10 @@ func parseDeclaredToolStructured(raw []byte, budget int, contracts map[string]fu
 		}
 		return result, usage, err
 	}
-	if choice.Finish != "tool_calls" || choice.Message.Refusal != "" || strings.TrimSpace(choice.Message.Content) != "" || len(choice.Message.Calls) != 1 || (len(packet.Error) > 0 && string(packet.Error) != "null") {
+	// Some endpoints accompany a single native function with explanatory text.
+	// Ignore that untrusted text entirely; only the declared, decoded arguments
+	// can become a decision. Refusals, incomplete and parallel calls still fail.
+	if choice.Finish != "tool_calls" || choice.Message.Refusal != "" || len(choice.Message.Calls) != 1 || (len(packet.Error) > 0 && string(packet.Error) != "null") {
 		finish := "other"
 		switch choice.Finish {
 		case "stop", "tool_calls", "content_filter":
@@ -354,6 +360,9 @@ func parseDeclaredToolStructured(raw []byte, budget int, contracts map[string]fu
 		return nil, usage, responseContractErrorf("%s", err.Error())
 	}
 	if err == nil {
+		if strings.TrimSpace(choice.Message.Content) != "" {
+			usage["ignored_tool_commentary"] = 1
+		}
 		usage["function_calls"] = 1
 		if contract.Kind != "" {
 			usage["typed_function_calls"] = 1

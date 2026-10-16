@@ -58,7 +58,7 @@ func recordedStepEvidence(s core.Step) map[string]any {
 		action["http"] = map[string]any{"method": s.Action.HTTP.Method, "url": publicAgentURL(s.Action.HTTP.URL), "expectedStatus": s.Action.HTTP.ExpectedStatus, "jsonPointer": s.Action.HTTP.JSONPointer, "expectedValue": recordedText(s.Action.HTTP.ExpectedValue, 1000)}
 	}
 	result := map[string]any{}
-	for _, key := range []string{"actual", "expected", "kind", "passed", "status", "statusCode", "actualTruncated", "seriousCount", "rulePasses", "historical", "observationId", "priorObservationId", "observedAfterActions", "waitedMs", "timeoutMs", "polls", "missingPolls", "checkedTarget", "pending", "inputState"} {
+	for _, key := range []string{"actual", "expected", "kind", "passed", "status", "statusCode", "actualTruncated", "seriousCount", "rulePasses", "historical", "observationId", "priorObservationId", "observedAfterActions", "waitedMs", "timeoutMs", "polls", "missingPolls", "checkedTarget", "pending", "inputState", "verified", "complete", "contentHash", "valueSource", "length", "dispatched", "unchanged", "editorURI", "resolvedControl"} {
 		if value, ok := s.Result[key]; ok {
 			switch value.(type) {
 			case string, bool, float64, int, int64, nil:

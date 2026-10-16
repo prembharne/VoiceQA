@@ -113,6 +113,7 @@ type Step struct {
 	CompletedAt string         `json:"completedAt,omitempty"`
 }
 type Run struct {
+	GoalProgress     []map[string]any  `json:"goalProgress,omitempty"`
 	AgentRuntime     string            `json:"agentRuntime,omitempty"`
 	AgentModel       string            `json:"agentModel,omitempty"`
 	AgentEvents      []map[string]any  `json:"agentEvents,omitempty"`

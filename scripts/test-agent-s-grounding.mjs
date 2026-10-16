@@ -3,13 +3,16 @@ import { spawn } from 'node:child_process';
 import { readFile, writeFile, mkdir, mkdtemp } from 'node:fs/promises';
 import { resolve, join } from 'node:path';
 import { createInterface } from 'node:readline';
-if (!process.argv.includes('--live-paid'))
+const nemotronOnly = process.argv.includes('--nemotron-only');
+if (nemotronOnly && process.argv.includes('--live-paid'))
+  throw new Error('Conflicting model modes');
+if (!nemotronOnly && !process.argv.includes('--live-paid'))
   throw new Error('This calls paid Qwen. Pass --live-paid after authorizing that use.');
 
 const work = await mkdtemp(resolve('.tools/live-checks/agent-s-grounding-'));
 const child = spawn(
   resolve(process.env.VOICEQA_AGENT_S_PYTHON || 'dist/agent-s-runtime/Scripts/python.exe'),
-  ['scripts/agent-s-live-probe.py', '--live-paid'],
+  ['scripts/agent-s-live-probe.py', nemotronOnly ? '--nemotron-only' : '--live-paid'],
   { windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] },
 );
 const lines = createInterface({ input: child.stdout });
@@ -63,6 +66,8 @@ try {
         description: test.description,
       });
       const point = response.result;
+      if (nemotronOnly && response.model !== 'nvidia/nemotron-3.5-super-vl:free')
+        throw new Error('Unexpected model identity');
       const box = await page.locator(test.selector).boundingBox();
       const expected = test.canvas ? { x: box.x + 14, y: box.y + 14, width: 94, height: 37 } : box;
       const inside =
@@ -93,10 +98,8 @@ try {
     await page.close();
   }
   if (results.some((x) => !x.inside || !x.effect))
-    throw new Error('Actual Qwen grounding failed independent hit/effect verification');
-  console.log(
-    'Actual Agent S/Qwen grounding passed ' + results.length + ' targets. Evidence: ' + work,
-  );
+    throw new Error('Actual visual grounding failed independent hit/effect verification');
+  console.log('Actual Agent S grounding passed ' + results.length + ' targets. Evidence: ' + work);
 } finally {
   child.stdin.end();
   child.kill();

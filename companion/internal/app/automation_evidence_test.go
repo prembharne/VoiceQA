@@ -13,7 +13,9 @@ func TestModelControlCompactionPreservesRulesValuesAndSourceEvidence(t *testing.
 	controls[0] = map[string]any{"target": "#handle", "role": "textbox", "editable": true, "value": "", "required": true, "expanded": "false"}
 	controls[1] = map[string]any{"target": "#consent", "role": "checkbox", "checked": false, "disabled": true}
 	view := map[string]any{"controls": controls, "text": "A seat costs 200 and the service fee is 10", "results": []any{map[string]any{"target": "#total", "text": "$410.00"}}, "url": "https://app.test/?token=private"}
-	before, _ := json.Marshal(agentPublicEvidence(view))
+	// Compact before transport truncation too, so useful controls survive the
+	// evidence allowance. Compare with the original verbose browser payload.
+	before, _ := json.Marshal(view)
 	model := automationModelObservation(view)
 	after, _ := json.Marshal(model)
 	if len(after) >= len(before)*3/5 {

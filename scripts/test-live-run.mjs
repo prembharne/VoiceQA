@@ -3,8 +3,17 @@
 // default; --fast is for diagnosis. Production settings/runs are never written.
 import { allowedDemoAPI } from './live-demo-scope.mjs';
 import { chromium } from '@playwright/test';
-import { cp, copyFile, unlink, mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
-import { resolve, join } from 'node:path';
+import {
+  cp,
+  copyFile,
+  unlink,
+  mkdir,
+  mkdtemp,
+  readFile,
+  writeFile,
+  realpath,
+} from 'node:fs/promises';
+import { resolve, join, dirname, basename } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { execFileSync } from 'node:child_process';
 
@@ -22,9 +31,19 @@ if (
 )
   throw new Error('Failure-continuation acceptance requires the owned status defect.');
 const automationLive = process.argv.includes('--automation-live') || automationUI;
+const remixVM = process.argv.includes('--remix-local-vm');
+if (remixVM && (!automationLive || plan.origin !== 'https://app.remix.live'))
+  throw new Error(
+    'Remix acceptance requires live automation on the explicitly approved public Remix origin.',
+  );
 const livePlanning = process.argv.includes('--plan-live') || automationLive;
 const lowTokens = process.argv.includes('--paid-qwen-low-tokens');
 const paidQwen = lowTokens || process.argv.includes('--paid-qwen');
+const exactModel = process.argv.includes('--nemotron-only')
+  ? 'nvidia/nemotron-3.5-super-vl:free'
+  : '';
+if (exactModel && (paidQwen || plan.aiProvider !== 'openrouter' || plan.model !== exactModel))
+  throw new Error('Nemotron-only acceptance forbids other models and paid fallback.');
 if (paidQwen && (plan.aiProvider !== 'openrouter' || plan.model !== 'qwen/qwen3.7-flash'))
   throw new Error('Paid acceptance permits only the explicitly authorized Qwen 3.7 Flash.');
 if (
@@ -51,13 +70,15 @@ const generic = [
   'http://127.0.0.1:4180',
   'http://127.0.0.1:4181',
 ].includes(plan.origin);
-const origin = generic
-  ? plan.origin
-  : workspace
-    ? 'http://127.0.0.1:4176'
-    : security
-      ? 'http://127.0.0.1:4175'
-      : 'http://127.0.0.1:4173';
+const origin = remixVM
+  ? 'https://app.remix.live'
+  : generic
+    ? plan.origin
+    : workspace
+      ? 'http://127.0.0.1:4176'
+      : security
+        ? 'http://127.0.0.1:4175'
+        : 'http://127.0.0.1:4173';
 const url = plan.url;
 if (plan.origin !== origin || plan.clarification || (!automationLive && !plan.cases?.length))
   throw new Error('This check requires a runnable local-demo plan.');
@@ -70,21 +91,23 @@ const demoURL = (raw) => {
       u.origin === origin &&
       !u.username &&
       !u.password &&
-      (parcelWorkspace
-        ? /^\/(?:guide)?$/.test(u.pathname)
-        : multiWorkspace
-          ? /^\/(?:review)?$/.test(u.pathname)
-          : visualWorkspace
-            ? /^\/(?:timing)?$/.test(u.pathname)
-            : generic
-              ? /^\/(?:help)?$/.test(u.pathname)
-              : workspace
-                ? /^\/(?:app\/(?:orders|settings|auth|security|compatibility|projects|layout)|app\/invoices\/[^/]+)?$/.test(
-                    u.pathname,
-                  )
-                : security
-                  ? u.pathname === '/security'
-                  : u.pathname === '/fixtures/shop')
+      (remixVM
+        ? u.pathname === '/'
+        : parcelWorkspace
+          ? /^\/(?:guide)?$/.test(u.pathname)
+          : multiWorkspace
+            ? /^\/(?:review)?$/.test(u.pathname)
+            : visualWorkspace
+              ? /^\/(?:timing)?$/.test(u.pathname)
+              : generic
+                ? /^\/(?:help)?$/.test(u.pathname)
+                : workspace
+                  ? /^\/(?:app\/(?:orders|settings|auth|security|compatibility|projects|layout)|app\/invoices\/[^/]+)?$/.test(
+                      u.pathname,
+                    )
+                  : security
+                    ? u.pathname === '/security'
+                    : u.pathname === '/fixtures/shop')
     );
   } catch {
     return false;
@@ -133,6 +156,45 @@ for (const c of plan.cases || [])
   }
 await mkdir(resolve('.tools/live-checks'), { recursive: true });
 const work = await mkdtemp(resolve('.tools/live-checks/paced-live-run-'));
+let profile = join(work, 'profile');
+const resumeFrom = process.argv
+  .find((arg) => arg.startsWith('--resume-remix-from='))
+  ?.slice('--resume-remix-from='.length);
+if (resumeFrom) {
+  const prior = await realpath(resolve(resumeFrom));
+  const root = await realpath(resolve('.tools/live-checks'));
+  if (
+    !remixVM ||
+    !exactModel ||
+    dirname(prior).toLowerCase() !== root.toLowerCase() ||
+    !/^paced-live-run-[A-Za-z0-9]+$/.test(basename(prior))
+  )
+    throw new Error('Resume is limited to an owned isolated Remix acceptance profile.');
+  const previous = await readFile(join(prior, 'run.json'), 'utf8')
+    .then(JSON.parse)
+    .catch(async (error) => {
+      if (error.code !== 'ENOENT' || !process.argv.includes('--resume-interrupted')) throw error;
+      return JSON.parse(await readFile(join(prior, 'partial-runs.json'), 'utf8')).at(-1);
+    });
+  if (
+    previous.plan?.origin !== origin ||
+    previous.plan?.model !== exactModel ||
+    (['running', 'paused', 'queued'].includes(previous.status) &&
+      !process.argv.includes('--resume-interrupted'))
+  )
+    throw new Error('Resume requires a completed NVIDIA-only Remix attempt.');
+  profile = await realpath(join(prior, 'profile'));
+  if (dirname(profile).toLowerCase() !== prior.toLowerCase())
+    throw new Error('Unexpected profile path');
+  await writeFile(
+    join(work, 'resumed-from.json'),
+    JSON.stringify({
+      prior,
+      previousRunId: previous.id,
+      interruptedByTester: process.argv.includes('--resume-interrupted'),
+    }),
+  );
+}
 const data = join(work, 'data');
 await mkdir(data);
 const db = new DatabaseSync(join(data, 'voiceqa.db'));
@@ -156,7 +218,7 @@ db.close();
 const extension = join(work, 'extension');
 await cp(resolve('dist/extension'), extension, { recursive: true });
 const manifest = JSON.parse(await readFile(join(extension, 'manifest.json'), 'utf8'));
-manifest.host_permissions = ['http://127.0.0.1/*'];
+manifest.host_permissions = remixVM ? ['https://app.remix.live/*'] : ['http://127.0.0.1/*'];
 await writeFile(join(extension, 'manifest.json'), JSON.stringify(manifest));
 const registration = join(work, 'native-host.json');
 const backup = join(work, 'registry-backup.json');
@@ -185,19 +247,20 @@ try {
       }
     }
   }
-  context = await chromium.launchPersistentContext(join(work, 'profile'), {
+  context = await chromium.launchPersistentContext(profile, {
     channel: 'chromium',
     headless: true,
-    ...(visualWorkspace ? { viewport: null } : {}),
+    ...(visualWorkspace || remixVM ? { viewport: null } : {}),
     args: [
       `--disable-extensions-except=${extension}`,
       `--load-extension=${extension}`,
-      ...(visualWorkspace ? ['--window-size=1440,1000'] : []),
+      ...(visualWorkspace || remixVM ? ['--window-size=1440,1000'] : []),
     ],
     env: {
       ...process.env,
       VOICEQA_DATA_DIR: data,
       VOICEQA_ACCEPTANCE_QWEN: paidQwen ? '1' : '',
+      VOICEQA_ACCEPTANCE_MODEL: exactModel,
       VOICEQA_AGENT_S_DIAGNOSTICS: process.argv.includes('--visual-agent')
         ? join(work, 'visual-error.json')
         : '',
@@ -207,6 +270,14 @@ try {
       VOICEQA_TTS_API_KEY: '',
     },
   });
+  if (remixVM) {
+    // Only in this isolated acceptance: no browser POST or WebSocket can
+    // reach a remote RPC/wallet service. The Go AI provider uses its own client.
+    await context.route('**/*', (route) =>
+      ['GET', 'HEAD'].includes(route.request().method()) ? route.continue() : route.abort(),
+    );
+    await context.routeWebSocket('**/*', (socket) => socket.close());
+  }
   const worker = context.serviceWorkers()[0] || (await context.waitForEvent('serviceworker'));
   const extensionId = new URL(worker.url()).host;
   await writeFile(
@@ -323,10 +394,28 @@ try {
     panel.evaluate(({ method, payload }) => globalThis.__rpc(method, payload), { method, payload });
   const target = await context.newPage();
   await target.goto(url);
+  if (remixVM)
+    await target.waitForFunction(
+      () => {
+        const ready =
+          document.readyState === 'complete' &&
+          globalThis.monaco?.editor?.getEditors &&
+          document.querySelector('#verticalIconsKindfilePanel');
+        if (!ready) return false;
+        const probe = globalThis.__voiceqaAcceptanceReady;
+        if (!probe || probe.url !== location.href) {
+          globalThis.__voiceqaAcceptanceReady = { url: location.href, at: performance.now() };
+          return false;
+        }
+        return performance.now() - probe.at >= 2000;
+      },
+      null,
+      { timeout: 90000 },
+    );
   await target.bringToFront();
   const tabId = await worker.evaluate(
     async (url) => (await chrome.tabs.query({})).find((t) => t.url === url)?.id,
-    url,
+    target.url(),
   );
   await rpc('bind', { tabId });
   let sharedGuide;
@@ -547,8 +636,8 @@ try {
       plan = await rpc(automationLive ? 'automation.propose' : 'plan.propose', {
         request: plan.request,
         conversation: plan.conversation || [],
-        maxActions: 40,
-        allowConsequential: visualWorkspace && process.argv.includes('--visual-agent'),
+        maxActions: remixVM ? 100 : 40,
+        allowConsequential: remixVM || (visualWorkspace && process.argv.includes('--visual-agent')),
         discover: process.argv.includes('--discover'),
         readLinks: true,
         responsive: !automationLive && !plan.preserveViewport && plan.viewports.length > 1,
@@ -1094,6 +1183,62 @@ try {
       );
     }
     const expectedFailure = process.argv.includes('--expect-failed');
+    if (remixVM) {
+      const text = await target.locator('body').innerText();
+      const models = await target.evaluate(() =>
+        globalThis.monaco.editor
+          .getEditors()
+          .map((e) => e.getModel?.())
+          .filter((m) => m?.uri.path.endsWith('token.sol'))
+          .map((m) => ({ uri: m.uri.toString(), value: m.getValue() })),
+      );
+      const state = {
+        text,
+        source: models.map((m) => m.value),
+        models,
+        width: await target.evaluate(() => innerWidth),
+        progress: run.goalProgress,
+      };
+      await writeFile(join(work, 'remix-state.json'), JSON.stringify(state, null, 2));
+      if (
+        run.status !== 'passed' ||
+        !models.some((m) => /\/contracts\/token\.sol$/.test(m.uri)) ||
+        state.width !== plan.viewports[0].width ||
+        !/Token\.\(constructor\)/.test(text) ||
+        !text.includes('Remix VM')
+      )
+        throw new Error(
+          'Actual Remix workflow did not complete with a local VM deployment and preserved width',
+        );
+      const expected = [
+        'VoiceQA Token',
+        'VQA',
+        '18',
+        '1000000000000000000000',
+        '990000000000000000000',
+        '10000000000000000000',
+      ];
+      if (
+        !expected.every((value) =>
+          assertions.some(
+            (s) =>
+              s.status === 'passed' &&
+              String(s.result?.actual).includes(value) &&
+              !/Editor content/.test(s.action.target),
+          ),
+        )
+      )
+        throw new Error(
+          'Actual Remix getters were not independently checked with the requested token metadata/supply',
+        );
+      // Source text and button dispatches cannot stand in for actual calls.
+      for (const method of ['name', 'symbol', 'decimals', 'totalSupply', 'balanceOf', 'transfer'])
+        if (!new RegExp('\\.' + method + '\\s*\\(').test(text))
+          throw new Error(`Remix has no recorded contract call/transaction for ${method}`);
+      console.log(
+        'Actual Remix local-VM creation, compilation, deployment and contract output checks completed; current width preserved.',
+      );
+    }
     if (visualWorkspace && process.argv.includes('--visual-qa')) {
       if (
         !run.agentEvents?.some((e) => e.kind === 'agent_route' && e.name === 'agent-s3') ||

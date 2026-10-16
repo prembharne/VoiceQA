@@ -20,7 +20,8 @@ func (s *automationSession) invokeVisual(ctx context.Context, call agentharness.
 	s.router.visualTurns++
 	switch intent.Operation {
 	case "done", "report", "inspect":
-		rememberAutomationRead(r, map[string]any{"tool": "agent_s_visual", "page": s.scope.Current, "toolResult": map[string]any{"observation": intent.Text, "intent": intent.Operation, "capture": s.visualImage, "agent": "agent-s3", "model": fallbackModel, "limitation": "Visual interpretation is not an assertion or proof of task completion"}})
+		rememberAutomationRead(r, map[string]any{"tool": "agent_s_visual", "page": s.scope.Current, "toolResult": map[string]any{"observation": intent.Text, "intent": intent.Operation, "artifactId": s.visualImage["artifactId"], "agent": "agent-s3", "model": s.visualReply.Model, "limitation": "Visual interpretation is not an assertion or proof of task completion"}})
+		s.router.handoffState = s.router.fingerprint
 		s.router.visual = false
 		s.router.unchanged = -3 // allow DOM outcome checks after a visual handoff
 		s.router.reads = 0
@@ -51,7 +52,7 @@ func (s *automationSession) invokeVisual(ctx context.Context, call agentharness.
 	if action.Label == "Agent S: " {
 		action.Label = "Agent S: press " + intent.Value
 	}
-	action, err := s.app.resolveVisualAction(ctx, r, action, point)
+	action, err := s.app.resolveVisualAction(ctx, r, action, point, intent.Description)
 	if err != nil {
 		if recoverableVisualDecision(ctx, err) {
 			return s.recoverGoal("visual_target_rejected", err, &action, true)
@@ -71,6 +72,7 @@ func (s *automationSession) invokeVisual(ctx context.Context, call agentharness.
 	}
 	step := &r.Steps[len(r.Steps)-1]
 	if step.Result != nil {
+		step.Result["model"] = s.visualReply.Model
 		step.Result["visualCapture"] = s.visualImage
 	}
 	s.app.update(r)

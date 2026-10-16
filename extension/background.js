@@ -11,6 +11,7 @@ import { ExecutionFence } from '../shared/execution-fence.js';
 import { pollCondition } from '../shared/condition-wait.js';
 import { NetworkRecorder, publicURL } from './network-recorder.js';
 import { auditConfiguration } from './security-audit.js';
+import { editorModelBridge } from './editor-bridge.js';
 
 const fence = new ExecutionFence();
 const network = new NetworkRecorder();
@@ -436,7 +437,7 @@ async function ensureContent(token) {
     files: ['content.js'],
   });
 }
-async function content(message, token) {
+async function contentRaw(message, token) {
   await ensureContent(token);
   fence.check(token, state);
   const response = await chrome.tabs.sendMessage(
@@ -450,6 +451,76 @@ async function content(message, token) {
   if (message.type === 'vqa.observe' && !registry.allows(response.result.url))
     throw fault('Observation left explicitly approved origins.', 'blocked');
   return response.result;
+}
+async function editorValue(context, target, token, operation = 'read', text = '') {
+  if (!context) return null;
+  fence.check(token, state);
+  if (operation === 'replace') token.inputDispatched = true; // Lost reply is an uncertain mutation.
+  const replies = await chrome.scripting.executeScript({
+    target: { tabId: token?.tabId || state.target.tabId },
+    world: 'MAIN',
+    func: editorModelBridge,
+    args: [context, operation, text],
+  });
+  fence.check(token, state);
+  const after = (await contentRaw({ type: 'vqa.editor-context', target }, token)).editorContext;
+  if (
+    !after ||
+    after.marker !== context.marker ||
+    after.binding !== context.binding ||
+    after.documentKey !== context.documentKey ||
+    after.url !== context.url
+  )
+    throw fault('Editor changed before its model result could be accepted', 'target_missing');
+  const result = replies[0]?.result;
+  if (!result || result.unavailable || !result.complete)
+    throw fault(
+      result?.reason ||
+        'Full editor model is unavailable; the typing buffer is not the file content',
+      'editor_unavailable',
+    );
+  return result;
+}
+async function content(message, token) {
+  const result = await contentRaw(message, token);
+  if (message.type === 'vqa.inspect' && result.editor && !result.private) {
+    const context = (
+      await contentRaw({ type: 'vqa.editor-context', target: message.target }, token)
+    ).editorContext;
+    try {
+      const model = await editorValue(context, message.target, token);
+      return {
+        ...result,
+        value: model.value,
+        valueComplete: true,
+        valueSource: model.source,
+        editorVersion: model.version,
+        editorURI: model.editorURI,
+      };
+    } catch (error) {
+      if (error.code !== 'editor_unavailable') throw error;
+      return { ...result, value: '', valueComplete: false, limitation: error.message };
+    }
+  }
+  if (result.editorContext && ['vqa.capture-value', 'vqa.assert'].includes(message.type)) {
+    const model = await editorValue(
+      result.editorContext,
+      message.target || message.action.target,
+      token,
+    );
+    if (message.type === 'vqa.capture-value') return { ...model, valueSource: model.source };
+    return {
+      actual: model.value,
+      expected: message.action.assertion.expected,
+      passed: model.value === message.action.assertion.expected,
+      kind: 'value',
+      actualTruncated: false,
+      target: message.action.target,
+      valueSource: model.source,
+      complete: true,
+    };
+  }
+  return result;
 }
 async function attach(token) {
   fence.check(token, state);
@@ -773,6 +844,31 @@ async function execute(action, token, secureOrigin = '', visual = null) {
           'Fill requires a text-entry control; no click or text was dispatched',
           'blocked',
         );
+      const editorContext = !secure
+        ? (await contentRaw({ type: 'vqa.editor-context', target: action.target }, token))
+            .editorContext
+        : null;
+      if (editorContext) {
+        const before = await editorValue(editorContext, action.target, token);
+        if (before.value === (action.value || '')) {
+          const digest = await crypto.subtle.digest(
+            'SHA-256',
+            new TextEncoder().encode(before.value),
+          );
+          return {
+            dispatched: false,
+            unchanged: true,
+            verified: true,
+            complete: true,
+            valueSource: before.source,
+            contentHash: [...new Uint8Array(digest)]
+              .map((v) => v.toString(16).padStart(2, '0'))
+              .join(''),
+            length: before.length,
+            editorURI: before.editorURI,
+          };
+        }
+      }
       const r = await click(action.target, token, visual);
       if (r.privateField && !secure && !(r.inputType === 'email' && !r.secretField))
         throw fault('Use a saved test credential profile for private fields.', 'blocked');
@@ -781,6 +877,38 @@ async function execute(action, token, secureOrigin = '', visual = null) {
       const focus = await content({ type: 'vqa.editable-focus', target: action.target }, token);
       if (!focus.focused)
         throw fault('Editable control did not receive focus; no text was entered', 'blocked');
+      if (!secure) {
+        const context = editorContext;
+        if (context) {
+          const model = await editorValue(
+            context,
+            action.target,
+            token,
+            'replace',
+            action.value || '',
+          );
+          if (!model.verified)
+            throw fault(
+              'Editor replacement did not match the supplied source; inspect the current model before another write',
+              'needs_review',
+            );
+          const digest = await crypto.subtle.digest(
+            'SHA-256',
+            new TextEncoder().encode(model.value),
+          );
+          return {
+            dispatched: true,
+            verified: true,
+            valueSource: model.source,
+            complete: true,
+            contentHash: [...new Uint8Array(digest)]
+              .map((v) => v.toString(16).padStart(2, '0'))
+              .join(''),
+            length: model.length,
+            editorURI: model.editorURI,
+          };
+        }
+      }
       await key('a', 2, token);
       if (secure && new URL((await checkTarget()).url).origin !== secureOrigin)
         throw fault('Credential origin changed before entry.', 'blocked');
@@ -986,7 +1114,9 @@ async function investigationTool(p, token) {
     return view;
   }
   if (p.tool === 'inspect_element')
-    return read(shared.tabId, { type: 'vqa.inspect', target: p.target });
+    return shared.alias === 'main'
+      ? content({ type: 'vqa.inspect', target: p.target }, token)
+      : read(shared.tabId, { type: 'vqa.inspect', target: p.target });
   if (p.tool === 'search_page') return read(shared.tabId, { type: 'vqa.search', query: p.query });
   if (p.tool === 'diagnostics' || p.tool === 'accessibility') {
     if (shared.alias !== 'main')
@@ -1230,13 +1360,22 @@ async function onNative(message) {
             'Visual input requires a running reviewed mission and an allowed action.',
             'blocked',
           );
-        await resolveVisual(p.visual, token, p.action.operation, p.action.target || '');
+        const resolved = await resolveVisual(
+          p.visual,
+          token,
+          p.action.operation,
+          p.action.target || '',
+        );
         await attach(token);
         try {
           result = {
             ...(await execute(p.action, token, '', { ...p.visual, operation: p.action.operation })),
             agent: 'agent-s3',
-            model: 'qwen/qwen3.7-flash',
+            resolvedControl: {
+              name: resolved.name || '',
+              title: resolved.title || '',
+              tag: resolved.tag || '',
+            },
             visual: {
               x: p.visual.x,
               y: p.visual.y,

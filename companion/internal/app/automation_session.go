@@ -96,7 +96,10 @@ func (s *automationSession) validate(ctx context.Context, decision *automationDe
 			}
 		}
 	} else if e == nil && decision.Type == "tool" {
-		e = validateAutomationRead(r.Plan, scope.Current, *decision, s.readCalls)
+		if s.remainingReads() == 0 {
+			return errors.New("Read tools are unavailable until new verified progress, or the total discovery budget is exhausted. Use existing evidence and supported actions; do not request another disabled read.")
+		}
+		e = validateAutomationRead(r.Plan, scope.Current, *decision, s.stageReads)
 		if e == nil && s.readSeen[automationReadFingerprint(*decision, public, len(r.Steps))] {
 			e = errors.New("This read was already attempted against unchanged evidence. Use its recorded toolResult/toolError, choose another read or advance the workflow")
 		}
@@ -132,6 +135,7 @@ func (s *automationSession) execute(ctx context.Context, decision automationDeci
 	if decision.Type == "tool" {
 		s.readSeen[automationReadFingerprint(decision, public, len(r.Steps))] = true
 		s.readCalls++
+		s.stageReads++
 		r.AgentPhase = "Inspecting current page: " + decision.Name
 		a.update(r)
 		if r.Status == "error" {
@@ -227,6 +231,7 @@ func (s *automationSession) execute(ctx context.Context, decision automationDeci
 				a.setAutomationFailure(r, err)
 				return nil
 			}
+			s.checkpoint(r.Steps[len(r.Steps)-1])
 		}
 		r.Status = "passed"
 		if automationHasFailures(r) {
@@ -313,5 +318,6 @@ func (s *automationSession) execute(ctx context.Context, decision automationDeci
 		a.setInterrupted(r, err)
 		return nil
 	}
+	s.checkpoint(r.Steps[len(r.Steps)-1])
 	return nil
 }

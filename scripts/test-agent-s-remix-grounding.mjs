@@ -4,12 +4,15 @@ import { spawn } from 'node:child_process';
 import { createInterface } from 'node:readline';
 import { mkdtemp, writeFile } from 'node:fs/promises';
 import { resolve, join } from 'node:path';
-if (!process.argv.includes('--live-paid'))
+const nemotronOnly = process.argv.includes('--nemotron-only');
+if (nemotronOnly && process.argv.includes('--live-paid'))
+  throw new Error('Conflicting model modes');
+if (!nemotronOnly && !process.argv.includes('--live-paid'))
   throw new Error('Explicit --live-paid authorization is required.');
 const work = await mkdtemp(resolve('.tools/live-checks/remix-real-grounding-'));
 const child = spawn(
   resolve(process.env.VOICEQA_AGENT_S_PYTHON || 'dist/agent-s-runtime/Scripts/python.exe'),
-  ['scripts/agent-s-live-probe.py', '--live-paid'],
+  ['scripts/agent-s-live-probe.py', nemotronOnly ? '--nemotron-only' : '--live-paid'],
   { windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] },
 );
 const lines = createInterface({ input: child.stdout });
@@ -39,6 +42,8 @@ try {
   });
   const p = reply.result,
     box = await target.boundingBox();
+  if (nemotronOnly && reply.model !== 'nvidia/nemotron-3.5-super-vl:free')
+    throw new Error('Unexpected model identity');
   const inside =
     p.x >= box.x && p.x < box.x + box.width && p.y >= box.y && p.y < box.y + box.height;
   const evidence = {

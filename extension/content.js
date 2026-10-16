@@ -5,6 +5,7 @@
   const documentKey = crypto.randomUUID();
   let visualRevision = 0;
   const visualMutation = (r) =>
+    !(r.type === 'attributes' && r.attributeName === 'data-voiceqa-editor') &&
     !r.target.closest?.('[data-voiceqa-mask]') &&
     !(
       r.type === 'childList' &&
@@ -88,6 +89,8 @@
       y: point.y,
       target,
       tag: el.tagName,
+      name: name(el).slice(0, 180),
+      title: (el.getAttribute('title') || '').slice(0, 180),
       inputType: el.type,
       editable: editable(el),
       privateField: false,
@@ -119,10 +122,31 @@
   function editable(el) {
     return ['INPUT', 'TEXTAREA'].includes(el.tagName) || el.isContentEditable;
   }
+  function virtualEditor(el) {
+    return el.closest('.monaco-editor,.cm-editor,.ace_editor');
+  }
+  function editorContext(el) {
+    if (!virtualEditor(el)) return null;
+    if (
+      privateElement(el) ||
+      privateElement(virtualEditor(el)) ||
+      virtualEditor(el).querySelector(privateSelectors())
+    )
+      throw new Error('Private editor content cannot be read or replaced');
+    if (!el.hasAttribute('data-voiceqa-editor'))
+      el.setAttribute('data-voiceqa-editor', crypto.randomUUID());
+    return {
+      marker: el.getAttribute('data-voiceqa-editor'),
+      binding: virtualEditor(el).getAttribute('data-uri') || '',
+      url: location.href,
+      documentKey,
+      privateSelectors: privateSelectors(),
+    };
+  }
   function customControl(el) {
     return (
       el.matches('[draggable=true],[tabindex],[contenteditable=true],[onclick]') ||
-      (el.hasAttribute('data-id') &&
+      (el.matches('[data-id],[title],[aria-label]') &&
         el.ownerDocument.defaultView.getComputedStyle(el).cursor === 'pointer')
     );
   }
@@ -356,8 +380,83 @@
   function selector(el) {
     if (el.dataset.testid) return `testid:${el.dataset.testid}`;
     if (el.id) return `#${CSS.escape(el.id)}`;
-    if (role(el) && name(el)) return `role:${role(el)}|${name(el)}`;
+    if (role(el) && name(el)) {
+      const candidate = `role:${role(el)}|${name(el)}`;
+      if (semanticCounts().get(candidate) === 1) return candidate;
+    }
     return nodeTarget(el);
+  }
+  let semanticVersion = -1,
+    semanticIndex = new Map();
+  function semanticCounts() {
+    if (visualObserver.takeRecords().some(visualMutation)) visualRevision++;
+    if (semanticVersion === visualRevision) return semanticIndex;
+    semanticIndex = new Map();
+    for (const el of query('button,a,input,select,textarea,[role],[contenteditable=true]')) {
+      if (!visible(el)) continue;
+      const r = role(el),
+        n = name(el);
+      if (r && n) {
+        const key = `role:${r}|${n}`;
+        semanticIndex.set(key, (semanticIndex.get(key) || 0) + 1);
+      }
+    }
+    semanticVersion = visualRevision;
+    return semanticIndex;
+  }
+  const groupCache = new WeakMap();
+  function controlGroup(el) {
+    if (visualObserver.takeRecords().some(visualMutation)) visualRevision++;
+    const cached = groupCache.get(el);
+    if (cached?.revision === visualRevision) return cached.group;
+    const group = findControlGroup(el);
+    groupCache.set(el, { revision: visualRevision, group });
+    return group;
+  }
+  function findControlGroup(el) {
+    const semantic = el.closest('fieldset,form,[role=group],[role=dialog],dialog,section,article');
+    if (semantic && publicText(semantic).length <= 600) return semantic;
+    for (
+      let parent = el.parentElement, depth = 0;
+      parent && depth < 4;
+      parent = parent.parentElement, depth++
+    ) {
+      if (
+        parent.querySelector('button,input,select,textarea,[role=button]') &&
+        publicText(parent).trim().length >= 2 &&
+        publicText(parent).length <= 350 &&
+        normalize(publicText(parent)) !== name(el)
+      )
+        return parent;
+    }
+    return null;
+  }
+  function controlPriority(el) {
+    const native = el.matches(
+      'button,input,textarea,select,[role=button],[role=combobox],[role=tab],a[href]',
+    );
+    return (
+      (el.getRootNode().activeElement === el ? 30 : 0) +
+      (el.closest('[role=dialog],dialog[open]') ? 20 : 0) +
+      (controlGroup(el)?.querySelector('input,textarea,select') ? 8 : controlGroup(el) ? 3 : 0) +
+      (native ? 5 : 0) +
+      (el.matches('[title],[aria-label]') && customControl(el) ? 4 : 0) +
+      (editable(el) ? 2 : 0)
+    );
+  }
+  function relatedControls(el) {
+    const group = controlGroup(el);
+    if (!group || privateElement(group)) return [];
+    return [...group.querySelectorAll('button,input,select,textarea,[role=button],[role=combobox]')]
+      .filter(visible)
+      .filter((c) => !privateElement(c))
+      .slice(0, 12)
+      .map((c) => ({
+        target: selector(c),
+        role: role(c),
+        name: name(c),
+        context: publicText(group).slice(0, 180),
+      }));
   }
   // Only exact previously resolved elements, for read-only readiness. A click
   // can change its button's caption before the first wait poll arrives.
@@ -489,7 +588,7 @@
     // re-register their handles before exposing them to the agent.
     while (nodeRefs.size > 800) nodeRefs.delete(nodeRefs.keys().next().value);
     const controls = query(
-      'button,a[href],input,select,textarea,[role],[data-testid],[draggable=true],[tabindex],[contenteditable=true],[onclick],[data-id]',
+      'button,a[href],input,select,textarea,[role],[data-testid],[draggable=true],[tabindex],[contenteditable=true],[onclick],[data-id],[title],[aria-label]',
     )
       .filter(
         (el) =>
@@ -499,13 +598,9 @@
       .filter(visible)
       .filter((el) => !privateElement(el) || ['INPUT', 'TEXTAREA'].includes(el.tagName))
       // A newly focused filename field or dialog must survive evidence budgets.
-      .sort((a, b) => {
-        const priority = (el) =>
-          (editable(el) && el.getRootNode().activeElement === el ? 4 : 0) +
-          (el.closest('[role=dialog],dialog[open]') ? 2 : 0) +
-          (editable(el) ? 1 : 0);
-        return priority(b) - priority(a);
-      })
+      .map((el) => ({ el, priority: controlPriority(el) }))
+      .sort((a, b) => b.priority - a.priority)
+      .map(({ el }) => el)
       .slice(0, 160)
       .map((el) => ({
         target: selector(el),
@@ -513,6 +608,9 @@
         role: role(el),
         editable: editable(el),
         editor: el.getAttribute('aria-roledescription') === 'editor',
+        valueSource: virtualEditor(el) ? 'virtual-editor-buffer-unavailable' : 'dom-value',
+        valueComplete: !virtualEditor(el),
+        context: controlGroup(el) ? publicText(controlGroup(el)).slice(0, 180) : '',
         draggable: el.draggable === true,
         parameterizedLink:
           el.tagName === 'A'
@@ -554,7 +652,11 @@
         expanded: el.getAttribute('aria-expanded'),
         pressed: el.getAttribute('aria-pressed'),
         text: privateElement(el) ? '[redacted]' : publicText(el).slice(0, 180),
-        value: privateElement(el) ? '[redacted]' : String(el.value ?? '').slice(0, 100),
+        value: privateElement(el)
+          ? '[redacted]'
+          : virtualEditor(el)
+            ? ''
+            : String(el.value ?? '').slice(0, 100),
       }))
       .filter((x) => x.target)
       .slice(0, 160);
@@ -678,8 +780,12 @@
                 }),
             ].join(' '),
           ).slice(0, 1000),
+      title: secret ? '[redacted]' : (el.getAttribute('title') || '').slice(0, 400),
       text: secret ? '[redacted]' : publicText(el).slice(0, 1000),
-      value: secret ? '[redacted]' : String(el.value ?? '').slice(0, 400),
+      value: secret ? '[redacted]' : virtualEditor(el) ? '' : String(el.value ?? '').slice(0, 400),
+      editor: Boolean(virtualEditor(el)),
+      valueComplete: !virtualEditor(el),
+      relatedControls: secret ? [] : relatedControls(el),
       options:
         !secret && el.tagName === 'SELECT'
           ? [...el.options].slice(0, 40).map((o) => ({ label: o.label, value: o.value }))
@@ -692,17 +798,20 @@
     const wanted = normalize(phrase).toLowerCase();
     const matches = [];
     for (const el of query(
-      'h1,h2,h3,p,label,output,[role],button,a[href],input,select,textarea,[draggable=true],[tabindex],[contenteditable=true],[onclick],[data-id]',
+      'h1,h2,h3,p,label,span,summary,output,[role],button,a[href],input,select,textarea,[draggable=true],[tabindex],[contenteditable=true],[onclick],[data-id],[title],[aria-label]',
     )) {
       if (!visible(el) || privateElement(el) || el.querySelector(privateSelectors())) continue;
       if (
-        !el.matches('h1,h2,h3,p,label,output,[role],button,a[href],input,select,textarea') &&
+        !el.matches(
+          'h1,h2,h3,p,label,span,summary,output,[role],button,a[href],input,select,textarea',
+        ) &&
         !customControl(el)
       )
         continue;
       const text = (publicText(el) || name(el)).slice(0, 700);
       if (!text.toLowerCase().includes(wanted)) continue;
-      matches.push({ target: selector(el), text });
+      if ([...el.children].some((c) => publicText(c).toLowerCase().includes(wanted))) continue;
+      matches.push({ target: selector(el), text, relatedControls: relatedControls(el) });
       if (matches.length === 20) break;
     }
     return { matches };
@@ -752,6 +861,7 @@
             ),
             { code: 'needs_review' },
           );
+        if (virtualEditor(el)) return { editorContext: editorContext(el) };
         actual = String(el.value ?? '');
         passed = actual === expected;
       } else if (kind === 'number') {
@@ -1080,6 +1190,10 @@
             const el = unique(message.target);
             if (privateElement(el))
               throw new Error('Private fields cannot become workflow variables.');
+            if (virtualEditor(el)) {
+              result = { editorContext: editorContext(el) };
+              break;
+            }
             const value = ['INPUT', 'TEXTAREA', 'SELECT'].includes(el.tagName)
               ? String(el.value)
               : publicText(el);
@@ -1087,6 +1201,9 @@
             result = { value };
             break;
           }
+          case 'vqa.editor-context':
+            result = { editorContext: editorContext(unique(message.target)) };
+            break;
           case 'vqa.http-check':
             result = await httpCheck(message.check, message.timeoutMs);
             break;
